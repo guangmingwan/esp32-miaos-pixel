@@ -1,0 +1,28 @@
+# Build artifacts
+.pio/
+.sdkconfig.esp32s3
+
+# SDK config (generated from sdkconfig.defaults)
+sdkconfig.esp32s3
+sdkconfig.esp32dev-idf
+
+# ESP-IDF managed
+managed_components/
+dependencies.lock
+
+# IDE / tooling
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+__pycache__/
+*.pyc
+
+# Project internals
+.omo/
+.codegraph
