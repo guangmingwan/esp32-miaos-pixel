@@ -9,6 +9,7 @@ static uint8_t g_pixels[LAVA_SCREEN_W * LAVA_SCREEN_H];
 static uint16_t g_rgb565[LAVA_SCREEN_W * LAVA_SCREEN_H];
 static LavaColor g_palette[256];
 static LavaSurface g_screen = {LAVA_SCREEN_W, LAVA_SCREEN_H, LAVA_SCREEN_W, g_pixels};
+static bool g_displayReady = false;
 
 static const uint8_t kFont5x7[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00},  {0x00, 0x00, 0x5F, 0x00, 0x00},
@@ -74,7 +75,10 @@ void lavaDisplayInit() {
   };
   lavaSetPalette(0, sizeof(defaultPalette) / sizeof(defaultPalette[0]), defaultPalette);
   lavaClear(0);
+  g_displayReady = true;
 }
+
+bool lavaDisplayReady() { return g_displayReady; }
 
 void lavaSetPalette(uint8_t first, uint8_t count, const LavaColor *colors) {
   if (colors == nullptr) {
@@ -155,6 +159,9 @@ void lavaDrawText(int16_t x, int16_t y, const char *text, uint8_t fg, uint8_t bg
 }
 
 void lavaPresent() {
+  if (!g_displayReady) {
+    return;
+  }
   for (size_t i = 0; i < sizeof(g_pixels); ++i) {
     g_rgb565[i] = toRgb565(g_palette[g_pixels[i]]);
   }

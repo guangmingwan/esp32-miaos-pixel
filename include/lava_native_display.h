@@ -19,6 +19,7 @@ struct LavaSurface {
 };
 
 void lavaDisplayInit();
+bool lavaDisplayReady();
 void lavaSetPalette(uint8_t first, uint8_t count, const LavaColor *colors);
 LavaSurface &lavaScreen();
 void lavaClear(uint8_t color);
