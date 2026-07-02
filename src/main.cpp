@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <esp_ota_ops.h>
 #include <esp_rom_crc.h>
+#include <soc/rtc_cntl_reg.h>
+#include <soc/soc.h>
 
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
@@ -67,7 +69,8 @@ static const LauncherApp *const BUILTIN_APPS[] = {
 static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]);
 
 static constexpr uint8_t USB_DISK_MENU_INDEX = BUILTIN_APP_COUNT;
-static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 1;
+static constexpr uint8_t BOOTLOADER_MENU_INDEX = BUILTIN_APP_COUNT + 1;
+static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 2;
 
 static const esp_partition_t *findOtaPartition() {
   return esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
@@ -136,6 +139,32 @@ static void rebootToUsbDisk() {
   Serial.println("[usb-disk] rebooting now");
   Serial.flush();
   delay(100);
+  ESP.restart();
+}
+
+static void rebootToBootloader() {
+  Serial.println("[boot-loader] entering ROM download mode");
+  if (g_context.tftReady) {
+    constexpr uint8_t kBlack = 0;
+    constexpr uint8_t kWhite = 1;
+    constexpr uint8_t kBlue = 2;
+    constexpr uint8_t kYellow = 5;
+    constexpr uint8_t kCyan = 6;
+    constexpr uint8_t kGray = 7;
+    constexpr uint8_t kDarkBlue = 8;
+    lavaClear(kDarkBlue);
+    lavaFillRect(0, 0, LAVA_SCREEN_W, 28, kYellow);
+    lavaDrawText(8, 10, "Boot Loader", kBlack, kYellow);
+    lavaFillRect(18, 58, 284, 96, kBlue);
+    lavaDrawText(34, 78, "Entering download mode", kWhite, kBlue);
+    lavaDrawText(34, 98, "USB will reconnect soon", kCyan, kBlue);
+    lavaDrawText(34, 126, "Use PlatformIO upload now", kYellow, kBlue);
+    lavaDrawText(18, 214, "If stuck, press RESET or replug USB", kGray, kDarkBlue);
+    lavaPresent();
+  }
+  Serial.flush();
+  delay(1500);
+  REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
   ESP.restart();
 }
 
@@ -229,13 +258,19 @@ static void initDisplay() {
 static void initSdCard() {
   digitalWrite(TFT_CS_PIN, HIGH);
 #ifdef MIA_ENABLE_SD
-  static const uint32_t kSdTrialHz[] = {SD_SPI_HZ, 10000000, 4000000, 1000000};
+  static const uint32_t kSdTrialHz[] = {10000000, 4000000, 1000000};
   g_context.sdReady = false;
   for (size_t i = 0; i < sizeof(kSdTrialHz) / sizeof(kSdTrialHz[0]); ++i) {
     const uint32_t hz = kSdTrialHz[i];
     Serial.printf("[sd] begin trial %u Hz\n", static_cast<unsigned>(hz));
     sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
     if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
+      if (SD.cardType() == CARD_NONE) {
+        Serial.printf("[sd] no card detected at %u Hz\n", static_cast<unsigned>(hz));
+        SD.end();
+        delay(50);
+        continue;
+      }
       g_context.sdReady = true;
       Serial.printf("[sd] mounted at %u Hz\n", static_cast<unsigned>(hz));
       break;
@@ -327,9 +362,12 @@ static void drawLauncher() {
     const bool selected = i == g_selectedApp;
     const bool sdApp = i >= TOTAL_LAUNCHER_ITEMS_FIXED;
     const bool isUsbDisk = i == USB_DISK_MENU_INDEX;
+    const bool isBootloader = i == BOOTLOADER_MENU_INDEX;
     const char *name;
     if (isUsbDisk) {
       name = "USB Disk";
+    } else if (isBootloader) {
+      name = "Boot Loader";
     } else if (sdApp) {
       name = g_sdApps[i - TOTAL_LAUNCHER_ITEMS_FIXED].name;
     } else {
@@ -338,9 +376,9 @@ static void drawLauncher() {
     lavaFillRect(6, y - 3, 308, 15, selected ? LAVA_BLUE : LAVA_BLACK);
     lavaDrawText(12, y, selected ? ">" : " ", LAVA_YELLOW,
                  selected ? LAVA_BLUE : LAVA_BLACK);
-    lavaDrawText(28, y, sdApp ? "SD:" : (isUsbDisk ? ">>" : ""), LAVA_GREEN,
+    lavaDrawText(28, y, sdApp ? "[sd]" : ((isUsbDisk || isBootloader) ? ">>" : ""), LAVA_GREEN,
                  selected ? LAVA_BLUE : LAVA_BLACK);
-    lavaDrawText(sdApp ? 52 : (isUsbDisk ? 52 : 28), y, name, LAVA_WHITE,
+    lavaDrawText(sdApp ? 52 : ((isUsbDisk || isBootloader) ? 52 : 28), y, name, LAVA_WHITE,
                  selected ? LAVA_BLUE : LAVA_BLACK);
   }
 
@@ -361,6 +399,11 @@ static void enterSelectedApp() {
 
   if (g_selectedApp == USB_DISK_MENU_INDEX) {
     rebootToUsbDisk();
+    return;
+  }
+
+  if (g_selectedApp == BOOTLOADER_MENU_INDEX) {
+    rebootToBootloader();
     return;
   }
 
