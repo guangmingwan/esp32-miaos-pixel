@@ -35,22 +35,22 @@ static void drawFtpServer(AppContext &context) {
     return;
   }
   lavaClear(LAVA_BLACK);
-  lavaFillRect(0, 0, LAVA_SCREEN_W, 16, LAVA_DARK_BLUE);
-  lavaDrawText(4, 4, "FTP Server", LAVA_WHITE, LAVA_DARK_BLUE);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(4, 6, "FTP Server", LAVA_BLACK, LAVA_YELLOW);
   if (!context.sdReady) {
-    lavaDrawText(12, 48, "SD unavailable", LAVA_RED, LAVA_BLACK);
-    lavaDrawText(12, 96, "B:Back", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(108, 92, "SD unavailable", LAVA_RED, LAVA_BLACK);
+    lavaDrawText(92, 222, "SEL+ST Exit", LAVA_GRAY, LAVA_BLACK);
     lavaPresent();
     return;
   }
-  lavaDrawText(4, 24, g_status.c_str(), g_ftpStarted ? LAVA_GREEN : LAVA_YELLOW,
+  lavaDrawText(4, 34, g_status.c_str(), g_ftpStarted ? LAVA_GREEN : LAVA_YELLOW,
                LAVA_BLACK);
-  lavaDrawText(4, 40, FTP_AP_SSID, LAVA_CYAN, LAVA_BLACK);
+  lavaDrawText(4, 56, FTP_AP_SSID, LAVA_CYAN, LAVA_BLACK);
   String host = "ftp://" + g_ip.toString();
-  lavaDrawText(4, 58, host.c_str(), LAVA_YELLOW, LAVA_BLACK);
-  lavaDrawText(4, 76, "User: guest", LAVA_WHITE, LAVA_BLACK);
-  lavaDrawText(4, 90, "Pass: guest", LAVA_WHITE, LAVA_BLACK);
-  lavaDrawText(4, 112, "Use PASV  B:Back", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(4, 82, host.c_str(), LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(4, 108, "User: guest", LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(4, 126, "Pass: guest", LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(4, 222, "Use PASV  SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }
 

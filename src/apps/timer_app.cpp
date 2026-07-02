@@ -40,15 +40,15 @@ static void drawTimer(AppContext &context, uint32_t nowMs) {
   char line[24];
 
   lavaClear(LAVA_BLACK);
-  lavaFillRect(0, 0, LAVA_SCREEN_W, 16, LAVA_DARK_BLUE);
-  lavaDrawText(4, 4, "Timer", LAVA_WHITE, LAVA_DARK_BLUE);
-  lavaDrawText(42, 36, g_running ? "RUNNING" : "PAUSED", g_running ? LAVA_GREEN : LAVA_YELLOW,
-               LAVA_BLACK);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(4, 6, "Timer", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(118, 54, g_running ? "RUNNING" : "PAUSED", g_running ? LAVA_GREEN : LAVA_YELLOW,
+                LAVA_BLACK);
   snprintf(line, sizeof(line), "%02lu:%02lu.%lu", static_cast<unsigned long>(minutes),
            static_cast<unsigned long>(seconds), static_cast<unsigned long>(tenths));
-  lavaDrawText(36, 58, line, LAVA_WHITE, LAVA_BLACK);
-  lavaDrawText(12, 96, "A:Start/Pause", LAVA_GRAY, LAVA_BLACK);
-  lavaDrawText(12, 110, "LT+RT:Reset B:Back", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(110, 96, line, LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(82, 206, "A:Start/Pause", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(58, 222, "LT+RT:Reset  SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }
 

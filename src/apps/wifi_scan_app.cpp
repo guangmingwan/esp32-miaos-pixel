@@ -17,7 +17,7 @@ enum LavaPalette : uint8_t {
   LAVA_DARK_BLUE = 8,
 };
 
-static constexpr int MAX_NETWORKS = 7;
+static constexpr int MAX_NETWORKS = 10;
 static int g_networkCount = 0;
 static int g_firstNetwork = 0;
 static bool g_scanning = false;
@@ -28,19 +28,20 @@ static void drawWifiScan(AppContext &context) {
   }
 
   lavaClear(LAVA_BLACK);
-  lavaFillRect(0, 0, LAVA_SCREEN_W, 16, LAVA_DARK_BLUE);
-  lavaDrawText(4, 4, "WiFi Scan", LAVA_WHITE, LAVA_DARK_BLUE);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(4, 6, "WiFi Scan", LAVA_BLACK, LAVA_YELLOW);
 
   if (g_scanning) {
-    lavaDrawText(38, 54, "Scanning...", LAVA_CYAN, LAVA_BLACK);
-    lavaDrawText(24, 108, "Please wait", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(128, 96, "Scanning...", LAVA_CYAN, LAVA_BLACK);
+    lavaDrawText(118, 116, "Please wait", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(92, 222, "SEL+ST Exit", LAVA_GRAY, LAVA_BLACK);
     lavaPresent();
     return;
   }
 
   if (g_networkCount <= 0) {
-    lavaDrawText(24, 48, "No networks", LAVA_YELLOW, LAVA_BLACK);
-    lavaDrawText(22, 96, "A:Scan B:Back", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(116, 92, "No networks", LAVA_YELLOW, LAVA_BLACK);
+    lavaDrawText(80, 222, "A:Scan  SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
     lavaPresent();
     return;
   }
@@ -54,11 +55,12 @@ static void drawWifiScan(AppContext &context) {
       ssid = ssid.substring(0, 16);
     }
     snprintf(line, sizeof(line), "%2ddB %s", WiFi.RSSI(index), ssid.c_str());
-    lavaDrawText(4, 24 + i * 12, line, i == 0 ? LAVA_YELLOW : LAVA_WHITE, LAVA_BLACK);
+    lavaDrawText(8, 36 + i * 18, line, i == 0 ? LAVA_YELLOW : LAVA_WHITE, LAVA_BLACK);
   }
 
   snprintf(line, sizeof(line), "%d found A:Rescan", g_networkCount);
-  lavaDrawText(4, 116, line, LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 206, line, LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 222, "UP/DN Scroll  SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }
 

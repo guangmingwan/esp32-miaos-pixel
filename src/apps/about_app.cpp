@@ -20,6 +20,41 @@ enum LavaPalette : uint8_t {
 static constexpr uint8_t ABOUT_PAGE_COUNT = 5;
 static uint8_t g_aboutPage = 0;
 
+static void drawMiaCatIcon(int16_t x, int16_t y) {
+  static const char *const kCatRows[] = {
+      "##....##",
+      "###..###",
+      "########",
+      "##c##c##",
+      "########",
+      "#r####r#",
+      "##.##.##",
+      ".######.",
+      "..#..#..",
+  };
+
+  constexpr int16_t block = 2;
+  for (uint8_t row = 0; row < sizeof(kCatRows) / sizeof(kCatRows[0]); ++row) {
+    for (uint8_t col = 0; kCatRows[row][col] != '\0'; ++col) {
+      uint8_t color = LAVA_YELLOW;
+      switch (kCatRows[row][col]) {
+        case '#':
+          color = LAVA_BLACK;
+          break;
+        case 'c':
+          color = LAVA_CYAN;
+          break;
+        case 'r':
+          color = LAVA_RED;
+          break;
+        default:
+          continue;
+      }
+      lavaFillRect(x + col * block, y + row * block, block, block, color);
+    }
+  }
+}
+
 static const char *flashModeName(FlashMode_t mode) {
   switch (mode) {
   case FM_QIO:
@@ -46,32 +81,35 @@ static const char *featureFlagName(uint32_t features, uint32_t flag) {
 
 static void drawHeader(const char *title) {
   char line[24];
-  lavaFillRect(0, 0, LAVA_SCREEN_W, 16, LAVA_DARK_BLUE);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
   snprintf(line, sizeof(line), "%s %u/%u", title, g_aboutPage + 1, ABOUT_PAGE_COUNT);
-  lavaDrawText(4, 4, line, LAVA_WHITE, LAVA_DARK_BLUE);
+  lavaDrawText(4, 6, line, LAVA_BLACK, LAVA_YELLOW);
+  drawMiaCatIcon(LAVA_SCREEN_W - 22, 1);
 }
 
-static void drawFooter() { lavaDrawText(4, 118, "UP/DN page  B:Back", LAVA_GRAY, LAVA_BLACK); }
+static void drawFooter() {
+  lavaDrawText(4, 222, "UP/DN page  SEL+ST Exit", LAVA_GRAY, LAVA_BLACK);
+}
 
 static void drawChipPage() {
   char line[40];
   esp_chip_info_t chipInfo;
   esp_chip_info(&chipInfo);
   drawHeader("Chip");
-  lavaDrawText(8, 22, "MiaOS 0.1", LAVA_CYAN, LAVA_BLACK);
+  lavaDrawText(8, 34, "MiaOS 0.1", LAVA_CYAN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Model %s", ESP.getChipModel());
-  lavaDrawText(8, 36, line, LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(8, 54, line, LAVA_WHITE, LAVA_BLACK);
   snprintf(line, sizeof(line), "Rev %u  Cores %u", ESP.getChipRevision(), ESP.getChipCores());
-  lavaDrawText(8, 50, line, LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(8, 74, line, LAVA_WHITE, LAVA_BLACK);
   snprintf(line, sizeof(line), "CPU %luMHz", static_cast<unsigned long>(ESP.getCpuFreqMHz()));
-  lavaDrawText(8, 64, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 94, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "WiFi b/g/n %s",
            featureFlagName(chipInfo.features, CHIP_FEATURE_WIFI_BGN));
-  lavaDrawText(8, 78, line, LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(8, 114, line, LAVA_YELLOW, LAVA_BLACK);
   snprintf(line, sizeof(line), "BT %s BLE %s",
            featureFlagName(chipInfo.features, CHIP_FEATURE_BT),
            featureFlagName(chipInfo.features, CHIP_FEATURE_BLE));
-  lavaDrawText(8, 92, line, LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(8, 134, line, LAVA_YELLOW, LAVA_BLACK);
 }
 
 static void drawMemoryPage() {
@@ -79,17 +117,17 @@ static void drawMemoryPage() {
   drawHeader("Memory");
   snprintf(line, sizeof(line), "SRAM total %luK",
            static_cast<unsigned long>(ESP.getHeapSize() / 1024));
-  lavaDrawText(8, 24, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 38, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "SRAM free  %luK",
            static_cast<unsigned long>(ESP.getFreeHeap() / 1024));
-  lavaDrawText(8, 38, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 58, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "SRAM min   %luK",
            static_cast<unsigned long>(ESP.getMinFreeHeap() / 1024));
-  lavaDrawText(8, 52, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 78, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Max block  %luK",
            static_cast<unsigned long>(ESP.getMaxAllocHeap() / 1024));
-  lavaDrawText(8, 66, line, LAVA_GREEN, LAVA_BLACK);
-  lavaDrawText(8, 88, "SRAM is volatile RAM", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 98, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 132, "SRAM is volatile RAM", LAVA_GRAY, LAVA_BLACK);
 }
 
 static void drawPsramPage() {
@@ -97,23 +135,23 @@ static void drawPsramPage() {
   drawHeader("PSRAM");
   const uint32_t psramSize = ESP.getPsramSize();
   if (psramSize == 0) {
-    lavaDrawText(8, 28, "PSRAM not found", LAVA_RED, LAVA_BLACK);
-    lavaDrawText(8, 46, "External RAM chip", LAVA_GRAY, LAVA_BLACK);
-    lavaDrawText(8, 60, "not mounted", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(8, 44, "PSRAM not found", LAVA_RED, LAVA_BLACK);
+    lavaDrawText(8, 66, "External RAM chip", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(8, 84, "not mounted", LAVA_GRAY, LAVA_BLACK);
     return;
   }
   snprintf(line, sizeof(line), "Total %luK", static_cast<unsigned long>(psramSize / 1024));
-  lavaDrawText(8, 24, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 38, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Free  %luK",
            static_cast<unsigned long>(ESP.getFreePsram() / 1024));
-  lavaDrawText(8, 38, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 58, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Min   %luK",
            static_cast<unsigned long>(ESP.getMinFreePsram() / 1024));
-  lavaDrawText(8, 52, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 78, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Max block %luK",
            static_cast<unsigned long>(ESP.getMaxAllocPsram() / 1024));
-  lavaDrawText(8, 66, line, LAVA_GREEN, LAVA_BLACK);
-  lavaDrawText(8, 88, "External volatile RAM", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 98, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 132, "External volatile RAM", LAVA_GRAY, LAVA_BLACK);
 }
 
 static void drawFlashPage() {
@@ -121,32 +159,28 @@ static void drawFlashPage() {
   drawHeader("NOR Flash");
   snprintf(line, sizeof(line), "Size %luMB",
            static_cast<unsigned long>(ESP.getFlashChipSize() / 1024 / 1024));
-  lavaDrawText(8, 24, line, LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(8, 38, line, LAVA_YELLOW, LAVA_BLACK);
   snprintf(line, sizeof(line), "Speed %luMHz",
            static_cast<unsigned long>(ESP.getFlashChipSpeed() / 1000000));
-  lavaDrawText(8, 38, line, LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(8, 58, line, LAVA_YELLOW, LAVA_BLACK);
   snprintf(line, sizeof(line), "Mode %s", flashModeName(ESP.getFlashChipMode()));
-  lavaDrawText(8, 52, line, LAVA_YELLOW, LAVA_BLACK);
-  snprintf(line, sizeof(line), "Sketch %luK",
-           static_cast<unsigned long>(ESP.getSketchSize() / 1024));
-  lavaDrawText(8, 70, line, LAVA_GRAY, LAVA_BLACK);
-  snprintf(line, sizeof(line), "Free OTA %luK",
-           static_cast<unsigned long>(ESP.getFreeSketchSpace() / 1024));
-  lavaDrawText(8, 84, line, LAVA_GRAY, LAVA_BLACK);
-  lavaDrawText(8, 100, "Non-volatile storage", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 78, line, LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(8, 104, "Sketch info unavailable", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 124, "OTA space unavailable", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 146, "Non-volatile storage", LAVA_GRAY, LAVA_BLACK);
 }
 
 static void drawBuildPage() {
   char line[40];
   drawHeader("System");
-  lavaDrawText(8, 22, "Author wanguangmign", LAVA_WHITE, LAVA_BLACK);
-  lavaDrawText(8, 36, "Contributor WaitForWind", LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(8, 34, "Author wanguangmign", LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(8, 54, "Contributor WaitForWind", LAVA_WHITE, LAVA_BLACK);
   snprintf(line, sizeof(line), "SDK %.21s", ESP.getSdkVersion());
-  lavaDrawText(8, 56, line, LAVA_CYAN, LAVA_BLACK);
+  lavaDrawText(8, 84, line, LAVA_CYAN, LAVA_BLACK);
   snprintf(line, sizeof(line), "MAC %04lX%08lX", static_cast<unsigned long>(ESP.getEfuseMac() >> 32),
            static_cast<unsigned long>(ESP.getEfuseMac()));
-  lavaDrawText(8, 70, line, LAVA_CYAN, LAVA_BLACK);
-  lavaDrawText(8, 92, "ESP32-D0WD board", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 104, line, LAVA_CYAN, LAVA_BLACK);
+  lavaDrawText(8, 138, "ESP32-D0WD board", LAVA_GRAY, LAVA_BLACK);
 }
 
 static void drawAbout(AppContext &context) {

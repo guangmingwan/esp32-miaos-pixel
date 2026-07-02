@@ -4,6 +4,8 @@
 
 #include "lava_native_display.h"
 
+extern ButtonState g_allButtons[];
+
 enum LavaPalette : uint8_t {
   LAVA_BLACK = 0,
   LAVA_WHITE = 1,
@@ -19,9 +21,13 @@ enum LavaPalette : uint8_t {
 static constexpr uint8_t BOARD_W = 8;
 static constexpr uint8_t BOARD_H = 6;
 static constexpr uint8_t MINE_COUNT = 8;
-static constexpr int16_t CELL_SIZE = 14;
-static constexpr int16_t BOARD_X = 24;
-static constexpr int16_t BOARD_Y = 24;
+static constexpr int16_t CELL_SIZE = 24;
+static constexpr int16_t BOARD_X = 64;
+static constexpr int16_t BOARD_Y = 36;
+static constexpr uint8_t DPAD_UP_INDEX = 10;
+static constexpr uint8_t DPAD_DOWN_INDEX = 11;
+static constexpr uint8_t DPAD_LEFT_INDEX = 12;
+static constexpr uint8_t DPAD_RIGHT_INDEX = 13;
 
 static bool g_mines[BOARD_H][BOARD_W];
 static bool g_revealed[BOARD_H][BOARD_W];
@@ -122,8 +128,8 @@ static void drawMinesweeper(AppContext &context) {
     return;
   }
   lavaClear(LAVA_BLACK);
-  lavaFillRect(0, 0, LAVA_SCREEN_W, 16, LAVA_DARK_BLUE);
-  lavaDrawText(4, 4, "Minesweeper", LAVA_WHITE, LAVA_DARK_BLUE);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(4, 6, "Minesweeper", LAVA_BLACK, LAVA_YELLOW);
 
   for (uint8_t y = 0; y < BOARD_H; ++y) {
     for (uint8_t x = 0; x < BOARD_W; ++x) {
@@ -150,16 +156,17 @@ static void drawMinesweeper(AppContext &context) {
 
       lavaFillRect(px, py, CELL_SIZE - 1, CELL_SIZE - 1, bg);
       lavaDrawRect(px, py, CELL_SIZE - 1, CELL_SIZE - 1, cursor ? LAVA_YELLOW : LAVA_BLACK);
-      lavaDrawText(px + 4, py + 3, text, fg, bg);
+      lavaDrawText(px + 9, py + 8, text, fg, bg);
     }
   }
 
   if (g_gameOver) {
-    lavaDrawText(20, 112, g_won ? "You win! A:Restart" : "Boom! A:Restart",
+    lavaDrawText(84, 196, g_won ? "You win! A:Restart" : "Boom! A:Restart",
                  g_won ? LAVA_GREEN : LAVA_RED, LAVA_BLACK);
   } else {
-    lavaDrawText(4, 112, "A:Open LT+RT:Flag B:Back", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(38, 206, "DPAD Move  A:Open  B:Flag", LAVA_GRAY, LAVA_BLACK);
   }
+  lavaDrawText(92, 222, "SEL+ST Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }
 
@@ -173,29 +180,25 @@ static void minesweeperTick(AppContext &context, uint32_t nowMs) {
   (void)nowMs;
   bool changed = false;
 
-  if (context.buttons[2].pressed && g_cursorY > 0) {
+  if (g_allButtons[DPAD_UP_INDEX].pressed && g_cursorY > 0) {
     --g_cursorY;
     changed = true;
   }
-  if (context.buttons[3].pressed && g_cursorY + 1 < BOARD_H) {
+  if (g_allButtons[DPAD_DOWN_INDEX].pressed && g_cursorY + 1 < BOARD_H) {
     ++g_cursorY;
     changed = true;
   }
-  const bool flagPressed = (context.buttons[4].pressed && context.buttons[5].down) ||
-                           (context.buttons[5].pressed && context.buttons[4].down);
-  if (flagPressed && !g_gameOver &&
-      !g_revealed[g_cursorY][g_cursorX]) {
+  if (g_allButtons[DPAD_LEFT_INDEX].pressed && g_cursorX > 0) {
+    --g_cursorX;
+    changed = true;
+  }
+  if (g_allButtons[DPAD_RIGHT_INDEX].pressed && g_cursorX + 1 < BOARD_W) {
+    ++g_cursorX;
+    changed = true;
+  }
+  if (context.buttons[1].pressed && !g_gameOver && !g_revealed[g_cursorY][g_cursorX]) {
     g_flags[g_cursorY][g_cursorX] = !g_flags[g_cursorY][g_cursorX];
     changed = true;
-  } else {
-    if (context.buttons[4].pressed && g_cursorX > 0) {
-      --g_cursorX;
-      changed = true;
-    }
-    if (context.buttons[5].pressed && g_cursorX + 1 < BOARD_W) {
-      ++g_cursorX;
-      changed = true;
-    }
   }
   if (context.buttons[0].pressed) {
     if (g_gameOver) {

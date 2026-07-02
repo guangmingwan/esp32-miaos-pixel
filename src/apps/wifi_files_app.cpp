@@ -32,23 +32,23 @@ static void drawWifiFiles(AppContext &context) {
     return;
   }
   lavaClear(LAVA_BLACK);
-  lavaFillRect(0, 0, LAVA_SCREEN_W, 16, LAVA_DARK_BLUE);
-  lavaDrawText(4, 4, "WiFi Files", LAVA_WHITE, LAVA_DARK_BLUE);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(4, 6, "WiFi Files", LAVA_BLACK, LAVA_YELLOW);
   if (!context.sdReady) {
-    lavaDrawText(12, 48, "SD unavailable", LAVA_RED, LAVA_BLACK);
-    lavaDrawText(12, 96, "B:Back", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(108, 92, "SD unavailable", LAVA_RED, LAVA_BLACK);
+    lavaDrawText(92, 222, "SEL+ST Exit", LAVA_GRAY, LAVA_BLACK);
     lavaPresent();
     return;
   }
-  lavaDrawText(4, 24, g_status.c_str(), g_serverStarted ? LAVA_GREEN : LAVA_YELLOW,
+  lavaDrawText(4, 34, g_status.c_str(), g_serverStarted ? LAVA_GREEN : LAVA_YELLOW,
                LAVA_BLACK);
-  lavaDrawText(4, 40, g_apMode ? "Mode: AP" : "Mode: Router", LAVA_CYAN, LAVA_BLACK);
-  lavaDrawText(4, 56,
-               g_apMode ? g_config.accessPointSsid.c_str() : g_config.stationSsid.c_str(),
-               LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(4, 56, g_apMode ? "Mode: AP" : "Mode: Router", LAVA_CYAN, LAVA_BLACK);
+  lavaDrawText(4, 78,
+                g_apMode ? g_config.accessPointSsid.c_str() : g_config.stationSsid.c_str(),
+                LAVA_WHITE, LAVA_BLACK);
   String url = "http://" + g_ip.toString();
-  lavaDrawText(4, 76, url.c_str(), LAVA_YELLOW, LAVA_BLACK);
-  lavaDrawText(4, 112, "Guest access  B:Back", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(4, 104, url.c_str(), LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(4, 222, "Guest access  SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }
 

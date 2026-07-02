@@ -104,38 +104,40 @@ static void drawCalculator(AppContext &context) {
   }
 
   lavaClear(LAVA_BLACK);
-  lavaFillRect(0, 0, LAVA_SCREEN_W, 16, LAVA_DARK_BLUE);
-  lavaDrawText(4, 4, "Calculator", LAVA_WHITE, LAVA_DARK_BLUE);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(4, 6, "Calculator", LAVA_BLACK, LAVA_YELLOW);
 
   char line[32];
-  lavaDrawRect(4, 22, 152, 20, LAVA_BLUE);
+  lavaDrawRect(20, 32, 280, 24, LAVA_BLUE);
   if (g_error) {
     snprintf(line, sizeof(line), "Error: divide by 0");
   } else {
     snprintf(line, sizeof(line), "%ld", static_cast<long>(g_entry));
   }
-  lavaDrawText(10, 29, line, g_error ? LAVA_RED : LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(28, 40, line, g_error ? LAVA_RED : LAVA_WHITE, LAVA_BLACK);
 
   if (g_pendingOp != 0) {
     snprintf(line, sizeof(line), "%ld %c", static_cast<long>(g_accumulator),
              g_pendingOp);
-    lavaDrawText(10, 47, line, LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(28, 64, line, LAVA_GRAY, LAVA_BLACK);
   } else {
-    lavaDrawText(10, 47, "A:OK B:Back", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(28, 64, "A:OK", LAVA_GRAY, LAVA_BLACK);
   }
 
   for (uint8_t i = 0; i < KEY_COUNT; ++i) {
-    const int16_t x = 8 + (i % 4) * 38;
-    const int16_t y = 60 + (i / 4) * 16;
+    const int16_t x = 40 + (i % 4) * 60;
+    const int16_t y = 92 + (i / 4) * 32;
     const bool selected = i == g_selectedKey;
     const uint8_t bg = selected ? LAVA_BLUE : LAVA_BLACK;
     const uint8_t fg = selected ? LAVA_YELLOW : LAVA_WHITE;
     char keyText[2] = {KEYS[i], 0};
 
-    lavaFillRect(x, y, 32, 13, bg);
-    lavaDrawRect(x, y, 32, 13, selected ? LAVA_YELLOW : LAVA_GRAY);
-    lavaDrawText(x + 13, y + 3, keyText, fg, bg);
+    lavaFillRect(x, y, 48, 24, bg);
+    lavaDrawRect(x, y, 48, 24, selected ? LAVA_YELLOW : LAVA_GRAY);
+    lavaDrawText(x + 20, y + 8, keyText, fg, bg);
   }
+
+  lavaDrawText(20, 222, "SEL+ST Exit", LAVA_GRAY, LAVA_BLACK);
 
   lavaPresent();
 }
