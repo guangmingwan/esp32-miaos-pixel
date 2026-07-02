@@ -82,17 +82,25 @@ int esp_elf_arch_relocate(esp_elf_t *elf, const elf32_rela_t *rela,
 
     where = (uint32_t *)esp_elf_map_sym(elf, rela->offset);
 
-    ESP_LOGD(TAG, "type: %d, where=%p addr=0x%x offset=0x%x\n",
-             ELF_R_TYPE(rela->info), where, (int)addr, (int)rela->offset);
+    ESP_LOGI(TAG, "type=%d where=%p addr=0x%x offset=0x%x sym_value=0x%x",
+             ELF_R_TYPE(rela->info), where, (unsigned)addr,
+             (unsigned)rela->offset, (unsigned)sym->value);
+    if (!where) {
+        ESP_LOGE(TAG, "relocation target offset 0x%x is not mapped", (int)rela->offset);
+        return -EINVAL;
+    }
 
     switch (ELF_R_TYPE(rela->info)) {
     case R_XTENSA_RELATIVE:
+        ESP_LOGI(TAG, "R_XTENSA_RELATIVE read where=%p value=0x%x", where, (unsigned)*where);
         val = esp_elf_map_sym(elf, *where);
+        ESP_LOGI(TAG, "R_XTENSA_RELATIVE mapped value=0x%x", (unsigned)val);
 #ifdef CONFIG_ELF_LOADER_CACHE_OFFSET
         *where = elf_remap_text(elf, val);
 #else
         *where  = val;
 #endif
+        ESP_LOGI(TAG, "R_XTENSA_RELATIVE wrote value=0x%x", (unsigned)*where);
         break;
     case R_XTENSA_RTLD:
         break;
