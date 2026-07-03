@@ -1,12 +1,7 @@
 set(APP_SOURCES
+  "apps/serial_transfer_app.cpp"
+  "apps/log_viewer_app.cpp"
   "apps/about_app.cpp"
-  "apps/diagnostic_app.cpp"
-  "apps/flashlight_app.cpp"
-  "apps/ftp_server_app.cpp"
-  "apps/screen_test_app.cpp"
-  "apps/timer_app.cpp"
-  "apps/wifi_files_app.cpp"
-  "apps/wifi_scan_app.cpp"
 )
 
 idf_component_register(
@@ -17,6 +12,10 @@ idf_component_register(
     "rtc_clock.cpp"
     "mia_elf_runner.cpp"
     "mia_host_abi.cpp"
+    "mia_host_abi_system.cpp"
+    "mia_host_abi_network.cpp"
+    "launcher_log.cpp"
+    "serial_file_service.cpp"
     "sd_app_loader.cpp"
     "wifi_file_config.cpp"
     "wifi_file_http.cpp"

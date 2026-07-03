@@ -12,12 +12,14 @@ enum class SdAppLoaderStatus : uint8_t {
 
 struct SdAppManifestSummary {
   char name[32];
+  char category[16];
   char path[128];
 };
 
 struct SdAppLoaderResult {
   SdAppLoaderStatus status;
   uint8_t appCount;
+  int errorCode;
 };
 
 SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,

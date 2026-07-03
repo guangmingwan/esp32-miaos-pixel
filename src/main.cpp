@@ -17,13 +17,9 @@
 
 #include "app.h"
 #include "apps/about_app.h"
-#include "apps/diagnostic_app.h"
-#include "apps/flashlight_app.h"
-#include "apps/ftp_server_app.h"
-#include "apps/screen_test_app.h"
-#include "apps/timer_app.h"
-#include "apps/wifi_files_app.h"
-#include "apps/wifi_scan_app.h"
+#include "apps/log_viewer_app.h"
+#include "apps/serial_transfer_app.h"
+#include "launcher_log.h"
 #include "lcd_ili9342.h"
 #include "lava_native_display.h"
 #include "pins.h"
@@ -33,33 +29,33 @@
 SPIClass tftSpi(FSPI);
 SPIClass sdSpi(HSPI);
 
-static AppContext g_context = {};
+AppContext g_context = {};
 ButtonState g_allButtons[ALL_BUTTON_COUNT] = {};
 static bool g_allButtonLast[ALL_BUTTON_COUNT] = {};
 static uint8_t g_hc165State = 0xFF;
 static uint32_t g_lastLauncherRenderMs = 0;
 static uint8_t g_selectedApp = 0;
 static const LauncherApp *g_activeApp = nullptr;
-static SdAppLoaderResult g_sdScan = {SdAppLoaderStatus::SdUnavailable, 0};
+static SdAppLoaderResult g_sdScan = {SdAppLoaderStatus::SdUnavailable, 0, 0};
 static SdAppManifestSummary g_sdApps[16] = {};
-static SdAppLoaderResult g_lastSdRun = {SdAppLoaderStatus::Ok, 0};
+static SdAppLoaderResult g_lastSdRun = {SdAppLoaderStatus::Ok, 0, 0};
 static constexpr uint8_t BUTTON_INDEX_START = 1;
 static constexpr uint8_t BUTTON_INDEX_SELECT = 5;
 static constexpr uint8_t BUTTON_INDEX_A = 6;
 static constexpr uint8_t BUTTON_INDEX_B = 7;
 static constexpr uint8_t BUTTON_INDEX_UP = 10;
 static constexpr uint8_t BUTTON_INDEX_DOWN = 11;
+static constexpr uint8_t BUTTON_INDEX_LEFT = 12;
+static constexpr uint8_t BUTTON_INDEX_RIGHT = 13;
 static constexpr uint8_t BUTTON_INDEX_L = 3;
 static constexpr uint8_t BUTTON_INDEX_R = 4;
+static constexpr uint8_t SYSTEM_TAB_INDEX = 0;
+static uint8_t g_selectedTab = SYSTEM_TAB_INDEX;
+static bool g_bootLoaderHintVisible = false;
 
 static const LauncherApp *const BUILTIN_APPS[] = {
-    &diagnosticApp(),
-    &screenTestApp(),
-    &flashlightApp(),
-    &timerApp(),
-    &wifiFilesApp(),
-    &ftpServerApp(),
-    &wifiScanApp(),
+    &serialTransferApp(),
+    &logViewerApp(),
     &aboutApp(),
 };
 static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]);
@@ -67,6 +63,7 @@ static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILT
 static constexpr uint8_t USB_DISK_MENU_INDEX = BUILTIN_APP_COUNT;
 static constexpr uint8_t BOOTLOADER_MENU_INDEX = BUILTIN_APP_COUNT + 1;
 static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 2;
+static constexpr uint8_t SYSTEM_ITEM_COUNT = TOTAL_LAUNCHER_ITEMS_FIXED;
 
 static const esp_partition_t *findOtaPartition() {
   return esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
@@ -119,49 +116,28 @@ static void rebootToUsbDisk() {
   const esp_partition_t *ota1 = esp_partition_find_first(
       ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
   if (!ota1) {
-    Serial.println("[usb-disk] ota_1 partition NOT FOUND");
+    launcherTrace("[usb-disk] ota_1 partition NOT FOUND");
     delay(1000);
     return;
   }
-  Serial.printf("[usb-disk] ota_1 at 0x%08x\n", (unsigned)ota1->address);
+  launcherTracef("[usb-disk] ota_1 at 0x%08x", (unsigned)ota1->address);
 
   esp_err_t err = forceOtaBoot(ota1);
-  Serial.printf("[usb-disk] force_boot => %s\n", esp_err_to_name(err));
+  launcherTracef("[usb-disk] force_boot => %s", esp_err_to_name(err));
   if (err != ESP_OK) {
     delay(2000);
     return;
   }
 
-  Serial.println("[usb-disk] rebooting now");
+  launcherTrace("[usb-disk] rebooting now");
   Serial.flush();
   delay(100);
   ESP.restart();
 }
 
-static void rebootToBootloader() {
-  Serial.println("[boot-loader] entering ROM download mode");
-  if (g_context.tftReady) {
-    constexpr uint8_t kBlack = 0;
-    constexpr uint8_t kWhite = 1;
-    constexpr uint8_t kBlue = 2;
-    constexpr uint8_t kYellow = 5;
-    constexpr uint8_t kCyan = 6;
-    constexpr uint8_t kGray = 7;
-    constexpr uint8_t kDarkBlue = 8;
-    lavaClear(kDarkBlue);
-    lavaFillRect(0, 0, LAVA_SCREEN_W, 28, kYellow);
-    lavaDrawText(8, 10, "Boot Loader", kBlack, kYellow);
-    lavaFillRect(18, 58, 284, 96, kBlue);
-    lavaDrawText(34, 78, "Entering download mode", kWhite, kBlue);
-    lavaDrawText(34, 98, "USB will reconnect soon", kCyan, kBlue);
-    lavaDrawText(34, 126, "Use PlatformIO upload now", kYellow, kBlue);
-    lavaDrawText(18, 214, "If stuck, press RESET or replug USB", kGray, kDarkBlue);
-    lavaPresent();
-  }
-  Serial.flush();
-  delay(1500);
-  REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
-  ESP.restart();
+static void showBootloaderInstructions() {
+  launcherTrace("[boot-loader] showing manual entry instructions");
+  g_bootLoaderHintVisible = true;
 }
 
 enum LavaPalette : uint8_t {
@@ -258,20 +234,20 @@ static void initSdCard() {
   g_context.sdReady = false;
   for (size_t i = 0; i < sizeof(kSdTrialHz) / sizeof(kSdTrialHz[0]); ++i) {
     const uint32_t hz = kSdTrialHz[i];
-    Serial.printf("[sd] begin trial %u Hz\n", static_cast<unsigned>(hz));
+    launcherTracef("[sd] begin trial %u Hz", static_cast<unsigned>(hz));
     sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
     if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
       if (SD.cardType() == CARD_NONE) {
-        Serial.printf("[sd] no card detected at %u Hz\n", static_cast<unsigned>(hz));
+        launcherTracef("[sd] no card detected at %u Hz", static_cast<unsigned>(hz));
         SD.end();
         delay(50);
         continue;
       }
       g_context.sdReady = true;
-      Serial.printf("[sd] mounted at %u Hz\n", static_cast<unsigned>(hz));
+      launcherTracef("[sd] mounted at %u Hz", static_cast<unsigned>(hz));
       break;
     }
-    Serial.printf("[sd] mount failed at %u Hz\n", static_cast<unsigned>(hz));
+    launcherTracef("[sd] mount failed at %u Hz", static_cast<unsigned>(hz));
     SD.end();
     delay(50);
   }
@@ -330,9 +306,122 @@ static const char *sdScanStatusText() {
   return "SD apps: unknown";
 }
 
+static bool sameSdCategory(const char *lhs, const char *rhs) {
+  return strcmp(lhs, rhs) == 0;
+}
+
+static uint8_t sdCategoryTabCount() {
+  uint8_t count = 0;
+  for (uint8_t index = 0;
+       index < g_sdScan.appCount && index < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++index) {
+    bool seen = false;
+    for (uint8_t previous = 0; previous < index; ++previous) {
+      if (sameSdCategory(g_sdApps[index].category, g_sdApps[previous].category)) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen && count < UINT8_MAX) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+static uint8_t launcherTabCount() {
+  return 1 + sdCategoryTabCount();
+}
+
+static const char *launcherTabName(uint8_t tabIndex) {
+  if (tabIndex == SYSTEM_TAB_INDEX) {
+    return "System";
+  }
+
+  const uint8_t sdTabIndex = tabIndex - 1;
+  uint8_t count = 0;
+  for (uint8_t index = 0;
+       index < g_sdScan.appCount && index < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++index) {
+    bool seen = false;
+    for (uint8_t previous = 0; previous < index; ++previous) {
+      if (sameSdCategory(g_sdApps[index].category, g_sdApps[previous].category)) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen) {
+      if (count == sdTabIndex) {
+        return g_sdApps[index].category;
+      }
+      ++count;
+    }
+  }
+  return nullptr;
+}
+
+static uint8_t sdAppCountForTab(uint8_t tabIndex) {
+  const char *tabName = launcherTabName(tabIndex);
+  if (tabName == nullptr || tabIndex == SYSTEM_TAB_INDEX) {
+    return 0;
+  }
+
+  uint8_t count = 0;
+  for (uint8_t index = 0;
+       index < g_sdScan.appCount && index < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++index) {
+    if (sameSdCategory(g_sdApps[index].category, tabName) && count < UINT8_MAX) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 static uint8_t totalLauncherItems() {
-  return TOTAL_LAUNCHER_ITEMS_FIXED + min<uint8_t>(g_sdScan.appCount,
-                                           sizeof(g_sdApps) / sizeof(g_sdApps[0]));
+  return g_selectedTab == SYSTEM_TAB_INDEX ? SYSTEM_ITEM_COUNT : sdAppCountForTab(g_selectedTab);
+}
+
+static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex) {
+  const char *tabName = launcherTabName(g_selectedTab);
+  if (tabName == nullptr || g_selectedTab == SYSTEM_TAB_INDEX) {
+    return nullptr;
+  }
+
+  uint8_t currentIndex = 0;
+  for (uint8_t index = 0;
+       index < g_sdScan.appCount && index < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++index) {
+    if (!sameSdCategory(g_sdApps[index].category, tabName)) {
+      continue;
+    }
+    if (currentIndex == itemIndex) {
+      return &g_sdApps[index];
+    }
+    ++currentIndex;
+  }
+  return nullptr;
+}
+
+static void clampLauncherSelection() {
+  const uint8_t itemCount = totalLauncherItems();
+  if (itemCount == 0) {
+    g_selectedApp = 0;
+  } else if (g_selectedApp >= itemCount) {
+    g_selectedApp = itemCount - 1;
+  }
+}
+
+static void switchLauncherTab(int8_t delta) {
+  const uint8_t tabCount = launcherTabCount();
+  if (tabCount <= 1) {
+    return;
+  }
+
+  int nextTab = static_cast<int>(g_selectedTab) + delta;
+  if (nextTab < 0) {
+    nextTab += tabCount;
+  }
+  if (nextTab >= tabCount) {
+    nextTab -= tabCount;
+  }
+  g_selectedTab = static_cast<uint8_t>(nextTab);
+  clampLauncherSelection();
 }
 
 static void drawLauncherClock() {
@@ -359,8 +448,23 @@ static void drawLauncher() {
   lavaDrawText(6, 6, "MiaOS Launcher", LAVA_BLACK, LAVA_YELLOW);
   drawLauncherClock();
 
-  lavaDrawText(8, 30, "Apps", LAVA_CYAN, LAVA_BLACK);
-  const uint8_t maxVisibleApps = 9;
+  int16_t tabX = 8;
+  const uint8_t tabCount = launcherTabCount();
+  for (uint8_t tab = 0; tab < tabCount; ++tab) {
+    const char *tabName = launcherTabName(tab);
+    if (tabName == nullptr) {
+      continue;
+    }
+    const uint8_t bg = tab == g_selectedTab ? LAVA_BLUE : LAVA_BLACK;
+    const uint8_t fg = tab == g_selectedTab ? LAVA_YELLOW : LAVA_GRAY;
+    const int16_t tabWidth = static_cast<int16_t>(strlen(tabName) * 6 + 12);
+    lavaFillRect(tabX, 28, tabWidth, 16, bg);
+    lavaDrawText(tabX + 6, 33, tabName, fg, bg);
+    tabX += tabWidth + 4;
+  }
+
+  lavaDrawText(8, 48, "Apps", LAVA_CYAN, LAVA_BLACK);
+  const uint8_t maxVisibleApps = 8;
   uint8_t firstApp = 0;
   const uint8_t itemCount = totalLauncherItems();
   if (itemCount > maxVisibleApps && g_selectedApp >= maxVisibleApps) {
@@ -368,18 +472,19 @@ static void drawLauncher() {
   }
   const uint8_t visibleEnd = min<uint8_t>(itemCount, firstApp + maxVisibleApps);
   for (uint8_t i = firstApp; i < visibleEnd; ++i) {
-    const int16_t y = 46 + (i - firstApp) * 18;
+    const int16_t y = 64 + (i - firstApp) * 18;
     const bool selected = i == g_selectedApp;
-    const bool sdApp = i >= TOTAL_LAUNCHER_ITEMS_FIXED;
-    const bool isUsbDisk = i == USB_DISK_MENU_INDEX;
-    const bool isBootloader = i == BOOTLOADER_MENU_INDEX;
+    const bool sdApp = g_selectedTab != SYSTEM_TAB_INDEX;
+    const bool isUsbDisk = g_selectedTab == SYSTEM_TAB_INDEX && i == USB_DISK_MENU_INDEX;
+    const bool isBootloader = g_selectedTab == SYSTEM_TAB_INDEX && i == BOOTLOADER_MENU_INDEX;
     const char *name;
     if (isUsbDisk) {
       name = "USB Disk";
     } else if (isBootloader) {
       name = "Boot Loader";
     } else if (sdApp) {
-      name = g_sdApps[i - TOTAL_LAUNCHER_ITEMS_FIXED].name;
+      const SdAppManifestSummary *app = selectedSdApp(i);
+      name = app == nullptr ? "<missing>" : app->name;
     } else {
       name = BUILTIN_APPS[i]->name;
     }
@@ -389,19 +494,32 @@ static void drawLauncher() {
     const uint8_t itemCursor = selected ? LAVA_YELLOW : LAVA_YELLOW;
     lavaFillRect(6, y - 3, 308, 15, itemBg);
     lavaDrawText(12, y, selected ? ">" : " ", itemCursor, itemBg);
-    lavaDrawText(28, y, sdApp ? "[sd]" : ((isUsbDisk || isBootloader) ? ">>" : ""),
+    lavaDrawText(28, y, sdApp ? "[sd]" : ((isUsbDisk || isBootloader) ? "[sys]" : ""),
                  itemTag, itemBg);
-    lavaDrawText(sdApp ? 52 : ((isUsbDisk || isBootloader) ? 52 : 28), y, name, itemText,
+    lavaDrawText((sdApp || isUsbDisk || isBootloader) ? 52 : 28, y, name, itemText,
                  itemBg);
   }
 
   lavaDrawText(8, 206, sdScanStatusText(), g_context.sdReady ? LAVA_GREEN : LAVA_RED,
                 LAVA_BLACK);
   if (g_lastSdRun.status != SdAppLoaderStatus::Ok) {
-    lavaDrawText(8, 218, sdAppLoaderStatusText(g_lastSdRun.status), LAVA_RED,
+    lavaDrawText(8, 214, sdAppLoaderStatusText(g_lastSdRun.status), LAVA_RED,
                   LAVA_BLACK);
   }
-  lavaDrawText(8, 222, "A:Open  UP/DN:Move", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 224, "A:Open UP/DN:Move LEFT/RIGHT:Tab", LAVA_GRAY, LAVA_BLACK);
+
+  if (g_bootLoaderHintVisible) {
+    lavaFillRect(24, 44, 272, 156, LAVA_DARK_BLUE);
+    lavaFillRect(24, 44, 272, 20, LAVA_YELLOW);
+    lavaDrawText(30, 50, "Boot Loader", LAVA_BLACK, LAVA_YELLOW);
+    lavaDrawText(40, 82, "1. Hold ST", LAVA_WHITE, LAVA_DARK_BLUE);
+    lavaDrawText(40, 100, "2. Press RESET", LAVA_WHITE, LAVA_DARK_BLUE);
+    lavaDrawText(40, 118, "3. Release RESET into", LAVA_WHITE, LAVA_DARK_BLUE);
+    lavaDrawText(58, 136, "download mode", LAVA_CYAN, LAVA_DARK_BLUE);
+    lavaDrawText(40, 162, "RESET alone returns to", LAVA_GRAY, LAVA_DARK_BLUE);
+    lavaDrawText(58, 180, "normal boot", LAVA_GRAY, LAVA_DARK_BLUE);
+    lavaDrawText(86, 198, "A/B:Back", LAVA_YELLOW, LAVA_DARK_BLUE);
+  }
   lavaPresent();
 }
 
@@ -410,20 +528,24 @@ static void enterSelectedApp() {
     return;
   }
 
-  if (g_selectedApp == USB_DISK_MENU_INDEX) {
+  if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == USB_DISK_MENU_INDEX) {
     rebootToUsbDisk();
     return;
   }
 
-  if (g_selectedApp == BOOTLOADER_MENU_INDEX) {
-    rebootToBootloader();
+  if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == BOOTLOADER_MENU_INDEX) {
+    showBootloaderInstructions();
+    drawLauncher();
     return;
   }
 
-  if (g_selectedApp >= TOTAL_LAUNCHER_ITEMS_FIXED) {
-    const SdAppManifestSummary &app =
-        g_sdApps[g_selectedApp - TOTAL_LAUNCHER_ITEMS_FIXED];
-    g_lastSdRun = runSdAppByPath(app.path, g_context.sdReady);
+  if (g_selectedTab != SYSTEM_TAB_INDEX) {
+    const SdAppManifestSummary *app = selectedSdApp(g_selectedApp);
+    if (app == nullptr) {
+      return;
+    }
+    g_lastSdRun = runSdAppByPath(app->path, g_context.sdReady);
+    launcherLogRecordSdRun(*app, g_lastSdRun);
     drawLauncher();
     return;
   }
@@ -444,6 +566,25 @@ static void exitActiveApp() {
 }
 
 static void tickLauncher(uint32_t nowMs) {
+  if (g_bootLoaderHintVisible) {
+    if (g_context.buttons[0].pressed || g_context.buttons[1].pressed || systemExitPressed()) {
+      g_bootLoaderHintVisible = false;
+      drawLauncher();
+    }
+    return;
+  }
+
+  if (g_allButtons[BUTTON_INDEX_LEFT].pressed) {
+    switchLauncherTab(-1);
+    drawLauncher();
+    return;
+  }
+  if (g_allButtons[BUTTON_INDEX_RIGHT].pressed) {
+    switchLauncherTab(1);
+    drawLauncher();
+    return;
+  }
+
   if (g_context.buttons[2].pressed && g_selectedApp > 0) {
     --g_selectedApp;
     drawLauncher();
@@ -464,50 +605,66 @@ static void tickLauncher(uint32_t nowMs) {
 }
 
 static void printStartupInfo() {
-  Serial.println();
-  Serial.println("ESP32-S3 Retro-Pixel launcher (ILI9342 320x240)");
-  Serial.printf("Chip: %s rev%d, CPU %uMHz\n", ESP.getChipModel(),
-                ESP.getChipRevision(), ESP.getCpuFreqMHz());
-  Serial.printf("Flash: %u bytes, heap: %u bytes\n", ESP.getFlashChipSize(),
-                ESP.getFreeHeap());
-  Serial.printf("MAC: %s\n", macAddress().c_str());
-  Serial.printf("TFT: ILI9342 320x240 SCK=%d MOSI=%d CS=%d DC=%d RST=%d BL=%d\n",
-                TFT_SCK_PIN, TFT_MOSI_PIN, TFT_CS_PIN, TFT_DC_PIN,
-                TFT_RST_PIN, TFT_BL_PIN);
-  Serial.printf("SD: SCK=%d MOSI=%d MISO=%d CS=%d\n", SD_SCK_PIN, SD_MOSI_PIN,
-                SD_MISO_PIN, SD_CS_PIN);
-  Serial.printf("Keys: BOOT=%d M=%d L=%d R=%d SEL=%d ST=%d\n", KEY_BOOT_PIN,
-                KEY_M_PIN, KEY_L_PIN, KEY_R_PIN, KEY_SELECT_PIN, KEY_START_PIN);
-  Serial.printf("HC165: PL=%d CLK=%d DAT=%d\n", HC165_PL_PIN, HC165_CLK_PIN,
-                HC165_DAT_PIN);
-  Serial.printf("Audio: I2S WS=%d BCK=%d DAT=%d AMP=%d\n", I2S_WS_PIN,
-                I2S_BCK_PIN, I2S_DATA_PIN, AMP_CTRL_PIN);
-  Serial.printf("Misc: VBAT=%d BEEP=%d I2C SCL=%d SDA=%d\n", VBAT_ADC_PIN,
-                BEEP_PIN, I2C_SCL_PIN, I2C_SDA_PIN);
+  launcherTrace("");
+  launcherTrace("ESP32-S3 Retro-Pixel launcher (ILI9342 320x240)");
+  launcherTracef("Chip: %s rev%d, CPU %uMHz", ESP.getChipModel(),
+                 ESP.getChipRevision(), ESP.getCpuFreqMHz());
+  launcherTracef("Flash: %u bytes, heap: %u bytes", ESP.getFlashChipSize(),
+                 ESP.getFreeHeap());
+  launcherTracef("MAC: %s", macAddress().c_str());
+  launcherTracef("TFT: ILI9342 320x240 SCK=%d MOSI=%d CS=%d DC=%d RST=%d BL=%d",
+                 TFT_SCK_PIN, TFT_MOSI_PIN, TFT_CS_PIN, TFT_DC_PIN,
+                 TFT_RST_PIN, TFT_BL_PIN);
+  launcherTracef("SD: SCK=%d MOSI=%d MISO=%d CS=%d", SD_SCK_PIN, SD_MOSI_PIN,
+                 SD_MISO_PIN, SD_CS_PIN);
+  launcherTracef("Keys: BOOT=%d M=%d L=%d R=%d SEL=%d ST=%d", KEY_BOOT_PIN,
+                 KEY_M_PIN, KEY_L_PIN, KEY_R_PIN, KEY_SELECT_PIN, KEY_START_PIN);
+  launcherTracef("HC165: PL=%d CLK=%d DAT=%d", HC165_PL_PIN, HC165_CLK_PIN,
+                 HC165_DAT_PIN);
+  launcherTracef("Audio: I2S WS=%d BCK=%d DAT=%d AMP=%d", I2S_WS_PIN,
+                 I2S_BCK_PIN, I2S_DATA_PIN, AMP_CTRL_PIN);
+  launcherTracef("Misc: VBAT=%d BEEP=%d I2C SCL=%d SDA=%d", VBAT_ADC_PIN,
+                 BEEP_PIN, I2C_SCL_PIN, I2C_SDA_PIN);
+}
+
+static void writeStartupLog() {
+  launcherLogAppendf("startup chip=%s rev=%d cpu_mhz=%u", ESP.getChipModel(),
+                     ESP.getChipRevision(), ESP.getCpuFreqMHz());
+  launcherLogAppendf("startup flash=%u heap=%u", ESP.getFlashChipSize(), ESP.getFreeHeap());
+  launcherLogAppendf("startup mac=%s", macAddress().c_str());
+  launcherLogAppendf("startup sd_ready=%d tft_ready=%d", g_context.sdReady ? 1 : 0,
+                     g_context.tftReady ? 1 : 0);
 }
 
 void setup() {
   Serial.begin(115200);
   delay(2000);
 
-  Serial.println("[setup] configurePins");
+  Serial.println();
+  Serial.println("ESP32-S3 Retro-Pixel launcher (ILI9342 320x240)");
+  Serial.printf("Chip: %s rev%d, CPU %uMHz\n", ESP.getChipModel(),
+                ESP.getChipRevision(), ESP.getCpuFreqMHz());
+  launcherTrace("[setup] configurePins");
   configurePins();
-  Serial.println("[setup] Wire.begin");
+  launcherTrace("[setup] Wire.begin");
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  Serial.println("[setup] updateAllButtons");
+  launcherTrace("[setup] updateAllButtons");
   updateAllButtons();
 
-  Serial.println("[setup] printStartupInfo");
+  launcherTrace("[setup] printStartupInfo");
   printStartupInfo();
-  Serial.println("[setup] initDisplay - BEFORE");
+  launcherTrace("[setup] initDisplay - BEFORE");
   initDisplay();
-  Serial.println("[setup] initDisplay - AFTER");
+  launcherTrace("[setup] initDisplay - AFTER");
 
-  Serial.println("[setup] initSdCard");
+  launcherTrace("[setup] initSdCard");
   initSdCard();
-  Serial.println("[setup] drawLauncher - BEFORE");
+  launcherLogBeginSession(g_context.sdReady);
+  writeStartupLog();
+  clampLauncherSelection();
+  launcherTrace("[setup] drawLauncher - BEFORE");
   drawLauncher();
-  Serial.println("[setup] drawLauncher - AFTER");
+  launcherTrace("[setup] drawLauncher - AFTER");
 }
 
 void loop() {

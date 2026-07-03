@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "launcher_log.h"
 #include "mia_elf_runner.h"
 
 static constexpr const char *APP_ROOTS[] = {
@@ -14,6 +15,11 @@ static constexpr const char *APP_ROOTS[] = {
     "/Emulators",
     "/Media",
     "/Application",
+    "/MiaOS/Games",
+    "/MiaOS/Utils",
+    "/MiaOS/Settings",
+    "/MiaOS/Emulators",
+    "/MiaOS/Media",
     "/MiaOS/Application",
 };
 static constexpr char APP_SUFFIX[] = ".app";
@@ -39,8 +45,7 @@ static const char *baseName(const char *path) {
   return name == nullptr ? path : name + 1;
 }
 
-static void copyAppDisplayName(char *dest, size_t destSize, const char *rootPath,
-                               const char *appPath) {
+static void copyAppName(char *dest, size_t destSize, const char *appPath) {
   if (destSize == 0) {
     return;
   }
@@ -52,9 +57,19 @@ static void copyAppDisplayName(char *dest, size_t destSize, const char *rootPath
     nameLen -= suffixLen;
   }
 
+  const int written = snprintf(dest, destSize, "%.*s", static_cast<int>(nameLen), name);
+  if (written < 0 || static_cast<size_t>(written) >= destSize) {
+    dest[destSize - 1] = '\0';
+  }
+}
+
+static void copyAppCategory(char *dest, size_t destSize, const char *rootPath) {
+  if (destSize == 0) {
+    return;
+  }
+
   const char *category = baseName(rootPath);
-  const int written = snprintf(dest, destSize, "%s/%.*s", category,
-                               static_cast<int>(nameLen), name);
+  const int written = snprintf(dest, destSize, "%s", category);
   if (written < 0 || static_cast<size_t>(written) >= destSize) {
     dest[destSize - 1] = '\0';
   }
@@ -73,11 +88,11 @@ static void scanAppRoot(const char *rootPath, SdAppManifestSummary *apps,
                         uint8_t capacity, uint8_t &found, uint16_t &scanned) {
   File root = SD.open(rootPath);
   if (!root) {
-    Serial.printf("[sd-scan] app root missing/unreadable: %s\n", rootPath);
+    launcherTracef("[sd-scan] app root missing/unreadable: %s", rootPath);
     return;
   }
   if (!root.isDirectory()) {
-    Serial.printf("[sd-scan] app root is not a directory: %s\n", rootPath);
+    launcherTracef("[sd-scan] app root is not a directory: %s", rootPath);
     root.close();
     return;
   }
@@ -96,22 +111,22 @@ static void scanAppRoot(const char *rootPath, SdAppManifestSummary *apps,
       if (formatElfPath(elfPath, sizeof(elfPath), rootPath, entryName)) {
         File elf = SD.open(elfPath, FILE_READ);
         if (elf) {
-          Serial.printf("[sd-scan] app found: %s size=%u\n", elfPath,
-                        static_cast<unsigned>(elf.size()));
+          launcherTracef("[sd-scan] app found: %s size=%u", elfPath,
+                         static_cast<unsigned>(elf.size()));
           elf.close();
           if (apps != nullptr && found < capacity) {
-            copyAppDisplayName(apps[found].name, sizeof(apps[found].name), rootPath,
-                               entryName);
+            copyAppName(apps[found].name, sizeof(apps[found].name), entryName);
+            copyAppCategory(apps[found].category, sizeof(apps[found].category), rootPath);
             copyText(apps[found].path, sizeof(apps[found].path), elfPath);
-            Serial.printf("[sd-scan] stored app[%u] name='%s' path='%s'\n",
-                          static_cast<unsigned>(found), apps[found].name,
-                          apps[found].path);
+            launcherTracef("[sd-scan] stored app[%u] category='%s' name='%s' path='%s'",
+                           static_cast<unsigned>(found), apps[found].category,
+                           apps[found].name, apps[found].path);
           }
           if (found < UINT8_MAX) {
             ++found;
           }
         } else {
-          Serial.printf("[sd-scan] skip missing elf: %s\n", elfPath);
+          launcherTracef("[sd-scan] skip missing elf: %s", elfPath);
         }
       }
     }
@@ -121,12 +136,12 @@ static void scanAppRoot(const char *rootPath, SdAppManifestSummary *apps,
 }
 
 SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
-                                bool sdReady) {
-  Serial.printf("[sd-scan] start sdReady=%d capacity=%u\n", sdReady ? 1 : 0,
-                static_cast<unsigned>(capacity));
+                                 bool sdReady) {
+  launcherTracef("[sd-scan] start sdReady=%d capacity=%u", sdReady ? 1 : 0,
+                 static_cast<unsigned>(capacity));
   if (!sdReady) {
-    Serial.println("[sd-scan] skip: SD unavailable");
-    return {SdAppLoaderStatus::SdUnavailable, 0};
+    launcherTrace("[sd-scan] skip: SD unavailable");
+    return {SdAppLoaderStatus::SdUnavailable, 0, 0};
   }
 
   uint16_t scanned = 0;
@@ -138,34 +153,34 @@ SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
   }
 
   if (found > capacity) {
-    Serial.printf("[sd-scan] found=%u exceeds menu capacity=%u\n",
-                  static_cast<unsigned>(found), static_cast<unsigned>(capacity));
+    launcherTracef("[sd-scan] found=%u exceeds menu capacity=%u",
+                   static_cast<unsigned>(found), static_cast<unsigned>(capacity));
     found = capacity;
   }
-  Serial.printf("[sd-scan] done scanned=%u found=%u status=%s\n",
-                static_cast<unsigned>(scanned), static_cast<unsigned>(found),
-                found > 0 ? "ok" : "none");
+  launcherTracef("[sd-scan] done scanned=%u found=%u status=%s",
+                 static_cast<unsigned>(scanned), static_cast<unsigned>(found),
+                 found > 0 ? "ok" : "none");
   return {found > 0 ? SdAppLoaderStatus::Ok : SdAppLoaderStatus::NoAppsFound,
-          found};
+          found, 0};
 }
 
 SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady) {
-  Serial.printf("[sd-run] path='%s' sdReady=%d\n", path == nullptr ? "<null>" : path,
-                sdReady ? 1 : 0);
+  launcherTracef("[sd-run] path='%s' sdReady=%d", path == nullptr ? "<null>" : path,
+                 sdReady ? 1 : 0);
   MiaElfRunResult result = miaRunElfApp(path, sdReady);
-  Serial.printf("[sd-run] result status=%s code=%d\n", miaElfRunStatusText(result.status),
-                result.errorCode);
+  launcherTracef("[sd-run] result status=%s code=%d", miaElfRunStatusText(result.status),
+                 result.errorCode);
   switch (result.status) {
     case MiaElfRunStatus::Ok:
-      return {SdAppLoaderStatus::Ok, 1};
+      return {SdAppLoaderStatus::Ok, 1, result.errorCode};
     case MiaElfRunStatus::SdUnavailable:
-      return {SdAppLoaderStatus::SdUnavailable, 0};
+      return {SdAppLoaderStatus::SdUnavailable, 0, result.errorCode};
     case MiaElfRunStatus::ReadError:
-      return {SdAppLoaderStatus::ReadError, 0};
+      return {SdAppLoaderStatus::ReadError, 0, result.errorCode};
     case MiaElfRunStatus::RunError:
-      return {SdAppLoaderStatus::RunError, 0};
+      return {SdAppLoaderStatus::RunError, 0, result.errorCode};
   }
-  return {SdAppLoaderStatus::RunError, 0};
+  return {SdAppLoaderStatus::RunError, 0, result.errorCode};
 }
 
 const char *sdAppLoaderStatusText(SdAppLoaderStatus status) {
