@@ -36,10 +36,12 @@ firmware address space through the ESP-IDF `elf_loader` component.
 
 - `A` starts the selected app.
 - `B` exits the active app and returns to the launcher.
-- `UP` / `DOWN` move through the built-in app list.
+- `UP` / `DOWN` move through the items in the current tab.
+- `LEFT` / `RIGHT` switch between `System` and SD category tabs.
 
-Apps implement the small interface in `include/app.h`. New built-in apps can be
-added by creating another app module and registering it in `src/main.cpp`.
+`About` remains the only informational built-in launcher app. The launcher now exposes a
+`System` tab for `Serial Files`, `Logs`, `About`, `USB Disk`, and `Boot Loader`, while SD-loaded ELF
+apps are grouped into tabs by their SD category directory.
 
 ## WiFi SD File Server
 
@@ -93,6 +95,11 @@ the SD root plus the legacy MiaOS path:
 /Emulators/*.app/app.elf
 /Media/*.app/app.elf
 /Application/*.app/app.elf
+/MiaOS/Games/*.app/app.elf
+/MiaOS/Utils/*.app/app.elf
+/MiaOS/Settings/*.app/app.elf
+/MiaOS/Emulators/*.app/app.elf
+/MiaOS/Media/*.app/app.elf
 /MiaOS/Application/*.app/app.elf
 ```
 
@@ -115,7 +122,7 @@ pio run -d experiments/elf_apps/hello
 Generated artifact:
 
 ```text
-experiments/elf_apps/hello/.pio/build/esp32dev/hello.app.elf
+experiments/elf_apps/hello/.pio/build/esp32s3/app.elf
 ```
 
 SD card target path:
@@ -124,7 +131,7 @@ SD card target path:
 /MiaOS/Application/hello.app/app.elf
 ```
 
-Expected SD card layout for the built-in apps now shipped as SD ELF apps:
+Expected SD card layout for the apps now shipped as SD ELF apps:
 
 ```text
 SD card root/
@@ -132,17 +139,84 @@ SD card root/
 ├── Games/
 │   └── minesweeper.app/app.elf
 ├── Media/
+├── Settings/
+│   ├── diagnostic.app/app.elf
+│   ├── rtc_set.app/app.elf
+│   └── wifi_scan.app/app.elf
 ├── Utils/
 │   ├── calculator.app/app.elf
-│   └── sd_browser.app/app.elf
-├── Settings/
-│   └── rtc_set.app/app.elf
+│   ├── flashlight.app/app.elf
+│   ├── ftp_server.app/app.elf
+│   ├── screen_test.app/app.elf
+│   ├── sd_browser.app/app.elf
+│   ├── timer.app/app.elf
+│   └── wifi_files.app/app.elf
 └── Application/
     └── hello.app/app.elf
 ```
 
-On the launcher, category apps appear as `SD:<category>/<name>`. Select one and
-press `A` to run it.
+On the launcher, use `LEFT` / `RIGHT` to switch tabs. `Boot Loader` now shows a
+manual instruction dialog instead of forcing ROM download mode; hold `ST` and
+press `RESET` to enter the boot loader, and press `RESET` alone to boot normally.
+
+The `Logs` entry in the `System` tab reads `/MiaOS/logs/latest.log` from the SD
+card. The launcher overwrites this file on startup and records the current boot
+summary plus the most recent SD ELF launch result and error code. The file also
+includes launcher-owned serial traces from startup, SD scanning, USB Disk, and
+ELF loader execution; it does not automatically capture every third-party library
+message written directly to `Serial`.
+
+## Serial File Transfer
+
+The `Serial Files` entry in the `System` tab starts a serial file service over
+the ESP32-S3 USB CDC/JTAG port. It uses a simple command protocol rather than a
+network FTP stack.
+
+Supported commands:
+
+```text
+PING
+LIST <path>
+MKDIR <path>
+DELETE <path>
+PUT <path> <size>
+```
+
+Use the host helper script:
+
+```sh
+uv run tools/serial_sd_client.py ping
+uv run tools/serial_sd_client.py list-dir /MiaOS/Application
+uv run tools/serial_sd_client.py mkdir /MiaOS/Test
+uv run tools/serial_sd_client.py put ./app.elf /MiaOS/Application/test.app/app.elf
+```
+
+Paths should not contain spaces. The launcher writes `Serial Files` activity to
+`/MiaOS/logs/latest.log`.
+
+Build the migrated SD apps with:
+
+```sh
+pio run -d experiments/elf_apps/diagnostic
+pio run -d experiments/elf_apps/screen_test
+pio run -d experiments/elf_apps/flashlight
+pio run -d experiments/elf_apps/timer
+pio run -d experiments/elf_apps/wifi_scan
+pio run -d experiments/elf_apps/wifi_files
+pio run -d experiments/elf_apps/ftp_server
+```
+
+Copy each generated `.pio/build/esp32s3/app.elf` to the matching SD directory:
+
+```text
+/Settings/diagnostic.app/app.elf
+/Utils/screen_test.app/app.elf
+/Utils/flashlight.app/app.elf
+/Utils/timer.app/app.elf
+/Settings/wifi_scan.app/app.elf
+/Utils/wifi_files.app/app.elf
+/Utils/ftp_server.app/app.elf
+```
 
 ELF apps are not sandboxed. A bad or incompatible ELF can crash or corrupt the
 launcher. Keep the ABI versioned and rebuild apps against the matching host ABI.
