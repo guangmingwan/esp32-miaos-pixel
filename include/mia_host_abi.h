@@ -12,12 +12,14 @@ int32_t mia_host_screen_width(void);
 int32_t mia_host_screen_height(void);
 void mia_host_clear(uint8_t color);
 void mia_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t color);
+void mia_host_fill_screen_rgb565(uint16_t color);
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
                         uint8_t bg);
 void mia_host_present(void);
 uint8_t mia_host_button_down(uint8_t button);
 void mia_host_delay_ms(uint32_t ms);
 uint32_t mia_host_millis(void);
+void mia_host_backlight_set(uint8_t enabled);
 
 typedef struct MiaHostDateTime {
   uint16_t year;
@@ -42,6 +44,59 @@ typedef struct MiaHostDirEntry {
 
 int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entries,
                              uint32_t capacity);
+
+typedef struct MiaHostSystemInfo {
+  char chip_model[24];
+  uint8_t chip_revision;
+  uint16_t cpu_mhz;
+  uint32_t free_heap_kb;
+  uint32_t flash_mb;
+  uint8_t tft_ready;
+  uint8_t sd_ready;
+} MiaHostSystemInfo;
+
+typedef struct MiaHostBatteryInfo {
+  int32_t raw;
+  uint32_t millivolts;
+} MiaHostBatteryInfo;
+
+uint8_t mia_host_get_system_info(MiaHostSystemInfo *info);
+uint8_t mia_host_read_battery(MiaHostBatteryInfo *info);
+
+typedef struct MiaHostWifiNetwork {
+  char ssid[33];
+  int32_t rssi;
+} MiaHostWifiNetwork;
+
+int32_t mia_host_wifi_scan(MiaHostWifiNetwork *networks, uint32_t capacity);
+void mia_host_wifi_off(void);
+
+typedef struct MiaHostWifiFilesStatus {
+  uint8_t running;
+  uint8_t ap_mode;
+  char status[32];
+  char ssid[32];
+  char ip[16];
+} MiaHostWifiFilesStatus;
+
+uint8_t mia_host_wifi_files_start(void);
+void mia_host_wifi_files_poll(void);
+void mia_host_wifi_files_stop(void);
+uint8_t mia_host_wifi_files_get_status(MiaHostWifiFilesStatus *status);
+
+typedef struct MiaHostFtpStatus {
+  uint8_t running;
+  char status[32];
+  char ssid[32];
+  char ip[16];
+  char user[16];
+  char pass[16];
+} MiaHostFtpStatus;
+
+uint8_t mia_host_ftp_start(void);
+void mia_host_ftp_poll(void);
+void mia_host_ftp_stop(void);
+uint8_t mia_host_ftp_get_status(MiaHostFtpStatus *status);
 
 enum MiaHostPalette {
   MIA_HOST_BLACK = 0,

@@ -6,7 +6,9 @@
 #include <string.h>
 
 #include "app.h"
+#include "lcd_ili9342.h"
 #include "lava_native_display.h"
+#include "pins.h"
 #include "rtc_clock.h"
 
 extern ButtonState g_allButtons[];
@@ -62,6 +64,12 @@ void mia_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t colo
   Serial.println("[mia_host_abi] fill_rect done");
 }
 
+void mia_host_fill_screen_rgb565(uint16_t color) {
+  if (lavaDisplayReady()) {
+    Lcd.fillScreen(color);
+  }
+}
+
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
                         uint8_t bg) {
   Serial.printf("[mia_host_abi] draw_text x=%d y=%d text='%s' fg=%u bg=%u ready=%d\n", x,
@@ -103,6 +111,12 @@ uint8_t mia_host_button_down(uint8_t button) {
 void mia_host_delay_ms(uint32_t ms) { delay(ms); }
 
 uint32_t mia_host_millis(void) { return millis(); }
+
+void mia_host_backlight_set(uint8_t enabled) {
+  if (TFT_BL_PIN >= 0) {
+    digitalWrite(TFT_BL_PIN, enabled ? LOW : HIGH);
+  }
+}
 
 static void copyRtcToHost(const RtcDateTime &src, MiaHostDateTime *dest) {
   dest->year = src.year;
