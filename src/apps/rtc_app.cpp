@@ -1,9 +1,9 @@
 #include "apps/rtc_app.h"
 
 #include <Arduino.h>
-#include <Wire.h>
 
 #include "lava_native_display.h"
+#include "rtc_clock.h"
 
 namespace {
 
@@ -19,18 +19,7 @@ enum LavaPalette : uint8_t {
   LAVA_DARK_BLUE = 8,
 };
 
-constexpr uint8_t RTC_I2C_ADDR = 0x51;
-constexpr uint8_t RTC_TIME_REG = 0x02;
 constexpr uint8_t FIELD_COUNT = 6;
-
-struct RtcDateTime {
-  uint16_t year;
-  uint8_t month;
-  uint8_t day;
-  uint8_t hour;
-  uint8_t minute;
-  uint8_t second;
-};
 
 struct FieldSpec {
   const char *label;
@@ -47,103 +36,10 @@ constexpr FieldSpec FIELDS[FIELD_COUNT] = {
     {"Second", 0, 59},
 };
 
-RtcDateTime g_rtcNow = {2000, 1, 1, 0, 0, 0};
-RtcDateTime g_editTime = {2000, 1, 1, 0, 0, 0};
+RtcDateTime g_rtcNow = {2000, 1, 1, 0, 0, 0, 6};
+RtcDateTime g_editTime = {2000, 1, 1, 0, 0, 0, 6};
 uint8_t g_selectedField = 0;
 const char *g_status = "B:Read  A:Save";
-
-uint8_t toBcd(uint8_t value) { return static_cast<uint8_t>(((value / 10) << 4) | (value % 10)); }
-
-uint8_t fromBcd(uint8_t value) { return static_cast<uint8_t>(((value >> 4) * 10) + (value & 0x0F)); }
-
-bool isLeapYear(uint16_t year) {
-  if (year % 400 == 0) {
-    return true;
-  }
-  if (year % 100 == 0) {
-    return false;
-  }
-  return (year % 4) == 0;
-}
-
-uint8_t daysInMonth(uint16_t year, uint8_t month) {
-  static const uint8_t days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if (month == 2 && isLeapYear(year)) {
-    return 29;
-  }
-  return days[month - 1];
-}
-
-uint8_t dayOfWeek(const RtcDateTime &dateTime) {
-  int year = dateTime.year;
-  int month = dateTime.month;
-  if (month < 3) {
-    month += 12;
-    --year;
-  }
-  const int k = year % 100;
-  const int j = year / 100;
-  const int h = (dateTime.day + (13 * (month + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;
-  return static_cast<uint8_t>((h + 6) % 7);
-}
-
-void clampDateTime(RtcDateTime &dateTime) {
-  if (dateTime.month < 1) {
-    dateTime.month = 1;
-  }
-  if (dateTime.month > 12) {
-    dateTime.month = 12;
-  }
-  const uint8_t maxDay = daysInMonth(dateTime.year, dateTime.month);
-  if (dateTime.day < 1) {
-    dateTime.day = 1;
-  }
-  if (dateTime.day > maxDay) {
-    dateTime.day = maxDay;
-  }
-}
-
-bool readRtc(RtcDateTime &dateTime) {
-  Wire.beginTransmission(RTC_I2C_ADDR);
-  Wire.write(RTC_TIME_REG);
-  if (Wire.endTransmission(false) != 0) {
-    return false;
-  }
-  if (Wire.requestFrom(static_cast<int>(RTC_I2C_ADDR), 7) != 7) {
-    return false;
-  }
-
-  const uint8_t seconds = Wire.read();
-  const uint8_t minutes = Wire.read();
-  const uint8_t hours = Wire.read();
-  const uint8_t days = Wire.read();
-  const uint8_t weekdays = Wire.read();
-  const uint8_t months = Wire.read();
-  const uint8_t years = Wire.read();
-  (void)weekdays;
-
-  dateTime.second = fromBcd(seconds & 0x7F);
-  dateTime.minute = fromBcd(minutes & 0x7F);
-  dateTime.hour = fromBcd(hours & 0x3F);
-  dateTime.day = fromBcd(days & 0x3F);
-  dateTime.month = fromBcd(months & 0x1F);
-  dateTime.year = static_cast<uint16_t>(2000 + fromBcd(years));
-  clampDateTime(dateTime);
-  return true;
-}
-
-bool writeRtc(const RtcDateTime &dateTime) {
-  Wire.beginTransmission(RTC_I2C_ADDR);
-  Wire.write(RTC_TIME_REG);
-  Wire.write(toBcd(dateTime.second));
-  Wire.write(toBcd(dateTime.minute));
-  Wire.write(toBcd(dateTime.hour));
-  Wire.write(toBcd(dateTime.day));
-  Wire.write(toBcd(dayOfWeek(dateTime)) & 0x07);
-  Wire.write(toBcd(dateTime.month) & 0x1F);
-  Wire.write(toBcd(static_cast<uint8_t>(dateTime.year % 100)));
-  return Wire.endTransmission() == 0;
-}
 
 void adjustSelectedField(int8_t delta) {
   int value = 0;
@@ -171,9 +67,9 @@ void adjustSelectedField(int8_t delta) {
     case 2:
       value = static_cast<int>(g_editTime.day) + delta;
       if (value < 1) {
-        value = daysInMonth(g_editTime.year, g_editTime.month);
+        value = rtcDaysInMonth(g_editTime.year, g_editTime.month);
       }
-      if (value > daysInMonth(g_editTime.year, g_editTime.month)) {
+      if (value > rtcDaysInMonth(g_editTime.year, g_editTime.month)) {
         value = 1;
       }
       g_editTime.day = static_cast<uint8_t>(value);
@@ -209,12 +105,13 @@ void adjustSelectedField(int8_t delta) {
       g_editTime.second = static_cast<uint8_t>(value);
       break;
   }
-  clampDateTime(g_editTime);
+  rtcClampDateTime(g_editTime);
+  g_editTime.weekday = rtcDayOfWeek(g_editTime);
   g_status = "Edited";
 }
 
 void loadRtcIntoEditor() {
-  if (readRtc(g_rtcNow)) {
+  if (rtcReadDateTime(g_rtcNow)) {
     g_editTime = g_rtcNow;
     g_status = "RTC read OK";
   } else {
@@ -297,7 +194,7 @@ void rtcTick(AppContext &context, uint32_t nowMs) {
     changed = true;
   }
   if (context.buttons[0].pressed) {
-    if (writeRtc(g_editTime)) {
+    if (rtcWriteDateTime(g_editTime)) {
       loadRtcIntoEditor();
       g_status = "RTC write OK";
     } else {

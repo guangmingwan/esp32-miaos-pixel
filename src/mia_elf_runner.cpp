@@ -19,9 +19,18 @@ static const struct esp_elfsym MIA_HOST_SYMBOLS[] = {
     ESP_ELFSYM_EXPORT(mia_host_log),
     ESP_ELFSYM_EXPORT(mia_host_screen_width),
     ESP_ELFSYM_EXPORT(mia_host_screen_height),
+    ESP_ELFSYM_EXPORT(mia_host_clear),
     ESP_ELFSYM_EXPORT(mia_host_fill_rect),
     ESP_ELFSYM_EXPORT(mia_host_draw_text),
     ESP_ELFSYM_EXPORT(mia_host_present),
+    ESP_ELFSYM_EXPORT(mia_host_button_down),
+    ESP_ELFSYM_EXPORT(mia_host_delay_ms),
+    ESP_ELFSYM_EXPORT(mia_host_millis),
+    ESP_ELFSYM_EXPORT(mia_host_rtc_read),
+    ESP_ELFSYM_EXPORT(mia_host_rtc_write),
+    ESP_ELFSYM_EXPORT(mia_host_rtc_days_in_month),
+    ESP_ELFSYM_EXPORT(mia_host_rtc_day_of_week),
+    ESP_ELFSYM_EXPORT(mia_host_sd_list_dir),
     ESP_ELFSYM_END,
 };
 #endif

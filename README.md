@@ -11,6 +11,23 @@ monitor.
 See [`retro-pixel-datasheet.md`](./retro-pixel-datasheet.md) for the full
 schematic-derived peripheral map.
 
+## Detected Device
+
+Detected with `esptool v5.3.1` on Windows `COM10` (`TinyUSB CDC`, USB VID:PID
+`303A:1001`):
+
+- **Chip**: ESP32-S3 (QFN56), revision v0.2
+- **CPU**: dual core + LP core, up to 240MHz
+- **Wireless**: Wi-Fi + Bluetooth 5 LE
+- **Crystal**: 40MHz
+- **On-chip memory**: 384KB ROM, 512KB SRAM, 16KB RTC SRAM
+- **Flash**: 16MB SPI flash, quad I/O, 3.3V, JEDEC `46:4018`
+- **PSRAM**: 8MB embedded PSRAM, vendor `AP_3v3`, 85C rating
+- **USB mode during detection**: USB-Serial/JTAG ROM loader
+- **MAC**: `a4:cb:8f:c1:c0:00`
+- **Security fuses**: Secure Boot disabled, Flash Encryption disabled, JTAG and
+  USB download modes not permanently disabled
+
 ## Launcher Model
 
 The launcher uses one firmware image with built-in apps linked at compile time.
@@ -66,9 +83,16 @@ temporary access while you are connected to the device hotspot.
 ## SD ELF Apps
 
 `include/sd_app_loader.h` discovers native ELF apps on the already-mounted
-Arduino SD card without remounting it. Apps are listed from:
+Arduino SD card without remounting it. Apps are listed from category folders at
+the SD root plus the legacy MiaOS path:
 
 ```text
+/Games/*.app/app.elf
+/Utils/*.app/app.elf
+/Settings/*.app/app.elf
+/Emulators/*.app/app.elf
+/Media/*.app/app.elf
+/Application/*.app/app.elf
 /MiaOS/Application/*.app/app.elf
 ```
 
@@ -100,25 +124,33 @@ SD card target path:
 /MiaOS/Application/hello.app/app.elf
 ```
 
-Expected SD card layout:
+Expected SD card layout for the built-in apps now shipped as SD ELF apps:
 
 ```text
 SD card root/
-└── MiaOS/
-    └── Application/
-        └── hello.app/
-            └── app.elf
+├── Emulators/
+├── Games/
+│   └── minesweeper.app/app.elf
+├── Media/
+├── Utils/
+│   ├── calculator.app/app.elf
+│   └── sd_browser.app/app.elf
+├── Settings/
+│   └── rtc_set.app/app.elf
+└── Application/
+    └── hello.app/app.elf
 ```
 
-On the launcher, the app appears as `SD:hello.app`. Select it and press `A` to
-run it.
+On the launcher, category apps appear as `SD:<category>/<name>`. Select one and
+press `A` to run it.
 
 ELF apps are not sandboxed. A bad or incompatible ELF can crash or corrupt the
 launcher. Keep the ABI versioned and rebuild apps against the matching host ABI.
 
 ## Hardware
 
-- **SoC Module**：ESP32-S3-WROOM-1-N16R8（16MB Flash + 8MB PSRAM）
+- **SoC Module**：ESP32-S3-WROOM-1-N16R8（实测 ESP32-S3 QFN56 rev v0.2，16MB Flash + 8MB PSRAM）
+- **On-chip Memory**：384KB ROM + 512KB SRAM + 16KB RTC SRAM
 - **LCD**：HD231005C10，2.31" IPS，320×240，ILI9342，SPI
 - **SD Card**：独立 SPI 总线
 - **Audio**：I2S 功放输出 + 蜂鸣器
@@ -187,7 +219,6 @@ pio run -t upload --upload-port /dev/ttyACM0
 pio device monitor --port /dev/ttyACM0 -b 115200
 ```
 
-> ⚠️ 注意：当前 `platformio.ini` 已迁移到 ESP32-S3（N16R8：16MB QIO Flash +
-> 8MB OPI PSRAM），但 `src/` 下源码仍基于旧 ST7735（160×128）编写。要在这块
-> HD231005C10 / ILI9342（320×240）屏上实际点亮显示，还需要迁移显示驱动、
-> 帧缓冲尺寸、SPI 引脚常量和按键映射。代码迁移尚未完成。
+> 当前 `platformio.ini` 与实测硬件一致：ESP32-S3-WROOM-1-N16R8，16MB Flash，
+> 8MB PSRAM。`src/` 下显示驱动、帧缓冲尺寸、SPI 引脚常量和按键映射已按
+> HD231005C10 / ILI9342（320×240）迁移。

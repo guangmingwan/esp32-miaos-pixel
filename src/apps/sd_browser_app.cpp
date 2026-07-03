@@ -151,7 +151,7 @@ static void drawSdBrowser(AppContext &context) {
   }
   const uint16_t visibleEnd = min<uint16_t>(g_fileCount, firstVisible + VISIBLE_FILES);
   for (uint16_t i = firstVisible; i < visibleEnd; ++i) {
-    const int16_t y = 52 + static_cast<int16_t>(i - firstVisible) * 18;
+    const int16_t y = 42 + static_cast<int16_t>(i - firstVisible) * 18;
     const bool selected = i == g_selectedFile;
     const char *name = g_files[i].c_str();
     lavaFillRect(4, y - 2, 312, 14, selected ? LAVA_BLUE : LAVA_BLACK);

@@ -2,6 +2,9 @@
 #include <SD.h>
 #include <SPI.h>
 #include <Wire.h>
+
+#include <cstring>
+
 #include <esp_ota_ops.h>
 #include <esp_rom_crc.h>
 #include <soc/rtc_cntl_reg.h>
@@ -14,20 +17,17 @@
 
 #include "app.h"
 #include "apps/about_app.h"
-#include "apps/calculator_app.h"
 #include "apps/diagnostic_app.h"
 #include "apps/flashlight_app.h"
 #include "apps/ftp_server_app.h"
-#include "apps/minesweeper_app.h"
-#include "apps/rtc_app.h"
 #include "apps/screen_test_app.h"
-#include "apps/sd_browser_app.h"
 #include "apps/timer_app.h"
 #include "apps/wifi_files_app.h"
 #include "apps/wifi_scan_app.h"
 #include "lcd_ili9342.h"
 #include "lava_native_display.h"
 #include "pins.h"
+#include "rtc_clock.h"
 #include "sd_app_loader.h"
 
 SPIClass tftSpi(FSPI);
@@ -41,7 +41,7 @@ static uint32_t g_lastLauncherRenderMs = 0;
 static uint8_t g_selectedApp = 0;
 static const LauncherApp *g_activeApp = nullptr;
 static SdAppLoaderResult g_sdScan = {SdAppLoaderStatus::SdUnavailable, 0};
-static SdAppManifestSummary g_sdApps[4] = {};
+static SdAppManifestSummary g_sdApps[16] = {};
 static SdAppLoaderResult g_lastSdRun = {SdAppLoaderStatus::Ok, 0};
 static constexpr uint8_t BUTTON_INDEX_START = 1;
 static constexpr uint8_t BUTTON_INDEX_SELECT = 5;
@@ -55,15 +55,11 @@ static constexpr uint8_t BUTTON_INDEX_R = 4;
 static const LauncherApp *const BUILTIN_APPS[] = {
     &diagnosticApp(),
     &screenTestApp(),
-    &rtcApp(),
-    &calculatorApp(),
     &flashlightApp(),
     &timerApp(),
-    &sdBrowserApp(),
     &wifiFilesApp(),
     &ftpServerApp(),
     &wifiScanApp(),
-    &minesweeperApp(),
     &aboutApp(),
 };
 static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]);
@@ -286,7 +282,7 @@ static void initSdCard() {
                         g_context.sdReady);
 }
 
-static void updateAllButtons() {
+void updateAllButtons() {
   scanHc165();
   for (size_t i = 0; i < ALL_BUTTON_COUNT; ++i) {
     const bool down = readPhysicalButton(i);
@@ -339,6 +335,20 @@ static uint8_t totalLauncherItems() {
                                            sizeof(g_sdApps) / sizeof(g_sdApps[0]));
 }
 
+static void drawLauncherClock() {
+  RtcDateTime rtcNow = {2000, 1, 1, 0, 0, 0, 6};
+  char clockText[32];
+  if (rtcReadDateTime(rtcNow)) {
+    snprintf(clockText, sizeof(clockText), "%s %04u-%02u-%02u %02u:%02u:%02u",
+             rtcWeekdayShortName(rtcNow.weekday), rtcNow.year, rtcNow.month,
+             rtcNow.day, rtcNow.hour, rtcNow.minute, rtcNow.second);
+  } else {
+    snprintf(clockText, sizeof(clockText), "RTC unavailable");
+  }
+  const int16_t textX = LAVA_SCREEN_W - 6 - static_cast<int16_t>(strlen(clockText) * 6);
+  lavaDrawText(textX, 6, clockText, LAVA_BLACK, LAVA_YELLOW);
+}
+
 static void drawLauncher() {
   if (!g_context.tftReady) {
     return;
@@ -347,7 +357,7 @@ static void drawLauncher() {
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
   lavaDrawText(6, 6, "MiaOS Launcher", LAVA_BLACK, LAVA_YELLOW);
-  lavaDrawText(266, 6, "QVGA", LAVA_BLUE, LAVA_YELLOW);
+  drawLauncherClock();
 
   lavaDrawText(8, 30, "Apps", LAVA_CYAN, LAVA_BLACK);
   const uint8_t maxVisibleApps = 9;
@@ -373,13 +383,16 @@ static void drawLauncher() {
     } else {
       name = BUILTIN_APPS[i]->name;
     }
-    lavaFillRect(6, y - 3, 308, 15, selected ? LAVA_BLUE : LAVA_BLACK);
-    lavaDrawText(12, y, selected ? ">" : " ", LAVA_YELLOW,
-                 selected ? LAVA_BLUE : LAVA_BLACK);
-    lavaDrawText(28, y, sdApp ? "[sd]" : ((isUsbDisk || isBootloader) ? ">>" : ""), LAVA_GREEN,
-                 selected ? LAVA_BLUE : LAVA_BLACK);
-    lavaDrawText(sdApp ? 52 : ((isUsbDisk || isBootloader) ? 52 : 28), y, name, LAVA_WHITE,
-                 selected ? LAVA_BLUE : LAVA_BLACK);
+    const uint8_t itemBg = selected ? LAVA_BLUE : LAVA_BLACK;
+    const uint8_t itemText = selected ? LAVA_BLACK : LAVA_WHITE;
+    const uint8_t itemTag = selected ? LAVA_BLACK : LAVA_GREEN;
+    const uint8_t itemCursor = selected ? LAVA_YELLOW : LAVA_YELLOW;
+    lavaFillRect(6, y - 3, 308, 15, itemBg);
+    lavaDrawText(12, y, selected ? ">" : " ", itemCursor, itemBg);
+    lavaDrawText(28, y, sdApp ? "[sd]" : ((isUsbDisk || isBootloader) ? ">>" : ""),
+                 itemTag, itemBg);
+    lavaDrawText(sdApp ? 52 : ((isUsbDisk || isBootloader) ? 52 : 28), y, name, itemText,
+                 itemBg);
   }
 
   lavaDrawText(8, 206, sdScanStatusText(), g_context.sdReady ? LAVA_GREEN : LAVA_RED,

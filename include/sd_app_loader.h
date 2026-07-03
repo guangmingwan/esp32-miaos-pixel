@@ -11,8 +11,8 @@ enum class SdAppLoaderStatus : uint8_t {
 };
 
 struct SdAppManifestSummary {
-  char name[24];
-  char path[96];
+  char name[32];
+  char path[128];
 };
 
 struct SdAppLoaderResult {

@@ -7,7 +7,15 @@
 
 #include "mia_elf_runner.h"
 
-static constexpr char APP_ROOT[] = "/MiaOS/Application";
+static constexpr const char *APP_ROOTS[] = {
+    "/Games",
+    "/Utils",
+    "/Settings",
+    "/Emulators",
+    "/Media",
+    "/Application",
+    "/MiaOS/Application",
+};
 static constexpr char APP_SUFFIX[] = ".app";
 static constexpr char APP_ELF_NAME[] = "app.elf";
 static constexpr uint16_t MAX_SCAN_ENTRIES = 128;
@@ -31,7 +39,8 @@ static const char *baseName(const char *path) {
   return name == nullptr ? path : name + 1;
 }
 
-static void copyAppDisplayName(char *dest, size_t destSize, const char *appPath) {
+static void copyAppDisplayName(char *dest, size_t destSize, const char *rootPath,
+                               const char *appPath) {
   if (destSize == 0) {
     return;
   }
@@ -43,46 +52,99 @@ static void copyAppDisplayName(char *dest, size_t destSize, const char *appPath)
     nameLen -= suffixLen;
   }
 
-  const size_t copyLen = nameLen < destSize - 1 ? nameLen : destSize - 1;
-  memcpy(dest, name, copyLen);
-  dest[copyLen] = '\0';
+  const char *category = baseName(rootPath);
+  const int written = snprintf(dest, destSize, "%s/%.*s", category,
+                               static_cast<int>(nameLen), name);
+  if (written < 0 || static_cast<size_t>(written) >= destSize) {
+    dest[destSize - 1] = '\0';
+  }
 }
 
-static bool formatElfPath(char *path, size_t pathSize, const char *appName) {
+static bool formatElfPath(char *path, size_t pathSize, const char *rootPath,
+                          const char *appName) {
   const char *name = strrchr(appName, '/');
   name = name == nullptr ? appName : name + 1;
-  const int written = snprintf(path, pathSize, "%s/%s/%s", APP_ROOT, name,
+  const int written = snprintf(path, pathSize, "%s/%s/%s", rootPath, name,
                                APP_ELF_NAME);
   return written >= 0 && static_cast<size_t>(written) < pathSize;
 }
 
+static void scanAppRoot(const char *rootPath, SdAppManifestSummary *apps,
+                        uint8_t capacity, uint8_t &found, uint16_t &scanned) {
+  File root = SD.open(rootPath);
+  if (!root) {
+    Serial.printf("[sd-scan] app root missing/unreadable: %s\n", rootPath);
+    return;
+  }
+  if (!root.isDirectory()) {
+    Serial.printf("[sd-scan] app root is not a directory: %s\n", rootPath);
+    root.close();
+    return;
+  }
+
+  while (scanned < MAX_SCAN_ENTRIES) {
+    File entry = root.openNextFile();
+    if (!entry) {
+      break;
+    }
+    ++scanned;
+
+    const char *entryName = entry.name();
+    const char *name = baseName(entryName);
+    if (entry.isDirectory() && endsWith(name, APP_SUFFIX)) {
+      char elfPath[128];
+      if (formatElfPath(elfPath, sizeof(elfPath), rootPath, entryName)) {
+        File elf = SD.open(elfPath, FILE_READ);
+        if (elf) {
+          Serial.printf("[sd-scan] app found: %s size=%u\n", elfPath,
+                        static_cast<unsigned>(elf.size()));
+          elf.close();
+          if (apps != nullptr && found < capacity) {
+            copyAppDisplayName(apps[found].name, sizeof(apps[found].name), rootPath,
+                               entryName);
+            copyText(apps[found].path, sizeof(apps[found].path), elfPath);
+            Serial.printf("[sd-scan] stored app[%u] name='%s' path='%s'\n",
+                          static_cast<unsigned>(found), apps[found].name,
+                          apps[found].path);
+          }
+          if (found < UINT8_MAX) {
+            ++found;
+          }
+        } else {
+          Serial.printf("[sd-scan] skip missing elf: %s\n", elfPath);
+        }
+      }
+    }
+    entry.close();
+  }
+  root.close();
+}
+
 SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
-                              bool sdReady) {
-  Serial.printf("[sd-scan] start sdReady=%d capacity=%u root=%s\n", sdReady ? 1 : 0,
-                static_cast<unsigned>(capacity), APP_ROOT);
+                                bool sdReady) {
+  Serial.printf("[sd-scan] start sdReady=%d capacity=%u\n", sdReady ? 1 : 0,
+                static_cast<unsigned>(capacity));
   if (!sdReady) {
     Serial.println("[sd-scan] skip: SD unavailable");
     return {SdAppLoaderStatus::SdUnavailable, 0};
   }
 
-  static constexpr char DIRECT_APP_PATH[] = "/MiaOS/Application/mia_test.app/app.elf";
-  File elf = SD.open(DIRECT_APP_PATH, FILE_READ);
-  if (!elf) {
-    Serial.printf("[sd-scan] direct app missing/unreadable: %s\n", DIRECT_APP_PATH);
-    return {SdAppLoaderStatus::NoAppsFound, 0};
+  uint16_t scanned = 0;
+  uint8_t found = 0;
+  for (size_t i = 0; i < sizeof(APP_ROOTS) / sizeof(APP_ROOTS[0]) &&
+                     scanned < MAX_SCAN_ENTRIES;
+       ++i) {
+    scanAppRoot(APP_ROOTS[i], apps, capacity, found, scanned);
   }
-  Serial.printf("[sd-scan] direct app found: %s size=%u\n", DIRECT_APP_PATH,
-                static_cast<unsigned>(elf.size()));
-  elf.close();
 
-  if (apps != nullptr && capacity > 0) {
-    copyText(apps[0].name, sizeof(apps[0].name), "mia_test");
-    copyText(apps[0].path, sizeof(apps[0].path), DIRECT_APP_PATH);
-    Serial.printf("[sd-scan] stored app[0] name='%s' path='%s'\n",
-                  apps[0].name, apps[0].path);
+  if (found > capacity) {
+    Serial.printf("[sd-scan] found=%u exceeds menu capacity=%u\n",
+                  static_cast<unsigned>(found), static_cast<unsigned>(capacity));
+    found = capacity;
   }
-  const uint8_t found = 1;
-  Serial.println("[sd-scan] done scanned=direct found=1 status=ok");
+  Serial.printf("[sd-scan] done scanned=%u found=%u status=%s\n",
+                static_cast<unsigned>(scanned), static_cast<unsigned>(found),
+                found > 0 ? "ok" : "none");
   return {found > 0 ? SdAppLoaderStatus::Ok : SdAppLoaderStatus::NoAppsFound,
           found};
 }

@@ -25,9 +25,9 @@ def build_app_elf(source, target, env):
     project_dir = Path(env.subst("$PROJECT_DIR"))
     repo_dir = project_dir.parents[2]
     build_dir = Path(env.subst("$BUILD_DIR"))
-    toolchain_dir = Path(env.PioPlatform().get_package_dir("toolchain-xtensa-esp-elf"))
-    compiler = toolchain_dir / "bin" / "xtensa-esp32-elf-gcc"
-    output = build_dir / "hello.app.elf"
+    toolchain_dir = Path(env.PioPlatform().get_package_dir("toolchain-xtensa-esp32s3"))
+    compiler = toolchain_dir / "bin" / "xtensa-esp32s3-elf-gcc"
+    output = build_dir / "app.elf"
     app_source = project_dir / "src" / "main.c"
 
     command = [
@@ -59,6 +59,6 @@ def build_app_elf(source, target, env):
 
 build_dir = Path(env.subst("$BUILD_DIR"))
 source_file = Path(env.subst("$PROJECT_DIR")) / "src" / "main.c"
-elf_target = env.Command(str(build_dir / "hello.app.elf"), str(source_file), build_app_elf)
+elf_target = env.Command(str(build_dir / "app.elf"), str(source_file), build_app_elf)
 env.AlwaysBuild(elf_target)
 env.Default(elf_target)
