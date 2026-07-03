@@ -1,11 +1,15 @@
 # ESP32 Retro-Pixel 设备外设布局（原理图分析）
 
 > 数据来源：`datasheet.png` 原理图截图
-> 核心模块：**ESP32-S3-WROOM-1-N16R8**（16MB Flash + 8MB PSRAM）
+> 核心模块：**ESP32-S3-WROOM-1-N16R8**（实测 ESP32-S3 QFN56 rev v0.2，16MB Flash + 8MB PSRAM）
 
 ---
 
 ## 一、电源与系统
+
+- **片内内存**：384KB ROM + 512KB SRAM + 16KB RTC SRAM
+- **外部/封装存储**：16MB SPI Flash（quad I/O，3.3V）+ 8MB embedded PSRAM（AP_3v3）
+- **晶振**：40MHz
 
 | 网络 | 引脚 | 说明 |
 |---|---|---|
