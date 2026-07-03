@@ -25,7 +25,16 @@ def build_app_elf(source, target, env):
     project_dir = Path(env.subst("$PROJECT_DIR"))
     repo_dir = project_dir.parents[2]
     build_dir = Path(env.subst("$BUILD_DIR"))
-    toolchain_dir = Path(env.PioPlatform().get_package_dir("toolchain-xtensa-esp32s3"))
+    platform = env.PioPlatform()
+    toolchain_dir = None
+    for package_name in ("toolchain-xtensa-esp32s3", "toolchain-xtensa-esp-elf"):
+        try:
+            toolchain_dir = Path(platform.get_package_dir(package_name))
+            break
+        except KeyError:
+            continue
+    if toolchain_dir is None:
+        raise RuntimeError("No Xtensa ESP32 toolchain package found")
     compiler = toolchain_dir / "bin" / "xtensa-esp32s3-elf-gcc"
     output = build_dir / "app.elf"
     app_source = project_dir / "src" / "main.c"
