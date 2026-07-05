@@ -106,11 +106,23 @@ the SD root plus the legacy MiaOS path:
 Selecting an SD app calls the runner API in `include/mia_elf_runner.h`, which
 loads the ELF bytes through Arduino `SD.open()`, registers the experimental host
 ABI symbols from `include/mia_host_abi.h`, and runs the app when the ESP-IDF
-`elf_loader` component is available. The current ABI exports:
+`elf_loader` component is available. The current host ABI is version 2. For
+button input, apps must call `mia_host_buttons_poll()` once per logical loop,
+then read cached state through `mia_host_button_down()`,
+`mia_host_button_pressed()`, or `mia_host_button_released()`. Do not poll more
+than once per loop before all input decisions are made; doing so can advance the
+pressed/released edges before later handlers consume them. ABI v1 apps must be
+rebuilt against the matching v2 host header.
+
+The ABI includes:
 
 ```c
 uint32_t mia_host_abi_version(void);
 void mia_host_log(const char *message);
+void mia_host_buttons_poll(void);
+uint8_t mia_host_button_down(uint8_t button);
+uint8_t mia_host_button_pressed(uint8_t button);
+uint8_t mia_host_button_released(uint8_t button);
 ```
 
 Build the sample app and copy it to the SD card as `app.elf`:
