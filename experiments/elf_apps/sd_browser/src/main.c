@@ -11,14 +11,6 @@ static MiaHostDirEntry files[MAX_FILES];
 static uint32_t file_count;
 static uint32_t selected_file;
 static char current_path[128] = "/";
-static uint8_t was_down[14];
-
-static uint8_t pressed(uint8_t button) {
-  uint8_t down = mia_host_button_down(button);
-  uint8_t edge = down && !was_down[button];
-  was_down[button] = down;
-  return edge;
-}
 
 static uint8_t exit_pressed(void) {
   return mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
@@ -92,30 +84,34 @@ static void draw_sd_browser(void) {
 int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
-  if (mia_host_abi_version() != 1) {
+  if (mia_host_abi_version() != 2) {
     return 1;
   }
   strcpy(current_path, "/");
   scan_current_directory();
   draw_sd_browser();
-  while (!exit_pressed()) {
+  while (1) {
+    mia_host_buttons_poll();
+    if (exit_pressed()) {
+      break;
+    }
     uint8_t changed = 0;
-    if (pressed(MIA_HOST_BUTTON_UP) && selected_file > 0) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_UP) && selected_file > 0) {
       --selected_file;
       changed = 1;
     }
-    if (pressed(MIA_HOST_BUTTON_DOWN) && selected_file + 1 < file_count) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN) && selected_file + 1 < file_count) {
       ++selected_file;
       changed = 1;
     }
-    if (pressed(MIA_HOST_BUTTON_A)) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       if (file_count > 0 && selected_file < file_count && files[selected_file].is_dir) {
         selected_entry_path(current_path, sizeof(current_path));
         scan_current_directory();
       }
       changed = 1;
     }
-    if (pressed(MIA_HOST_BUTTON_B)) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
       navigate_to_parent();
       scan_current_directory();
       changed = 1;

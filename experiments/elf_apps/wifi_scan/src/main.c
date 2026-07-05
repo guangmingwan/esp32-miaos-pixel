@@ -50,30 +50,23 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
-  uint8_t previous_up = 0;
-  uint8_t previous_down = 0;
-  uint8_t previous_a = 0;
   run_scan();
   draw_wifi_scan();
-  while (!(mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
-           mia_host_button_down(MIA_HOST_BUTTON_START))) {
-    uint8_t up_down = mia_host_button_down(MIA_HOST_BUTTON_UP);
-    uint8_t down_down = mia_host_button_down(MIA_HOST_BUTTON_DOWN);
-    uint8_t a_down = mia_host_button_down(MIA_HOST_BUTTON_A);
-    uint8_t up_pressed = up_down && !previous_up;
-    uint8_t down_pressed = down_down && !previous_down;
-    uint8_t a_pressed = a_down && !previous_a;
-    previous_up = up_down;
-    previous_down = down_down;
-    previous_a = a_down;
+  while (1) {
+    mia_host_buttons_poll();
+    if (mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+        mia_host_button_down(MIA_HOST_BUTTON_START)) {
+      break;
+    }
 
-    if (a_pressed) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       run_scan();
       draw_wifi_scan();
-    } else if (up_pressed && first_network > 0) {
+    } else if (mia_host_button_pressed(MIA_HOST_BUTTON_UP) && first_network > 0) {
       --first_network;
       draw_wifi_scan();
-    } else if (down_pressed && first_network + MAX_NETWORKS < network_count) {
+    } else if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN) &&
+               first_network + MAX_NETWORKS < network_count) {
       ++first_network;
       draw_wifi_scan();
     }

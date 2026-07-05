@@ -40,26 +40,23 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
-  uint8_t previous_down[14] = {0};
   running = 0;
   elapsed_ms = 0;
   last_start_ms = mia_host_millis();
   last_draw_ms = 0;
   draw_timer(last_start_ms);
-  while (!(mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
-           mia_host_button_down(MIA_HOST_BUTTON_START))) {
+  while (1) {
+    mia_host_buttons_poll();
+    if (mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+        mia_host_button_down(MIA_HOST_BUTTON_START)) {
+      break;
+    }
     uint32_t now_ms = mia_host_millis();
     uint8_t changed = 0;
-    uint8_t a_down = mia_host_button_down(MIA_HOST_BUTTON_A);
     uint8_t l_down = mia_host_button_down(MIA_HOST_BUTTON_L);
     uint8_t r_down = mia_host_button_down(MIA_HOST_BUTTON_R);
-    uint8_t a_pressed = a_down && !previous_down[MIA_HOST_BUTTON_A];
-    uint8_t l_pressed = l_down && !previous_down[MIA_HOST_BUTTON_L];
-    previous_down[MIA_HOST_BUTTON_A] = a_down;
-    previous_down[MIA_HOST_BUTTON_L] = l_down;
-    previous_down[MIA_HOST_BUTTON_R] = r_down;
 
-    if (a_pressed) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       if (running) {
         elapsed_ms += now_ms - last_start_ms;
         running = 0;
@@ -69,7 +66,7 @@ int main(int argc, char *argv[]) {
       }
       changed = 1;
     }
-    if (l_pressed && r_down) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_L) && r_down) {
       running = 0;
       elapsed_ms = 0;
       changed = 1;
