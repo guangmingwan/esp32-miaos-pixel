@@ -15,6 +15,8 @@
 #include "esp_log.h"
 #include "esp_elf.h"
 #include "soc/soc_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
 #include "hal/cache_ll.h"
@@ -41,6 +43,34 @@
 static const char *TAG = "ELF";
 static esp_elf_symbol_table_t *g_symbol_tables[SYMBOL_TABLES_NO];
 static symbol_resolver current_resolver = elf_find_sym_default;
+
+#ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
+static void esp_elf_copy_to_psram(void *dst, const void *src, size_t size)
+{
+    const uint8_t *read = (const uint8_t *)src;
+    uint8_t *write = (uint8_t *)dst;
+    const size_t chunk_size = 4096;
+    const size_t total = size;
+    size_t offset = 0;
+
+    while (size > 0) {
+        size_t chunk = MIN(size, chunk_size);
+        ESP_LOGI(TAG, "copy PSRAM chunk offset=0x%04x size=0x%04x total=0x%04x dst=%p",
+                 (unsigned)offset, (unsigned)chunk, (unsigned)total, write);
+        memcpy(write, read, chunk);
+        write += chunk;
+        read += chunk;
+        size -= chunk;
+        offset += chunk;
+        vTaskDelay(1);
+    }
+}
+#else
+static void esp_elf_copy_to_psram(void *dst, const void *src, size_t size)
+{
+    memcpy(dst, src, size);
+}
+#endif
 
 /**
  * @brief Open and load an ELF file into memory.
@@ -286,8 +316,8 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
     ESP_LOGI(TAG, "load_section copy text dst=%p src_off=0x%08x size=0x%08x",
              elf->ptext, (unsigned)elf->sec[ELF_SEC_TEXT].offset,
              (unsigned)elf->sec[ELF_SEC_TEXT].size);
-    memcpy(elf->ptext, pbuf + elf->sec[ELF_SEC_TEXT].offset,
-           elf->sec[ELF_SEC_TEXT].size);
+    esp_elf_copy_to_psram(elf->ptext, pbuf + elf->sec[ELF_SEC_TEXT].offset,
+                          elf->sec[ELF_SEC_TEXT].size);
     ESP_LOGI(TAG, "load_section copy text done");
 
 #ifdef CONFIG_ELF_LOADER_SET_MMU
@@ -313,8 +343,8 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
             ESP_LOGI(TAG, "load_section copy data dst=%p src_off=0x%08x size=0x%08x",
                      pdata, (unsigned)elf->sec[ELF_SEC_DATA].offset,
                      (unsigned)elf->sec[ELF_SEC_DATA].size);
-            memcpy(pdata, pbuf + elf->sec[ELF_SEC_DATA].offset,
-                   elf->sec[ELF_SEC_DATA].size);
+            esp_elf_copy_to_psram(pdata, pbuf + elf->sec[ELF_SEC_DATA].offset,
+                                  elf->sec[ELF_SEC_DATA].size);
 
             pdata += elf->sec[ELF_SEC_DATA].size;
         }
@@ -325,8 +355,8 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
             ESP_LOGI(TAG, "load_section copy rodata dst=%p src_off=0x%08x size=0x%08x",
                      pdata, (unsigned)elf->sec[ELF_SEC_RODATA].offset,
                      (unsigned)elf->sec[ELF_SEC_RODATA].size);
-            memcpy(pdata, pbuf + elf->sec[ELF_SEC_RODATA].offset,
-                   elf->sec[ELF_SEC_RODATA].size);
+            esp_elf_copy_to_psram(pdata, pbuf + elf->sec[ELF_SEC_RODATA].offset,
+                                  elf->sec[ELF_SEC_RODATA].size);
 
             pdata += elf->sec[ELF_SEC_RODATA].size;
         }
@@ -337,8 +367,8 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
             ESP_LOGI(TAG, "load_section copy data.rel.ro dst=%p src_off=0x%08x size=0x%08x",
                      pdata, (unsigned)elf->sec[ELF_SEC_DRLRO].offset,
                      (unsigned)elf->sec[ELF_SEC_DRLRO].size);
-            memcpy(pdata, pbuf + elf->sec[ELF_SEC_DRLRO].offset,
-                   elf->sec[ELF_SEC_DRLRO].size);
+            esp_elf_copy_to_psram(pdata, pbuf + elf->sec[ELF_SEC_DRLRO].offset,
+                                  elf->sec[ELF_SEC_DRLRO].size);
 
             pdata += elf->sec[ELF_SEC_DRLRO].size;
         }
@@ -714,7 +744,7 @@ int esp_elf_relocate(esp_elf_t *elf, const uint8_t *pbuf)
 
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
     ESP_LOGI(TAG, "flush PSRAM ELF cache - before");
-    esp_elf_arch_flush();
+    esp_elf_arch_flush(elf);
     ESP_LOGI(TAG, "flush PSRAM ELF cache - after");
 #endif
 

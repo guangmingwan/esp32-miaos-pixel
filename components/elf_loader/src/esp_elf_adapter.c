@@ -5,10 +5,12 @@
  */
 
 #include <assert.h>
+#include <stdint.h>
 #include <sys/errno.h>
 #include "esp_idf_version.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "esp32s3/rom/cache.h"
 #include "soc/soc.h"
 #include "private/elf_platform.h"
 
@@ -16,6 +18,26 @@
 #ifdef CONFIG_IDF_TARGET_ESP32S3
 #define OFFSET_TEXT_VALUE   (SOC_IROM_LOW - SOC_DROM_LOW)
 #endif
+#define ELF_PSRAM_CACHE_ALIGN 64U
+#endif
+
+#ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
+static void esp_elf_sync_section(const esp_elf_sec_t *sec)
+{
+    const uint32_t cache_line_size = 64;
+    uint32_t start;
+    uint32_t end;
+
+    if (!sec || !sec->addr || !sec->size) {
+        return;
+    }
+
+    start = (uint32_t)sec->addr & ~(cache_line_size - 1);
+    end = ((uint32_t)sec->addr + sec->size + cache_line_size - 1) &
+          ~(cache_line_size - 1);
+
+    Cache_WriteBack_Addr(start, end - start);
+}
 #endif
 
 /**
@@ -47,7 +69,19 @@ void *esp_elf_malloc(uint32_t n, bool exec)
 #endif
 #endif
 
+#ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
+    uint8_t *raw = (uint8_t *)heap_caps_malloc(n + ELF_PSRAM_CACHE_ALIGN + sizeof(void *), caps);
+    if (!raw) {
+        return NULL;
+    }
+
+    uintptr_t aligned = ((uintptr_t)raw + sizeof(void *) + ELF_PSRAM_CACHE_ALIGN - 1U) &
+                        ~(uintptr_t)(ELF_PSRAM_CACHE_ALIGN - 1U);
+    ((void **)aligned)[-1] = raw;
+    return (void *)aligned;
+#else
     return heap_caps_malloc(n, caps);
+#endif
 }
 
 /**
@@ -59,7 +93,15 @@ void *esp_elf_malloc(uint32_t n, bool exec)
  */
 void esp_elf_free(void *ptr)
 {
+#ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
+    if (!ptr) {
+        return;
+    }
+
+    heap_caps_free(((void **)ptr)[-1]);
+#else
     heap_caps_free(ptr);
+#endif
 }
 
 /**
@@ -99,22 +141,14 @@ uintptr_t elf_remap_text(esp_elf_t *elf, uintptr_t sym)
  * @return None
  */
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-void IRAM_ATTR esp_elf_arch_flush(void)
+void esp_elf_arch_flush(esp_elf_t *elf)
 {
-    extern void spi_flash_disable_interrupts_caches_and_other_cpu(void);
-    extern void spi_flash_enable_interrupts_caches_and_other_cpu(void);
+    if (!elf) {
+        return;
+    }
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-    extern void Cache_WriteBack_All(void);
-
-    Cache_WriteBack_All();
-#else
-    void esp_spiram_writeback_cache(void);
-
-    esp_spiram_writeback_cache();
-#endif
-
-    spi_flash_disable_interrupts_caches_and_other_cpu();
-    spi_flash_enable_interrupts_caches_and_other_cpu();
+    for (int i = 0; i < ELF_SECS; ++i) {
+        esp_elf_sync_section(&elf->sec[i]);
+    }
 }
 #endif

@@ -69,7 +69,7 @@ uintptr_t elf_remap_text(esp_elf_t *elf, uintptr_t sym);
  * @return None
  */
 #ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-void esp_elf_arch_flush(void);
+void esp_elf_arch_flush(esp_elf_t *elf);
 #endif
 
 /**
