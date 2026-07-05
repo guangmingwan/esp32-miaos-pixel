@@ -44,17 +44,19 @@ int main(int argc, char *argv[]) {
   pattern_index = 0;
   last_step_ms = mia_host_millis();
   draw_pattern();
-  while (!(mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
-           mia_host_button_down(MIA_HOST_BUTTON_START))) {
+  while (1) {
+    mia_host_buttons_poll();
+    if (mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+        mia_host_button_down(MIA_HOST_BUTTON_START)) {
+      break;
+    }
     uint32_t now_ms = mia_host_millis();
-    if (mia_host_button_down(MIA_HOST_BUTTON_A)) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       step_pattern(1, now_ms);
-      mia_host_delay_ms(150);
       continue;
     }
-    if (mia_host_button_down(MIA_HOST_BUTTON_B)) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
       step_pattern(-1, now_ms);
-      mia_host_delay_ms(150);
       continue;
     }
     if (now_ms - last_step_ms >= 1500) {

@@ -1,13 +1,4 @@
-#include <stdint.h>
-
-uint32_t mia_host_abi_version(void);
-void mia_host_log(const char *message);
-int32_t mia_host_screen_width(void);
-int32_t mia_host_screen_height(void);
-void mia_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t color);
-void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
-                        uint8_t bg);
-void mia_host_present(void);
+#include "mia_host_abi.h"
 
 enum MiaPalette {
   MIA_BLACK = 0,
@@ -21,18 +12,23 @@ enum MiaPalette {
   MIA_DARK_BLUE = 8,
 };
 
+static uint8_t exit_pressed(void) {
+  return mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+         mia_host_button_down(MIA_HOST_BUTTON_START);
+}
+
 int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
   mia_host_log("mia_test.app: start");
 
-  if (mia_host_abi_version() != 1) {
+  if (mia_host_abi_version() != 2) {
     mia_host_log("mia_test.app: unsupported MiaOS host ABI");
     return 1;
   }
 
-  mia_host_log("mia_test.app: ABI v1 OK");
+  mia_host_log("mia_test.app: ABI v2 OK");
   const int32_t screen_w = mia_host_screen_width();
   const int32_t screen_h = mia_host_screen_height();
 
@@ -42,10 +38,21 @@ int main(int argc, char *argv[]) {
   mia_host_fill_rect(34, 66, screen_w - 68, 76, MIA_CYAN);
   mia_host_draw_text(8, 10, "MiaOS ELF Test", MIA_BLACK, MIA_YELLOW);
   mia_host_draw_text(54, 86, "SD app drawing OK", MIA_BLACK, MIA_CYAN);
-  mia_host_draw_text(54, 106, "ABI v1 visual path", MIA_BLACK, MIA_CYAN);
+  mia_host_draw_text(54, 106, "ABI v2 visual path", MIA_BLACK, MIA_CYAN);
+  mia_host_draw_text(74, 128, "SELECT+START exit", MIA_BLACK, MIA_CYAN);
   mia_host_draw_text(64, screen_h - 26, "/MiaOS/Application/mia_test.app", MIA_WHITE,
                      MIA_DARK_BLUE);
   mia_host_present();
   mia_host_log("mia_test.app: drew visual test screen");
+
+  while (1) {
+    mia_host_buttons_poll();
+    if (exit_pressed()) {
+      break;
+    }
+    mia_host_delay_ms(20);
+  }
+
+  mia_host_log("mia_test.app: exit requested");
   return 0;
 }
