@@ -24,7 +24,7 @@ static USBMSC msc;
 static void showScreen(const char *line1, const char *line2) {
   if (!lavaReady) return;
   lavaClear(1);
-  if (line1) lavaDrawText(20, 90, line1, 8, 1);
+  if (line1) lavaDrawText(20, 90, line1, 0, 1);
   if (line2) lavaDrawText(20, 110, line2, 0, 1);
   lavaPresent();
 }
