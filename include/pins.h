@@ -8,7 +8,7 @@
 // --- LCD (HD231005C10 / ILI9342, verified working) ---
 constexpr int TFT_SCK_PIN  = 12;
 constexpr int TFT_MOSI_PIN = 11;
-constexpr int TFT_MISO_PIN = -1;
+constexpr int TFT_MISO_PIN = 48;  // Dummy NC pin; avoids Arduino SPI grabbing BL GPIO13 as default MISO.
 constexpr int TFT_CS_PIN   = 10;
 constexpr int TFT_DC_PIN   = 9;
 constexpr int TFT_RST_PIN  = 3;
