@@ -16,7 +16,10 @@ void mia_host_fill_screen_rgb565(uint16_t color);
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
                         uint8_t bg);
 void mia_host_present(void);
+void mia_host_buttons_poll(void);
 uint8_t mia_host_button_down(uint8_t button);
+uint8_t mia_host_button_pressed(uint8_t button);
+uint8_t mia_host_button_released(uint8_t button);
 void mia_host_delay_ms(uint32_t ms);
 uint32_t mia_host_millis(void);
 void mia_host_backlight_set(uint8_t enabled);
@@ -97,6 +100,22 @@ uint8_t mia_host_ftp_start(void);
 void mia_host_ftp_poll(void);
 void mia_host_ftp_stop(void);
 uint8_t mia_host_ftp_get_status(MiaHostFtpStatus *status);
+
+typedef struct MiaHostAudioStatus {
+  uint8_t open;
+  uint32_t sample_rate;
+  uint8_t channels;
+  uint8_t bits_per_sample;
+  int32_t last_error;
+} MiaHostAudioStatus;
+
+uint8_t mia_host_audio_open(uint32_t sample_rate, uint8_t channels,
+                            uint8_t bits_per_sample);
+int32_t mia_host_audio_write_pcm16(const int16_t *samples, uint32_t frame_count,
+                                   uint8_t channels);
+void mia_host_audio_stop(void);
+void mia_host_audio_close(void);
+uint8_t mia_host_audio_get_status(MiaHostAudioStatus *status);
 
 enum MiaHostPalette {
   MIA_HOST_BLACK = 0,

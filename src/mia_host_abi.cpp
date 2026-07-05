@@ -14,7 +14,7 @@
 extern ButtonState g_allButtons[];
 void updateAllButtons();
 
-uint32_t mia_host_abi_version(void) { return 1; }
+uint32_t mia_host_abi_version(void) { return 2; }
 
 void mia_host_log(const char *message) {
   Serial.printf("[mia_host_abi] %s\n", message == nullptr ? "<null>" : message);
@@ -31,14 +31,10 @@ void mia_host_clear(uint8_t color) {
 }
 
 void mia_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t color) {
-  Serial.printf("[mia_host_abi] fill_rect x=%d y=%d w=%d h=%d color=%u ready=%d\n", x, y,
-                w, h, static_cast<unsigned>(color), lavaDisplayReady() ? 1 : 0);
   if (!lavaDisplayReady()) {
-    Serial.println("[mia_host_abi] fill_rect skipped: display not ready");
     return;
   }
   if (w <= 0 || h <= 0 || x >= LAVA_SCREEN_W || y >= LAVA_SCREEN_H) {
-    Serial.println("[mia_host_abi] fill_rect skipped: outside screen");
     return;
   }
   if (x < 0) {
@@ -56,12 +52,10 @@ void mia_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t colo
     h = LAVA_SCREEN_H - y;
   }
   if (w <= 0 || h <= 0) {
-    Serial.println("[mia_host_abi] fill_rect skipped: clipped empty");
     return;
   }
   lavaFillRect(static_cast<int16_t>(x), static_cast<int16_t>(y), static_cast<int16_t>(w),
                static_cast<int16_t>(h), color);
-  Serial.println("[mia_host_abi] fill_rect done");
 }
 
 void mia_host_fill_screen_rgb565(uint16_t color) {
@@ -72,40 +66,45 @@ void mia_host_fill_screen_rgb565(uint16_t color) {
 
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
                         uint8_t bg) {
-  Serial.printf("[mia_host_abi] draw_text x=%d y=%d text='%s' fg=%u bg=%u ready=%d\n", x,
-                y, text == nullptr ? "<null>" : text, static_cast<unsigned>(fg),
-                static_cast<unsigned>(bg), lavaDisplayReady() ? 1 : 0);
   if (!lavaDisplayReady()) {
-    Serial.println("[mia_host_abi] draw_text skipped: display not ready");
     return;
   }
   if (text == nullptr || x >= LAVA_SCREEN_W || y < -7 || y >= LAVA_SCREEN_H) {
-    Serial.println("[mia_host_abi] draw_text skipped: invalid args");
     return;
   }
   if (x < -LAVA_SCREEN_W) {
     x = -LAVA_SCREEN_W;
   }
   lavaDrawText(static_cast<int16_t>(x), static_cast<int16_t>(y), text, fg, bg);
-  Serial.println("[mia_host_abi] draw_text done");
 }
 
 void mia_host_present(void) {
-  Serial.printf("[mia_host_abi] present ready=%d\n", lavaDisplayReady() ? 1 : 0);
   if (lavaDisplayReady()) {
     lavaPresent();
-    Serial.println("[mia_host_abi] present done");
-  } else {
-    Serial.println("[mia_host_abi] present skipped: display not ready");
   }
 }
+
+void mia_host_buttons_poll(void) { updateAllButtons(); }
 
 uint8_t mia_host_button_down(uint8_t button) {
   if (button >= 14) {
     return 0;
   }
-  updateAllButtons();
   return g_allButtons[button].down ? 1 : 0;
+}
+
+uint8_t mia_host_button_pressed(uint8_t button) {
+  if (button >= 14) {
+    return 0;
+  }
+  return g_allButtons[button].pressed ? 1 : 0;
+}
+
+uint8_t mia_host_button_released(uint8_t button) {
+  if (button >= 14) {
+    return 0;
+  }
+  return g_allButtons[button].released ? 1 : 0;
 }
 
 void mia_host_delay_ms(uint32_t ms) { delay(ms); }
@@ -186,11 +185,16 @@ static void copyDirEntry(MiaHostDirEntry &dest, File &entry) {
 
 int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entries,
                              uint32_t capacity) {
+  Serial.printf("[mia_host_abi] sd_list_dir path='%s' cap=%u core=%d\n",
+                path == nullptr ? "<null>" : path,
+                static_cast<unsigned>(capacity), static_cast<int>(xPortGetCoreID()));
   if (path == nullptr || entries == nullptr || capacity == 0) {
     return -1;
   }
 
+  Serial.println("[mia_host_abi] sd_list_dir: SD.open");
   File directory = SD.open(path);
+  Serial.printf("[mia_host_abi] sd_list_dir: SD.open => %d\n", directory ? 1 : 0);
   if (!directory) {
     return -2;
   }
@@ -216,5 +220,7 @@ int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entries,
     }
   }
   directory.close();
+  Serial.printf("[mia_host_abi] sd_list_dir done count=%u\n",
+                static_cast<unsigned>(count));
   return static_cast<int32_t>(count);
 }
