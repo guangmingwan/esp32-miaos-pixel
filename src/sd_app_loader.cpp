@@ -1,20 +1,16 @@
 #include "sd_app_loader.h"
 
-#include <SD.h>
+#include <Arduino.h>
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "launcher_log.h"
 #include "mia_elf_runner.h"
 
 static constexpr const char *APP_ROOTS[] = {
-    "/Games",
-    "/Utils",
-    "/Settings",
-    "/Emulators",
-    "/Media",
-    "/Application",
     "/MiaOS/Games",
     "/MiaOS/Utils",
     "/MiaOS/Settings",
@@ -22,9 +18,12 @@ static constexpr const char *APP_ROOTS[] = {
     "/MiaOS/Media",
     "/MiaOS/Application",
 };
+static constexpr char SD_VFS_ROOT[] = "/sd";
 static constexpr char APP_SUFFIX[] = ".app";
 static constexpr char APP_ELF_NAME[] = "app.elf";
 static constexpr uint16_t MAX_SCAN_ENTRIES = 128;
+
+static void scanYield() { delay(1); }
 
 static bool endsWith(const char *value, const char *suffix) {
   const size_t valueLen = strlen(value);
@@ -84,36 +83,80 @@ static bool formatElfPath(char *path, size_t pathSize, const char *rootPath,
   return written >= 0 && static_cast<size_t>(written) < pathSize;
 }
 
+static bool formatVfsPath(char *path, size_t pathSize, const char *sdPath) {
+  const char *separator = sdPath[0] == '/' ? "" : "/";
+  const int written = snprintf(path, pathSize, "%s%s%s", SD_VFS_ROOT, separator, sdPath);
+  return written >= 0 && static_cast<size_t>(written) < pathSize;
+}
+
+static bool statPath(const char *sdPath, struct stat *info) {
+  char vfsPath[160];
+  return formatVfsPath(vfsPath, sizeof(vfsPath), sdPath) && stat(vfsPath, info) == 0;
+}
+
+static bool isDirectoryPath(const char *sdPath) {
+  struct stat info;
+  return statPath(sdPath, &info) && S_ISDIR(info.st_mode);
+}
+
+static bool fileSize(const char *sdPath, size_t *size) {
+  struct stat info;
+  if (!statPath(sdPath, &info) || !S_ISREG(info.st_mode)) {
+    return false;
+  }
+  *size = static_cast<size_t>(info.st_size);
+  return true;
+}
+
 static void scanAppRoot(const char *rootPath, SdAppManifestSummary *apps,
                         uint8_t capacity, uint8_t &found, uint16_t &scanned) {
-  File root = SD.open(rootPath);
-  if (!root) {
-    launcherTracef("[sd-scan] app root missing/unreadable: %s", rootPath);
+  scanYield();
+  launcherTracef("[sd-scan] root: %s", rootPath);
+  if (!isDirectoryPath(rootPath)) {
+    launcherTracef("[sd-scan] app root is not a directory: %s", rootPath);
     return;
   }
-  if (!root.isDirectory()) {
-    launcherTracef("[sd-scan] app root is not a directory: %s", rootPath);
-    root.close();
+
+  char vfsRootPath[160];
+  if (!formatVfsPath(vfsRootPath, sizeof(vfsRootPath), rootPath)) {
+    launcherTracef("[sd-scan] app root path too long: %s", rootPath);
+    return;
+  }
+
+  scanYield();
+  DIR *root = opendir(vfsRootPath);
+  if (root == nullptr) {
+    launcherTracef("[sd-scan] app root missing/unreadable: %s", rootPath);
     return;
   }
 
   while (scanned < MAX_SCAN_ENTRIES) {
-    File entry = root.openNextFile();
-    if (!entry) {
+    scanYield();
+    struct dirent *entry = readdir(root);
+    if (entry == nullptr) {
       break;
     }
     ++scanned;
 
-    const char *entryName = entry.name();
-    const char *name = baseName(entryName);
-    if (entry.isDirectory() && endsWith(name, APP_SUFFIX)) {
+    const char *entryName = entry->d_name;
+    if (strcmp(entryName, ".") == 0 || strcmp(entryName, "..") == 0) {
+      continue;
+    }
+
+    char appPath[128];
+    const int appPathWritten = snprintf(appPath, sizeof(appPath), "%s/%s", rootPath, entryName);
+    if (appPathWritten < 0 || static_cast<size_t>(appPathWritten) >= sizeof(appPath)) {
+      continue;
+    }
+
+    if (isDirectoryPath(appPath) && endsWith(entryName, APP_SUFFIX)) {
       char elfPath[128];
       if (formatElfPath(elfPath, sizeof(elfPath), rootPath, entryName)) {
-        File elf = SD.open(elfPath, FILE_READ);
-        if (elf) {
+        scanYield();
+        size_t elfSize = 0;
+        if (fileSize(elfPath, &elfSize)) {
           launcherTracef("[sd-scan] app found: %s size=%u", elfPath,
-                         static_cast<unsigned>(elf.size()));
-          elf.close();
+                         static_cast<unsigned>(elfSize));
           if (apps != nullptr && found < capacity) {
             copyAppName(apps[found].name, sizeof(apps[found].name), entryName);
             copyAppCategory(apps[found].category, sizeof(apps[found].category), rootPath);
@@ -130,9 +173,10 @@ static void scanAppRoot(const char *rootPath, SdAppManifestSummary *apps,
         }
       }
     }
-    entry.close();
+    scanYield();
   }
-  root.close();
+  closedir(root);
+  scanYield();
 }
 
 SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
