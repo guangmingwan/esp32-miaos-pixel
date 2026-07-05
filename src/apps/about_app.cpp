@@ -2,8 +2,11 @@
 
 #include <Arduino.h>
 #include <esp_chip_info.h>
+#include <esp_heap_caps.h>
+#include <sdkconfig.h>
 
 #include "lava_native_display.h"
+#include "pins.h"
 
 enum LavaPalette : uint8_t {
   LAVA_BLACK = 0,
@@ -17,7 +20,7 @@ enum LavaPalette : uint8_t {
   LAVA_DARK_BLUE = 8,
 };
 
-static constexpr uint8_t ABOUT_PAGE_COUNT = 5;
+static constexpr uint8_t ABOUT_PAGE_COUNT = 6;
 static uint8_t g_aboutPage = 0;
 
 static void drawMiaCatIcon(int16_t x, int16_t y) {
@@ -133,25 +136,37 @@ static void drawMemoryPage() {
 static void drawPsramPage() {
   char line[40];
   drawHeader("PSRAM");
-  const uint32_t psramSize = ESP.getPsramSize();
-  if (psramSize == 0) {
-    lavaDrawText(8, 44, "PSRAM not found", LAVA_RED, LAVA_BLACK);
-    lavaDrawText(8, 66, "External RAM chip", LAVA_GRAY, LAVA_BLACK);
-    lavaDrawText(8, 84, "not mounted", LAVA_GRAY, LAVA_BLACK);
+#if defined(CONFIG_SPIRAM_BOOT_INIT) && CONFIG_SPIRAM_BOOT_INIT
+  const bool psramConfigured = true;
+#else
+  const bool psramConfigured = false;
+#endif
+  const uint32_t psramSize = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+  if (!psramConfigured) {
+    lavaDrawText(8, 49, "PSRAM config disabled", LAVA_RED, LAVA_BLACK);
+    lavaDrawText(8, 71, "Build has no external", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(8, 89, "RAM support enabled", LAVA_GRAY, LAVA_BLACK);
     return;
   }
+  if (psramSize == 0) {
+    lavaDrawText(8, 49, "PSRAM init failed", LAVA_RED, LAVA_BLACK);
+    lavaDrawText(8, 71, "Configured in build", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(8, 89, "but absent at runtime", LAVA_GRAY, LAVA_BLACK);
+    return;
+  }
+  lavaDrawText(8, 25, "Configured YES", LAVA_CYAN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Total %luK", static_cast<unsigned long>(psramSize / 1024));
-  lavaDrawText(8, 38, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 43, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Free  %luK",
-           static_cast<unsigned long>(ESP.getFreePsram() / 1024));
-  lavaDrawText(8, 58, line, LAVA_GREEN, LAVA_BLACK);
+           static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+  lavaDrawText(8, 63, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Min   %luK",
-           static_cast<unsigned long>(ESP.getMinFreePsram() / 1024));
-  lavaDrawText(8, 78, line, LAVA_GREEN, LAVA_BLACK);
+           static_cast<unsigned long>(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM) / 1024));
+  lavaDrawText(8, 83, line, LAVA_GREEN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Max block %luK",
-           static_cast<unsigned long>(ESP.getMaxAllocPsram() / 1024));
-  lavaDrawText(8, 98, line, LAVA_GREEN, LAVA_BLACK);
-  lavaDrawText(8, 132, "External volatile RAM", LAVA_GRAY, LAVA_BLACK);
+           static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
+  lavaDrawText(8, 103, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 137, "External volatile RAM", LAVA_GRAY, LAVA_BLACK);
 }
 
 static void drawFlashPage() {
@@ -183,6 +198,22 @@ static void drawBuildPage() {
   lavaDrawText(8, 138, "ESP32-D0WD board", LAVA_GRAY, LAVA_BLACK);
 }
 
+static void drawAudioPage() {
+  char line[40];
+  drawHeader("Audio");
+  lavaDrawText(8, 34, "NS4168 I2S amp", LAVA_CYAN, LAVA_BLACK);
+  snprintf(line, sizeof(line), "WS GPIO %d", I2S_WS_PIN);
+  lavaDrawText(8, 54, line, LAVA_WHITE, LAVA_BLACK);
+  snprintf(line, sizeof(line), "BCK GPIO %d", I2S_BCK_PIN);
+  lavaDrawText(8, 74, line, LAVA_WHITE, LAVA_BLACK);
+  snprintf(line, sizeof(line), "DATA GPIO %d", I2S_DATA_PIN);
+  lavaDrawText(8, 94, line, LAVA_WHITE, LAVA_BLACK);
+  snprintf(line, sizeof(line), "AMP EN GPIO %d", AMP_CTRL_PIN);
+  lavaDrawText(8, 114, line, LAVA_GREEN, LAVA_BLACK);
+  lavaDrawText(8, 148, "Single speaker output", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 168, "CTRL pin is active high", LAVA_GRAY, LAVA_BLACK);
+}
+
 static void drawAbout(AppContext &context) {
   if (!context.tftReady) {
     return;
@@ -203,6 +234,9 @@ static void drawAbout(AppContext &context) {
     drawFlashPage();
     break;
   case 4:
+    drawAudioPage();
+    break;
+  case 5:
   default:
     drawBuildPage();
     break;

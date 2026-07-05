@@ -3,13 +3,35 @@
 #include <algorithm>
 #include <cstring>
 
+#include <esp_timer.h>
+
+#include "esp_heap_caps.h"
 #include "lcd_ili9342.h"
 
-static uint8_t g_pixels[LAVA_SCREEN_W * LAVA_SCREEN_H];
-static uint16_t g_rgb565[LAVA_SCREEN_W * LAVA_SCREEN_H];
+extern "C" __attribute__((weak)) void esp32_task_wdt_reset(void) {
+  static int64_t last_us = 0;
+  const int64_t now_us = esp_timer_get_time();
+  if (now_us - last_us >= 500000) {
+    delay(1);
+    last_us = now_us;
+  }
+}
+
+static constexpr size_t PIXEL_COUNT = LAVA_SCREEN_W * LAVA_SCREEN_H;
+static constexpr int16_t PRESENT_ROWS_PER_CHUNK = 8;
+static constexpr size_t PRESENT_CHUNK_PIXELS = LAVA_SCREEN_W * PRESENT_ROWS_PER_CHUNK;
+static constexpr int16_t DRAW_ROWS_PER_YIELD = 8;
+static constexpr int16_t DRAW_CHARS_PER_YIELD = 8;
+
+static uint8_t *g_pixels = nullptr;
+static uint16_t g_rgb565Chunk[PRESENT_CHUNK_PIXELS];
 static LavaColor g_palette[256];
-static LavaSurface g_screen = {LAVA_SCREEN_W, LAVA_SCREEN_H, LAVA_SCREEN_W, g_pixels};
+static LavaSurface g_screen = {LAVA_SCREEN_W, LAVA_SCREEN_H, LAVA_SCREEN_W, nullptr};
 static bool g_displayReady = false;
+
+static inline void lavaRenderYield() {
+  esp32_task_wdt_reset();
+}
 
 static const uint8_t kFont5x7[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00},  {0x00, 0x00, 0x5F, 0x00, 0x00},
@@ -67,6 +89,15 @@ static uint16_t toRgb565(const LavaColor &color) {
 }
 
 void lavaDisplayInit() {
+  if (g_pixels == nullptr) {
+    g_pixels = static_cast<uint8_t *>(heap_caps_malloc(PIXEL_COUNT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    g_screen.pixels = g_pixels;
+  }
+  if (g_pixels == nullptr) {
+    g_displayReady = false;
+    return;
+  }
+
   const LavaColor defaultPalette[] = {
       {0, 0, 0},       {255, 255, 255}, {0, 96, 255},   {0, 220, 80},
       {255, 48, 48},   {255, 220, 0},   {0, 220, 220},  {120, 120, 120},
@@ -93,10 +124,16 @@ void lavaSetPalette(uint8_t first, uint8_t count, const LavaColor *colors) {
 LavaSurface &lavaScreen() { return g_screen; }
 
 void lavaClear(uint8_t color) {
-  memset(g_pixels, color, sizeof(g_pixels));
+  if (g_pixels == nullptr) {
+    return;
+  }
+  memset(g_pixels, color, PIXEL_COUNT);
 }
 
 void lavaFillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color) {
+  if (g_pixels == nullptr) {
+    return;
+  }
   if (w <= 0 || h <= 0 || x >= LAVA_SCREEN_W || y >= LAVA_SCREEN_H) {
     return;
   }
@@ -120,6 +157,9 @@ void lavaFillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color) {
 
   for (int16_t row = 0; row < h; ++row) {
     memset(g_pixels + (y + row) * LAVA_SCREEN_W + x, color, w);
+    if (((row + 1) % DRAW_ROWS_PER_YIELD) == 0) {
+      lavaRenderYield();
+    }
   }
 }
 
@@ -131,6 +171,9 @@ void lavaDrawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color) {
 }
 
 void lavaDrawChar(int16_t x, int16_t y, char ch, uint8_t fg, uint8_t bg) {
+  if (g_pixels == nullptr) {
+    return;
+  }
   const uint8_t idx = static_cast<uint8_t>(ch);
   if (idx < 32 || idx > 126) {
     return;
@@ -155,6 +198,9 @@ void lavaDrawText(int16_t x, int16_t y, const char *text, uint8_t fg, uint8_t bg
   }
   for (int16_t i = 0; text[i] != '\0'; ++i) {
     lavaDrawChar(x + i * 6, y, text[i], fg, bg);
+    if (((i + 1) % DRAW_CHARS_PER_YIELD) == 0) {
+      lavaRenderYield();
+    }
   }
 }
 
@@ -162,9 +208,20 @@ void lavaPresent() {
   if (!g_displayReady) {
     return;
   }
-  for (size_t i = 0; i < sizeof(g_pixels); ++i) {
-    g_rgb565[i] = toRgb565(g_palette[g_pixels[i]]);
+  for (int16_t y = 0; y < LAVA_SCREEN_H; y += PRESENT_ROWS_PER_CHUNK) {
+    const int16_t rows = std::min<int16_t>(PRESENT_ROWS_PER_CHUNK, LAVA_SCREEN_H - y);
+    const size_t chunkPixels = static_cast<size_t>(LAVA_SCREEN_W) * rows;
+
+    for (int16_t row = 0; row < rows; ++row) {
+      const size_t srcOffset = static_cast<size_t>(y + row) * LAVA_SCREEN_W;
+      const size_t dstOffset = static_cast<size_t>(row) * LAVA_SCREEN_W;
+      for (int16_t x = 0; x < LAVA_SCREEN_W; ++x) {
+        g_rgb565Chunk[dstOffset + x] = toRgb565(g_palette[g_pixels[srcOffset + x]]);
+      }
+    }
+
+    Lcd.setWindow(0, y, LAVA_SCREEN_W - 1, y + rows - 1);
+    Lcd.pushColors(g_rgb565Chunk, chunkPixels);
+    lavaRenderYield();
   }
-  Lcd.setWindow(0, 0, LAVA_SCREEN_W - 1, LAVA_SCREEN_H - 1);
-  Lcd.pushColors(g_rgb565, sizeof(g_pixels));
 }
