@@ -24,14 +24,16 @@ int main(int argc, char *argv[]) {
   light_on = 1;
   mia_host_backlight_set(1);
   draw_flashlight();
-  while (!(mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
-           mia_host_button_down(MIA_HOST_BUTTON_START))) {
-    if (mia_host_button_down(MIA_HOST_BUTTON_A)) {
+  while (1) {
+    mia_host_buttons_poll();
+    if (mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+        mia_host_button_down(MIA_HOST_BUTTON_START)) {
+      break;
+    }
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       light_on = light_on ? 0 : 1;
       mia_host_backlight_set(light_on);
       draw_flashlight();
-      mia_host_delay_ms(150);
-      continue;
     }
     mia_host_delay_ms(20);
   }

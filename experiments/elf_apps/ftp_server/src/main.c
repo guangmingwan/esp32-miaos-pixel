@@ -36,8 +36,12 @@ int main(int argc, char *argv[]) {
   uint32_t last_draw_ms = 0;
   mia_host_ftp_start();
   draw_ftp_server();
-  while (!(mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
-           mia_host_button_down(MIA_HOST_BUTTON_START))) {
+  while (1) {
+    mia_host_buttons_poll();
+    if (mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+        mia_host_button_down(MIA_HOST_BUTTON_START)) {
+      break;
+    }
     uint32_t now_ms = mia_host_millis();
     mia_host_ftp_poll();
     if (now_ms - last_draw_ms >= 500) {

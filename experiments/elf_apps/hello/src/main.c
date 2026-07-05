@@ -4,7 +4,7 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
-  if (mia_host_abi_version() != 1) {
+  if (mia_host_abi_version() != 2) {
     mia_host_log("hello.app: unsupported MiaOS host ABI");
     return 1;
   }
@@ -17,6 +17,7 @@ int main(int argc, char *argv[]) {
   mia_host_present();
 
   while (1) {
+    mia_host_buttons_poll();
     const uint8_t select_down = mia_host_button_down(MIA_HOST_BUTTON_SELECT);
     const uint8_t start_down = mia_host_button_down(MIA_HOST_BUTTON_START);
     if (select_down && start_down) {

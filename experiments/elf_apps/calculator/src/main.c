@@ -13,15 +13,6 @@ static char pending_op;
 static uint8_t has_accumulator;
 static uint8_t error_state;
 
-static uint8_t was_down[14];
-
-static uint8_t pressed(uint8_t button) {
-  uint8_t down = mia_host_button_down(button);
-  uint8_t edge = down && !was_down[button];
-  was_down[button] = down;
-  return edge;
-}
-
 static uint8_t exit_pressed(void) {
   return mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
          mia_host_button_down(MIA_HOST_BUTTON_START);
@@ -126,32 +117,36 @@ static void draw_calculator(void) {
 int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
-  if (mia_host_abi_version() != 1) {
+  if (mia_host_abi_version() != 2) {
     return 1;
   }
   selected_key = 0;
   reset_calculator();
   draw_calculator();
 
-  while (!exit_pressed()) {
+  while (1) {
+    mia_host_buttons_poll();
+    if (exit_pressed()) {
+      break;
+    }
     uint8_t changed = 0;
-    if (pressed(MIA_HOST_BUTTON_UP) && selected_key >= 4) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_UP) && selected_key >= 4) {
       selected_key -= 4;
       changed = 1;
     }
-    if (pressed(MIA_HOST_BUTTON_DOWN) && selected_key + 4 < 16) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN) && selected_key + 4 < 16) {
       selected_key += 4;
       changed = 1;
     }
-    if (pressed(MIA_HOST_BUTTON_L) && selected_key % 4 > 0) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_LEFT) && selected_key % 4 > 0) {
       --selected_key;
       changed = 1;
     }
-    if (pressed(MIA_HOST_BUTTON_R) && selected_key % 4 < 3) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_RIGHT) && selected_key % 4 < 3) {
       ++selected_key;
       changed = 1;
     }
-    if (pressed(MIA_HOST_BUTTON_A)) {
+    if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       press_calculator_key(KEYS[selected_key]);
       changed = 1;
     }

@@ -78,8 +78,12 @@ int main(int argc, char *argv[]) {
   uint32_t last_render_ms = 0;
   uint32_t frame = 0;
   draw_diagnostic(frame);
-  while (!(mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
-           mia_host_button_down(MIA_HOST_BUTTON_START))) {
+  while (1) {
+    mia_host_buttons_poll();
+    if (mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+        mia_host_button_down(MIA_HOST_BUTTON_START)) {
+      break;
+    }
     uint32_t now_ms = mia_host_millis();
     if (now_ms - last_render_ms >= 500) {
       last_render_ms = now_ms;
