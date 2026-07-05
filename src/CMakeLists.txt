@@ -1,6 +1,7 @@
 set(APP_SOURCES
   "apps/serial_transfer_app.cpp"
   "apps/log_viewer_app.cpp"
+  "apps/psram_test_app.cpp"
   "apps/about_app.cpp"
 )
 
@@ -10,8 +11,10 @@ idf_component_register(
     "lcd_ili9342.cpp"
     "lava_native_display.cpp"
     "rtc_clock.cpp"
+    "audio_host.cpp"
     "mia_elf_runner.cpp"
     "mia_host_abi.cpp"
+    "mia_host_abi_audio.cpp"
     "mia_host_abi_system.cpp"
     "mia_host_abi_network.cpp"
     "launcher_log.cpp"

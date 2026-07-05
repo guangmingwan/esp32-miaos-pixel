@@ -7,8 +7,14 @@
 
 #include <esp_ota_ops.h>
 #include <esp_rom_crc.h>
+#include <esp_timer.h>
 #include <soc/rtc_cntl_reg.h>
 #include <soc/soc.h>
+
+#include <esp_vfs_fat.h>
+#include <driver/sdspi_host.h>
+#include <sdmmc_cmd.h>
+#include <FSImpl.h>
 
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
@@ -18,6 +24,7 @@
 #include "app.h"
 #include "apps/about_app.h"
 #include "apps/log_viewer_app.h"
+#include "apps/psram_test_app.h"
 #include "apps/serial_transfer_app.h"
 #include "launcher_log.h"
 #include "lcd_ili9342.h"
@@ -27,13 +34,21 @@
 #include "sd_app_loader.h"
 
 SPIClass tftSpi(FSPI);
-SPIClass sdSpi(HSPI);
+
+// Helper to set SD mountpoint after ESP-IDF VFS mount
+struct SDFSAccess : public fs::SDFS {
+  void setMountPt(const char *mp) { _impl->mountpoint(mp); }
+};
 
 AppContext g_context = {};
 ButtonState g_allButtons[ALL_BUTTON_COUNT] = {};
 static bool g_allButtonLast[ALL_BUTTON_COUNT] = {};
 static uint8_t g_hc165State = 0xFF;
+static int64_t g_lastWatchdogYieldUs = 0;
 static uint32_t g_lastLauncherRenderMs = 0;
+static bool g_launcherNeedsInitialRender = true;
+static uint32_t g_launcherInitialRenderAtMs = 0;
+static constexpr uint8_t INITIAL_DRAW_ITEM_LIMIT = 1;
 static uint8_t g_selectedApp = 0;
 static const LauncherApp *g_activeApp = nullptr;
 static SdAppLoaderResult g_sdScan = {SdAppLoaderStatus::SdUnavailable, 0, 0};
@@ -56,6 +71,7 @@ static bool g_bootLoaderHintVisible = false;
 static const LauncherApp *const BUILTIN_APPS[] = {
     &serialTransferApp(),
     &logViewerApp(),
+    &psramTestApp(),
     &aboutApp(),
 };
 static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]);
@@ -152,6 +168,85 @@ enum LavaPalette : uint8_t {
   LAVA_DARK_BLUE = 8,
 };
 
+static constexpr uint8_t LOADING_BITMAP_H = 22;
+static constexpr uint8_t LOADING_BITMAP_BYTES_PER_ROW = 15;
+static constexpr uint8_t LOADING_LINE1_W = 101;
+static constexpr uint8_t LOADING_LINE2_W = 120;
+
+static constexpr uint8_t kLoadingLine1Bitmap[LOADING_BITMAP_H * LOADING_BITMAP_BYTES_PER_ROW] = {
+    0x00, 0x00, 0x00, 0x18, 0x00, 0x06, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x3F, 0xFF, 0xC0, 0x18, 0x00, 0x06, 0x0C, 0x00, 0x00, 0x06, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x00, 0x70, 0x07, 0xFF, 0xFE, 0x06, 0x0C, 0x00, 0x00, 0x06, 0x00, 0x3F, 0x80, 0x00, 0x00,
+    0x00, 0x20, 0x07, 0xFF, 0xFE, 0x06, 0x0C, 0x00, 0x00, 0x06, 0x00, 0x3F, 0xC0, 0x00, 0x00,
+    0x00, 0x20, 0x00, 0x30, 0x00, 0x06, 0x0C, 0x00, 0x00, 0x06, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x08, 0x20, 0x00, 0x61, 0x80, 0x04, 0x0C, 0x03, 0xF0, 0xF6, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x0C, 0x20, 0x00, 0xE1, 0x80, 0x04, 0x0C, 0x07, 0xF1, 0xFE, 0x1F, 0xFF, 0xF0, 0x00, 0x00,
+    0x0C, 0x3F, 0x81, 0xC1, 0x80, 0x04, 0x0C, 0x06, 0x01, 0x8E, 0x3F, 0xFF, 0xF0, 0x00, 0x00,
+    0x0C, 0x3F, 0xC1, 0x9F, 0xFC, 0x0C, 0x1C, 0x06, 0x03, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x0C, 0x20, 0x03, 0x9F, 0xFC, 0x0E, 0x1C, 0x03, 0x83, 0x06, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x0C, 0x20, 0x07, 0x81, 0x80, 0x0F, 0x1E, 0x01, 0xE3, 0x06, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x0C, 0x20, 0x07, 0x81, 0x80, 0x0D, 0x9E, 0x00, 0x73, 0x06, 0x00, 0x38, 0x00, 0x00, 0x00,
+    0x0C, 0x20, 0x01, 0x81, 0x80, 0x18, 0xB3, 0x00, 0x33, 0x06, 0x00, 0x3E, 0x00, 0x00, 0x00,
+    0x0C, 0x20, 0x01, 0x81, 0x80, 0x18, 0x73, 0x00, 0x31, 0x8E, 0x00, 0x37, 0x80, 0x00, 0x00,
+    0x0C, 0x20, 0x01, 0x81, 0x80, 0x30, 0x61, 0x87, 0xF1, 0xFE, 0x00, 0x31, 0x80, 0x00, 0x00,
+    0x0C, 0x70, 0x01, 0xBF, 0xFC, 0x70, 0xC0, 0xC7, 0xE0, 0xF6, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x7F, 0xFF, 0xE1, 0xBF, 0xFE, 0x61, 0x80, 0x60, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x80, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static constexpr uint8_t kLoadingLine2Bitmap[LOADING_BITMAP_H * LOADING_BITMAP_BYTES_PER_ROW] = {
+    0x0C, 0x00, 0x00, 0x30, 0x58, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x06, 0x00,
+    0x0C, 0x1F, 0xC3, 0xFE, 0x4C, 0x00, 0x30, 0x01, 0xFF, 0xFC, 0x7F, 0xF0, 0xC3, 0xFF, 0xFC,
+    0x0C, 0x1F, 0xC3, 0xFE, 0x4C, 0x1F, 0xFF, 0xE1, 0x86, 0x0C, 0x06, 0x0C, 0xC3, 0xFF, 0xFC,
+    0x7F, 0xD8, 0x40, 0x30, 0x40, 0x1F, 0xFF, 0xC1, 0x86, 0x0C, 0x0C, 0x0C, 0xC0, 0x06, 0x00,
+    0x7F, 0xD8, 0x40, 0x70, 0xE0, 0x10, 0x00, 0x01, 0x86, 0x0C, 0x0C, 0x0C, 0xC1, 0xFF, 0xF8,
+    0x0C, 0xD8, 0x47, 0xFF, 0xFE, 0x10, 0x20, 0x01, 0xFF, 0xFC, 0x0F, 0xCC, 0xC3, 0xFF, 0xFC,
+    0x0C, 0xD8, 0x40, 0x40, 0x60, 0x10, 0x30, 0xC1, 0xFF, 0xFC, 0x1F, 0xCC, 0xC0, 0x06, 0x00,
+    0x0C, 0xD8, 0x40, 0x60, 0x64, 0x13, 0x30, 0xC1, 0x86, 0x0C, 0x18, 0xCC, 0xC7, 0xFF, 0xFE,
+    0x08, 0xD8, 0x43, 0xFE, 0x6C, 0x13, 0x19, 0x81, 0x86, 0x0C, 0x30, 0xCC, 0xC7, 0xFF, 0xFE,
+    0x08, 0xD8, 0x41, 0xB0, 0x6C, 0x11, 0x99, 0x81, 0x86, 0x0C, 0x38, 0xCC, 0xC0, 0x3B, 0x00,
+    0x18, 0xD8, 0x41, 0xB0, 0x68, 0x11, 0x99, 0x81, 0xFF, 0xFC, 0x6D, 0x8C, 0xC0, 0x71, 0x0C,
+    0x18, 0xD8, 0x43, 0xFE, 0x78, 0x31, 0x9B, 0x01, 0xFF, 0xFC, 0x05, 0x8C, 0xC0, 0xE1, 0xB8,
+    0x18, 0xD8, 0x41, 0xFC, 0x38, 0x30, 0xC3, 0x03, 0x06, 0x0C, 0x03, 0x0C, 0xC3, 0xE0, 0xE0,
+    0x18, 0xD8, 0x40, 0x36, 0x30, 0x30, 0x83, 0x03, 0x06, 0x0C, 0x07, 0x00, 0xC7, 0x60, 0xE0,
+    0x30, 0x9F, 0xC3, 0xFE, 0x72, 0x30, 0x06, 0x03, 0x06, 0x0C, 0x0E, 0x00, 0xC0, 0x60, 0x70,
+    0x31, 0x9F, 0xC7, 0xF0, 0xFE, 0x67, 0xFF, 0xE6, 0x06, 0x0C, 0x1C, 0x00, 0xC0, 0x6E, 0x3C,
+    0x67, 0x98, 0x40, 0x30, 0x1E, 0x67, 0xFF, 0xE6, 0x06, 0x7C, 0x38, 0x07, 0xC0, 0x7E, 0x0E,
+    0x47, 0x00, 0x00, 0x30, 0x0C, 0x40, 0x00, 0x02, 0x00, 0x38, 0x20, 0x07, 0x80, 0x20, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static void drawLoadingBitmap(int16_t x, int16_t y, const uint8_t *bitmap, uint8_t width,
+                              uint8_t color) {
+  for (uint8_t row = 0; row < LOADING_BITMAP_H; ++row) {
+    for (uint8_t col = 0; col < width; ++col) {
+      const uint8_t byte = bitmap[row * LOADING_BITMAP_BYTES_PER_ROW + col / 8];
+      if ((byte & (0x80 >> (col % 8))) != 0) {
+        lavaFillRect(x + col, y + row, 1, 1, color);
+      }
+    }
+  }
+}
+
+static void drawSdAppLoadingMessage() {
+  lavaClear(LAVA_BLACK);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(6, 6, "MiaOS Launcher", LAVA_BLACK, LAVA_YELLOW);
+
+  const int16_t line1X = (LAVA_SCREEN_W - LOADING_LINE1_W) / 2;
+  const int16_t line2X = (LAVA_SCREEN_W - LOADING_LINE2_W) / 2;
+  drawLoadingBitmap(line1X, 96, kLoadingLine1Bitmap, LOADING_LINE1_W, LAVA_CYAN);
+  drawLoadingBitmap(line2X, 124, kLoadingLine2Bitmap, LOADING_LINE2_W, LAVA_WHITE);
+  lavaPresent();
+}
+
 static String macAddress() {
   const uint64_t mac = ESP.getEfuseMac();
   char buffer[18];
@@ -230,26 +325,58 @@ static void initDisplay() {
 static void initSdCard() {
   digitalWrite(TFT_CS_PIN, HIGH);
 #ifdef MIA_ENABLE_SD
-  static const uint32_t kSdTrialHz[] = {10000000, 4000000, 1000000};
+  pinMode(SD_MISO_PIN, INPUT_PULLUP);
   g_context.sdReady = false;
-  for (size_t i = 0; i < sizeof(kSdTrialHz) / sizeof(kSdTrialHz[0]); ++i) {
-    const uint32_t hz = kSdTrialHz[i];
-    launcherTracef("[sd] begin trial %u Hz", static_cast<unsigned>(hz));
-    sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-    if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
-      if (SD.cardType() == CARD_NONE) {
-        launcherTracef("[sd] no card detected at %u Hz", static_cast<unsigned>(hz));
-        SD.end();
-        delay(50);
-        continue;
-      }
+
+  // Initialize SPI bus for SD card on HSPI (SPI3_HOST)
+  spi_bus_config_t sd_bus_cfg = {
+      .mosi_io_num = SD_MOSI_PIN,
+      .miso_io_num = SD_MISO_PIN,
+      .sclk_io_num = SD_SCK_PIN,
+      .quadwp_io_num = -1,
+      .quadhd_io_num = -1,
+      .data4_io_num = -1,
+      .data5_io_num = -1,
+      .data6_io_num = -1,
+      .data7_io_num = -1,
+      .max_transfer_sz = 4092,
+      .flags = 0,
+      .intr_flags = 0,
+  };
+  esp_err_t bus_ret = spi_bus_initialize(SPI3_HOST, &sd_bus_cfg,
+                                          SPI_DMA_CH_AUTO);
+  if (bus_ret != ESP_OK) {
+    launcherTracef("[sd] spi_bus_initialize failed: %d", bus_ret);
+  } else {
+    sdspi_device_config_t dev_cfg = {
+        .host_id = SPI3_HOST,
+        .gpio_cs = (gpio_num_t)SD_CS_PIN,
+        .gpio_cd = SDSPI_SLOT_NO_CD,
+        .gpio_wp = SDSPI_SLOT_NO_WP,
+        .gpio_int = GPIO_NUM_NC,
+    };
+
+    esp_vfs_fat_mount_config_t mount_cfg = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024,
+    };
+    sdmmc_host_t sd_host = SDSPI_HOST_DEFAULT();
+    sdmmc_card_t *card = nullptr;
+    const esp_err_t ret = esp_vfs_fat_sdspi_mount("/sd", &sd_host, &dev_cfg,
+                                                  &mount_cfg, &card);
+    if (ret == ESP_OK) {
+      reinterpret_cast<SDFSAccess *>(&SD)->setMountPt("/sd");
       g_context.sdReady = true;
-      launcherTracef("[sd] mounted at %u Hz", static_cast<unsigned>(hz));
-      break;
+      launcherTrace("[sd] mounted via ESP-IDF sdspi");
+    } else {
+      launcherTracef("[sd] mount failed: %d", ret);
+      spi_bus_free(SPI3_HOST);
     }
-    launcherTracef("[sd] mount failed at %u Hz", static_cast<unsigned>(hz));
-    SD.end();
-    delay(50);
+  }
+
+  if (!g_context.sdReady) {
+    launcherTrace("[sd] continuing without SD");
   }
 #else
   g_context.sdReady = false;
@@ -293,17 +420,17 @@ static void updateBeep() {
 static const char *sdScanStatusText() {
   switch (g_sdScan.status) {
     case SdAppLoaderStatus::Ok:
-      return "SD apps: ready";
+      return "SD card:ready";
     case SdAppLoaderStatus::SdUnavailable:
-      return "SD apps: card unavailable";
+      return "SD card:unavailable";
     case SdAppLoaderStatus::NoAppsFound:
-      return "SD apps: none";
+      return "SD card:no apps";
     case SdAppLoaderStatus::ReadError:
-      return "SD apps: read error";
+      return "SD card:read error";
     case SdAppLoaderStatus::RunError:
-      return "SD apps: run error";
+      return "SD card:run error";
   }
-  return "SD apps: unknown";
+  return "SD card:unknown";
 }
 
 static bool sameSdCategory(const char *lhs, const char *rhs) {
@@ -438,6 +565,18 @@ static void drawLauncherClock() {
   lavaDrawText(textX, 6, clockText, LAVA_BLACK, LAVA_YELLOW);
 }
 
+extern "C" void esp32_task_wdt_reset(void) {
+  const int64_t now_us = esp_timer_get_time();
+  if (now_us - g_lastWatchdogYieldUs >= 500000) {
+    delay(1);
+    g_lastWatchdogYieldUs = now_us;
+  }
+}
+
+static inline void launcherRenderYield() {
+  esp32_task_wdt_reset();
+}
+
 static void drawLauncher() {
   if (!g_context.tftReady) {
     return;
@@ -447,6 +586,12 @@ static void drawLauncher() {
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
   lavaDrawText(6, 6, "MiaOS Launcher", LAVA_BLACK, LAVA_YELLOW);
   drawLauncherClock();
+  launcherRenderYield();
+  if (g_launcherNeedsInitialRender) {
+    lavaPresent();
+    launcherRenderYield();
+    return;
+  }
 
   int16_t tabX = 8;
   const uint8_t tabCount = launcherTabCount();
@@ -461,16 +606,20 @@ static void drawLauncher() {
     lavaFillRect(tabX, 28, tabWidth, 16, bg);
     lavaDrawText(tabX + 6, 33, tabName, fg, bg);
     tabX += tabWidth + 4;
+    launcherRenderYield();
   }
+  launcherRenderYield();
 
-  lavaDrawText(8, 48, "Apps", LAVA_CYAN, LAVA_BLACK);
   const uint8_t maxVisibleApps = 8;
   uint8_t firstApp = 0;
   const uint8_t itemCount = totalLauncherItems();
   if (itemCount > maxVisibleApps && g_selectedApp >= maxVisibleApps) {
     firstApp = g_selectedApp - maxVisibleApps + 1;
   }
-  const uint8_t visibleEnd = min<uint8_t>(itemCount, firstApp + maxVisibleApps);
+  uint8_t visibleEnd = min<uint8_t>(itemCount, firstApp + maxVisibleApps);
+  if (g_launcherNeedsInitialRender) {
+    visibleEnd = min<uint8_t>(visibleEnd, firstApp + INITIAL_DRAW_ITEM_LIMIT);
+  }
   for (uint8_t i = firstApp; i < visibleEnd; ++i) {
     const int16_t y = 64 + (i - firstApp) * 18;
     const bool selected = i == g_selectedApp;
@@ -494,19 +643,24 @@ static void drawLauncher() {
     const uint8_t itemCursor = selected ? LAVA_YELLOW : LAVA_YELLOW;
     lavaFillRect(6, y - 3, 308, 15, itemBg);
     lavaDrawText(12, y, selected ? ">" : " ", itemCursor, itemBg);
-    lavaDrawText(28, y, sdApp ? "[sd]" : ((isUsbDisk || isBootloader) ? "[sys]" : ""),
-                 itemTag, itemBg);
-    lavaDrawText((sdApp || isUsbDisk || isBootloader) ? 52 : 28, y, name, itemText,
-                 itemBg);
+    lavaDrawText(28, y, sdApp ? "[sd]" : "", itemTag, itemBg);
+    lavaDrawText(sdApp ? 52 : 28, y, name, itemText, itemBg);
+    launcherRenderYield();
   }
+  launcherRenderYield();
 
-  lavaDrawText(8, 206, sdScanStatusText(), g_context.sdReady ? LAVA_GREEN : LAVA_RED,
-                LAVA_BLACK);
+  const char *sdStatus = sdScanStatusText();
+  const int16_t sdStatusX = LAVA_SCREEN_W - 8 - static_cast<int16_t>(strlen(sdStatus) * 6);
+  lavaDrawText(sdStatusX, 224, sdStatus, g_context.sdReady ? LAVA_GREEN : LAVA_RED,
+               LAVA_BLACK);
   if (g_lastSdRun.status != SdAppLoaderStatus::Ok) {
-    lavaDrawText(8, 214, sdAppLoaderStatusText(g_lastSdRun.status), LAVA_RED,
-                  LAVA_BLACK);
+    char errorLine[32];
+    snprintf(errorLine, sizeof(errorLine), "%s no:%d",
+             sdAppLoaderStatusText(g_lastSdRun.status), g_lastSdRun.errorCode);
+    lavaDrawText(8, 214, errorLine, LAVA_RED, LAVA_BLACK);
   }
   lavaDrawText(8, 224, "A:Open UP/DN:Move LEFT/RIGHT:Tab", LAVA_GRAY, LAVA_BLACK);
+  launcherRenderYield();
 
   if (g_bootLoaderHintVisible) {
     lavaFillRect(24, 44, 272, 156, LAVA_DARK_BLUE);
@@ -519,8 +673,11 @@ static void drawLauncher() {
     lavaDrawText(40, 162, "RESET alone returns to", LAVA_GRAY, LAVA_DARK_BLUE);
     lavaDrawText(58, 180, "normal boot", LAVA_GRAY, LAVA_DARK_BLUE);
     lavaDrawText(86, 198, "A/B:Back", LAVA_YELLOW, LAVA_DARK_BLUE);
+    launcherRenderYield();
   }
+  launcherRenderYield();
   lavaPresent();
+  launcherRenderYield();
 }
 
 static void enterSelectedApp() {
@@ -627,15 +784,6 @@ static void printStartupInfo() {
                  BEEP_PIN, I2C_SCL_PIN, I2C_SDA_PIN);
 }
 
-static void writeStartupLog() {
-  launcherLogAppendf("startup chip=%s rev=%d cpu_mhz=%u", ESP.getChipModel(),
-                     ESP.getChipRevision(), ESP.getCpuFreqMHz());
-  launcherLogAppendf("startup flash=%u heap=%u", ESP.getFlashChipSize(), ESP.getFreeHeap());
-  launcherLogAppendf("startup mac=%s", macAddress().c_str());
-  launcherLogAppendf("startup sd_ready=%d tft_ready=%d", g_context.sdReady ? 1 : 0,
-                     g_context.tftReady ? 1 : 0);
-}
-
 void setup() {
   Serial.begin(115200);
   delay(2000);
@@ -653,18 +801,16 @@ void setup() {
 
   launcherTrace("[setup] printStartupInfo");
   printStartupInfo();
-  launcherTrace("[setup] initDisplay - BEFORE");
   initDisplay();
-  launcherTrace("[setup] initDisplay - AFTER");
-
-  launcherTrace("[setup] initSdCard");
+  launcherTrace("[setup] initDisplay done");
   initSdCard();
-  launcherLogBeginSession(g_context.sdReady);
-  writeStartupLog();
+  launcherTrace("[setup] initSdCard done");
+
+  drawSdAppLoadingMessage();
+  launcherTrace("[setup] drawSdAppLoadingMessage done");
+
   clampLauncherSelection();
-  launcherTrace("[setup] drawLauncher - BEFORE");
-  drawLauncher();
-  launcherTrace("[setup] drawLauncher - AFTER");
+  g_launcherInitialRenderAtMs = millis() + 500;
 }
 
 void loop() {
@@ -682,6 +828,16 @@ void loop() {
     if (g_activeApp->tick != nullptr) {
       g_activeApp->tick(g_context, now);
     }
+    return;
+  }
+
+  if (g_launcherNeedsInitialRender) {
+    if (now < g_launcherInitialRenderAtMs) {
+      return;
+    }
+    g_launcherNeedsInitialRender = false;
+    g_lastLauncherRenderMs = now;
+    drawLauncher();
     return;
   }
 
