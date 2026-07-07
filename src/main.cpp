@@ -27,6 +27,7 @@
 #include "apps/psram_test_app.h"
 #include "apps/serial_transfer_app.h"
 #include "launcher_log.h"
+#include "ota_app_flash.h"
 #include "lcd_ili9342.h"
 #include "lava_native_display.h"
 #include "pins.h"
@@ -75,6 +76,11 @@ static bool g_bootLoaderHintVisible = false;
 static bool g_sdActionMenuVisible = false;
 static uint8_t g_sdActionMenuSelection = 0;
 
+static bool g_otaExportConfirmVisible = false;
+static bool g_otaExportResultVisible = false;
+static OtaAppManifest g_otaExportManifest = {};
+static bool g_otaExportSuccess = false;
+
 static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex);
 static void drawLauncher();
 
@@ -87,7 +93,8 @@ static const LauncherApp *const BUILTIN_APPS[] = {
 static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]);
 
 static constexpr uint8_t BOOTLOADER_MENU_INDEX = BUILTIN_APP_COUNT;
-static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 1;
+static constexpr uint8_t EXPORT_OTA_MENU_INDEX = BUILTIN_APP_COUNT + 1;
+static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 2;
 static constexpr uint8_t SYSTEM_ITEM_COUNT = TOTAL_LAUNCHER_ITEMS_FIXED;
 
 static void showBootloaderInstructions() {
@@ -585,9 +592,12 @@ static void drawLauncher() {
     const bool selected = i == g_selectedApp;
     const bool sdApp = g_selectedTab != SYSTEM_TAB_INDEX;
     const bool isBootloader = g_selectedTab == SYSTEM_TAB_INDEX && i == BOOTLOADER_MENU_INDEX;
+    const bool isExportOta = g_selectedTab == SYSTEM_TAB_INDEX && i == EXPORT_OTA_MENU_INDEX;
     const char *name;
     if (isBootloader) {
       name = "Boot Loader";
+    } else if (isExportOta) {
+      name = "Export OTA to SD";
     } else if (sdApp) {
       const SdAppManifestSummary *app = selectedSdApp(i);
       name = app == nullptr ? "<missing>" : app->name;
@@ -653,6 +663,50 @@ static void drawLauncher() {
     lavaDrawText(52, 148, "A:Confirm  B/SEL:Back", LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
     launcherRenderYield();
   }
+
+  if (g_otaExportConfirmVisible) {
+    constexpr int16_t boxW = 280;
+    constexpr int16_t boxH = 160;
+    constexpr int16_t boxX = (LAVA_SCREEN_W - boxW) / 2;
+    constexpr int16_t boxY = (LAVA_SCREEN_H - boxH) / 2;
+    lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
+    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
+    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, LAVA_YELLOW);
+    lavaDrawText(boxX + 8, boxY + 6, "Export OTA to SD", LAVA_BLACK, LAVA_YELLOW);
+    char catLine[48];
+    snprintf(catLine, sizeof(catLine), "Category: %s", g_otaExportManifest.category);
+    lavaDrawText(boxX + 12, boxY + 30, catLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
+    char nameLine[48];
+    snprintf(nameLine, sizeof(nameLine), "Name: %s", g_otaExportManifest.name);
+    lavaDrawText(boxX + 12, boxY + 48, nameLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
+    char pathLine[120];
+    snprintf(pathLine, sizeof(pathLine), "To: /MiaOS/%s/%s.app/%s.bin",
+             g_otaExportManifest.category, g_otaExportManifest.name,
+             g_otaExportManifest.name);
+    lavaDrawText(boxX + 12, boxY + 72, pathLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
+    lavaDrawText(boxX + 12, boxY + 96, "Press A to export, B to cancel",
+                 LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
+    launcherRenderYield();
+  }
+
+  if (g_otaExportResultVisible) {
+    constexpr int16_t boxW = 240;
+    constexpr int16_t boxH = 80;
+    constexpr int16_t boxX = (LAVA_SCREEN_W - boxW) / 2 + 5;
+    constexpr int16_t boxY = (LAVA_SCREEN_H - boxH) / 2;
+    lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
+    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
+    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, g_otaExportSuccess ? LAVA_GREEN : LAVA_RED);
+    lavaDrawText(boxX + 8, boxY + 6, g_otaExportSuccess ? "Export OK" : "Export Failed",
+                 LAVA_BLACK, g_otaExportSuccess ? LAVA_GREEN : LAVA_RED);
+    const char *msg = g_otaExportSuccess
+        ? "OTA app exported to SD."
+        : "No valid manifest in ota_1.";
+    lavaDrawText(boxX + 12, boxY + 36, msg, LAVA_BLACK, LAVA_LIGHT_GRAY);
+    lavaDrawText(boxX + 12, boxY + 58, "Press any button", LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
+    launcherRenderYield();
+  }
+
   launcherRenderYield();
   lavaPresent();
   launcherRenderYield();
@@ -690,11 +744,39 @@ static void enterSelectedApp() {
     return;
   }
 
+  if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == EXPORT_OTA_MENU_INDEX) {
+    launcherTrace("[ota-export-menu] Export OTA to SD selected");
+    if (!g_context.sdReady) {
+      launcherTrace("[ota-export-menu] SD unavailable");
+      g_lastSdRun = {SdAppLoaderStatus::SdUnavailable, 0, 0};
+      drawLauncher();
+      return;
+    }
+    if (!miaReadOtaManifest(&g_otaExportManifest)) {
+      launcherTrace("[ota-export-menu] no manifest in ota_1");
+      g_otaExportSuccess = false;
+      g_otaExportResultVisible = true;
+      drawLauncher();
+      return;
+    }
+    g_otaExportConfirmVisible = true;
+    drawLauncher();
+    return;
+  }
+
   if (g_selectedTab != SYSTEM_TAB_INDEX) {
     const SdAppManifestSummary *app = selectedSdApp(g_selectedApp);
     if (app == nullptr) {
       return;
     }
+
+    // If the SD firmware manifest matches ota_1, skip flash and just boot
+    if (sdManifestMatchesOta(app->path)) {
+      launcherTracef("[sd-run] manifest matches ota_1, skipping flash for %s", app->path);
+      miaBootAppSlot();
+      return;  // miaBootAppSlot reboots, never returns
+    }
+
     g_lastSdRun = runSdAppByPath(app->path, g_context.sdReady);
     launcherLogRecordSdRun(*app, g_lastSdRun);
     drawLauncher();
@@ -742,6 +824,37 @@ static void tickLauncher(uint32_t nowMs) {
     }
     if (g_context.buttons[1].pressed || g_allButtons[BUTTON_INDEX_SELECT].pressed || systemExitPressed()) {
       closeSdActionMenu();
+      drawLauncher();
+      return;
+    }
+    return;
+  }
+
+  if (g_otaExportConfirmVisible) {
+    if (g_context.buttons[0].pressed) {
+      g_otaExportConfirmVisible = false;
+      launcherTrace("[ota-export] A pressed, starting export");
+      OtaAppExportResult result = miaExportOtaToSd(g_context.sdReady);
+      launcherTracef("[ota-export] result status=%s code=%d",
+                     miaOtaAppExportStatusText(result.status), result.errorCode);
+      g_otaExportSuccess = (result.status == OtaAppExportStatus::Ok);
+      g_otaExportResultVisible = true;
+      drawLauncher();
+      return;
+    }
+    if (g_context.buttons[1].pressed || g_allButtons[BUTTON_INDEX_SELECT].pressed || systemExitPressed()) {
+      g_otaExportConfirmVisible = false;
+      launcherTrace("[ota-export] cancelled");
+      drawLauncher();
+      return;
+    }
+    return;
+  }
+
+  if (g_otaExportResultVisible) {
+    if (g_context.buttons[0].pressed || g_context.buttons[1].pressed ||
+        g_allButtons[BUTTON_INDEX_SELECT].pressed || systemExitPressed()) {
+      g_otaExportResultVisible = false;
       drawLauncher();
       return;
     }

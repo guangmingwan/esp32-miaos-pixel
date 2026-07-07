@@ -4,6 +4,7 @@
 #include <esp_heap_caps.h>
 #include <string.h>
 
+#include "int_wdt_guard.h"
 #include "lava_native_display.h"
 
 namespace {
@@ -26,6 +27,7 @@ constexpr size_t SKIP_INTERVAL = 0x4000;
 
 char g_status[64] = "Press A to run max PSRAM test";
 bool g_running = false;
+uint32_t g_totalKb = 0;
 
 void drawPsramTest(const char *status, uint32_t testedKb, uint32_t totalKb, bool done, bool ok) {
   lavaClear(LAVA_BLACK);
@@ -80,6 +82,7 @@ void updateProgress(const char *phase, size_t offset, size_t total) {
   Serial.printf("[psram-test] %s offset=0x%08x total=0x%08x\n", phase,
                 static_cast<unsigned>(offset), static_cast<unsigned>(total));
   snprintf(g_status, sizeof(g_status), "%s 0x%08x", phase, static_cast<unsigned>(offset));
+  drawPsramTest(g_status, static_cast<uint32_t>(offset / 1024), g_totalKb, false, false);
   delay(1);
 }
 
@@ -215,8 +218,10 @@ void runPsramTest() {
   }
 
   Serial.printf("[psram-test] alloc ok ptr=%p size=0x%08x\n", buffer, static_cast<unsigned>(size));
+  g_totalKb = static_cast<uint32_t>(size / 1024);
   snprintf(g_status, sizeof(g_status), "Running serial-only test");
-  drawPsramTest(g_status, 0, size / 1024, false, false);
+  drawPsramTest(g_status, 0, g_totalKb, false, false);
+  ScopedIntWdtPause wdtGuard;
   const bool ok = fillAndVerify(buffer, size, 0xa5) && copyFromInternalAndVerify(buffer, size) &&
                   fillAndVerify(buffer, size, 0x3c) && copyWithinPsramAndVerify(buffer, size);
   heap_caps_free(buffer);

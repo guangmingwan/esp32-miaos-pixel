@@ -27,3 +27,6 @@ SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
 SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady);
 SdAppLoaderResult exportSdAppByPath(const char *path, bool sdReady);
 const char *sdAppLoaderStatusText(SdAppLoaderStatus status);
+
+/* Returns true if the SD firmware file's manifest matches ota_1's manifest. */
+bool sdManifestMatchesOta(const char *sdPath);

@@ -4,6 +4,8 @@
 #include <esp_err.h>
 #include <esp_partition.h>
 
+#include "ota_app_manifest.h"
+
 enum class OtaAppFlashStatus : uint8_t {
   Ok,
   SdUnavailable,
@@ -34,6 +36,8 @@ enum class OtaAppExportStatus : uint8_t {
   OpenFailed,
   ReadFailed,
   WriteFailed,
+  ManifestMissing,
+  MkdirFailed,
 };
 
 struct OtaAppExportResult {
@@ -43,8 +47,15 @@ struct OtaAppExportResult {
 };
 
 const esp_partition_t *miaFindOtaPartition();
+const esp_partition_t *miaFindAppSlot();
 esp_err_t miaForceOtaBoot(const esp_partition_t *target);
 OtaAppFlashResult miaFlashAppToSlot(const char *sdPath, bool sdReady);
 const char *miaOtaAppFlashStatusText(OtaAppFlashStatus status);
 OtaAppExportResult miaExportAppSlotToSd(const char *sdPath, bool sdReady);
 const char *miaOtaAppExportStatusText(OtaAppExportStatus status);
+
+/* Manifest helpers */
+OtaAppExportResult miaExportOtaToSd(bool sdReady);
+void miaBootAppSlot();
+bool miaReadOtaManifest(OtaAppManifest *manifest);
+bool miaReadManifestFromFile(const char *sdPath, OtaAppManifest *manifest);

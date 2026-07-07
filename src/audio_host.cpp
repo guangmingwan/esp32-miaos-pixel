@@ -26,8 +26,6 @@ int16_t g_stereoScratch[kScratchFrames * kOutputChannels] = {};
 uint32_t g_writeCallCount = 0;
 
 bool installI2s(uint32_t sampleRate) {
-  Serial.printf("[audio_host] installI2s sr=%u port=%d\n",
-                static_cast<unsigned>(sampleRate), static_cast<int>(kAudioPort));
   const i2s_config_t config = {
       .mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX),
       .sample_rate = sampleRate,
@@ -59,13 +57,11 @@ bool installI2s(uint32_t sampleRate) {
   };
 
   esp_err_t err = i2s_driver_install(kAudioPort, &config, 0, nullptr);
-  Serial.printf("[audio_host] i2s_driver_install => %d\n", static_cast<int>(err));
   if (err != ESP_OK) {
     g_audioStatus.lastError = err;
     return false;
   }
   err = i2s_set_pin(kAudioPort, &pins);
-  Serial.printf("[audio_host] i2s_set_pin => %d\n", static_cast<int>(err));
   if (err != ESP_OK) {
     g_audioStatus.lastError = err;
     i2s_driver_uninstall(kAudioPort);
@@ -104,11 +100,7 @@ const int16_t *expandFrames(const int16_t *samples, uint32_t frameCount,
 }
 
 bool hostAudioOpen(uint32_t sampleRate, uint8_t channels, uint8_t bitsPerSample) {
-  Serial.printf("[audio_host] open sr=%u ch=%u bits=%u already=%d\n",
-                static_cast<unsigned>(sampleRate), channels, bitsPerSample,
-                g_audioStatus.open ? 1 : 0);
   if (sampleRate == 0 || (channels != 1 && channels != 2) || bitsPerSample != 16) {
-    Serial.println("[audio_host] open rejected: invalid args");
     g_audioStatus.lastError = ESP_ERR_INVALID_ARG;
     return false;
   }
@@ -118,7 +110,6 @@ bool hostAudioOpen(uint32_t sampleRate, uint8_t channels, uint8_t bitsPerSample)
   }
 
   if (!installI2s(sampleRate)) {
-    Serial.println("[audio_host] open FAILED at installI2s");
     return false;
   }
 
@@ -128,18 +119,12 @@ bool hostAudioOpen(uint32_t sampleRate, uint8_t channels, uint8_t bitsPerSample)
   g_audioStatus.channels = channels;
   g_audioStatus.bitsPerSample = bitsPerSample;
   g_audioStatus.lastError = ESP_OK;
-  Serial.println("[audio_host] open OK");
   return true;
 }
 
 int32_t hostAudioWritePcm16(const int16_t *samples, uint32_t frameCount,
                             uint8_t channels) {
   ++g_writeCallCount;
-  if (g_writeCallCount <= 3 || g_writeCallCount % 50 == 0) {
-    Serial.printf("[audio_host] write #%lu frames=%u ch=%u\n",
-                  static_cast<unsigned long>(g_writeCallCount),
-                  static_cast<unsigned>(frameCount), channels);
-  }
   if (!g_audioStatus.open || samples == nullptr || frameCount == 0) {
     return -1;
   }
@@ -156,11 +141,6 @@ int32_t hostAudioWritePcm16(const int16_t *samples, uint32_t frameCount,
   size_t bytesWritten = 0;
   const esp_err_t err = i2s_write(kAudioPort, output, bytesToWrite, &bytesWritten,
                                   pdMS_TO_TICKS(250));
-  if (g_writeCallCount <= 3 || err != ESP_OK) {
-    Serial.printf("[audio_host] i2s_write #%lu => %d written=%u\n",
-                  static_cast<unsigned long>(g_writeCallCount), static_cast<int>(err),
-                  static_cast<unsigned>(bytesWritten));
-  }
   if (err != ESP_OK) {
     g_audioStatus.lastError = err;
     return -1;

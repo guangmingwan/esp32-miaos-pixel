@@ -215,6 +215,78 @@ const char *miaOtaAppFlashStatusText(OtaAppFlashStatus status) {
   return "Unknown";
 }
 
+void miaBootAppSlot() {
+  const esp_partition_t *slot = miaFindAppSlot();
+  if (!slot) {
+    launcherTrace("[ota-boot] ota_1 partition not found");
+    return;
+  }
+  launcherTrace("[ota-boot] setting otadata -> ota_1, rebooting");
+  esp_err_t err = miaForceOtaBoot(slot);
+  if (err != ESP_OK) {
+    launcherTracef("[ota-boot] otadata write failed err=0x%x", err);
+  }
+  delay(100);
+  ESP.restart();
+}
+
+bool miaReadOtaManifest(OtaAppManifest *manifest) {
+  if (!manifest) return false;
+
+  const esp_partition_t *slot = miaFindAppSlot();
+  if (!slot) return false;
+
+  esp_partition_pos_t part = {};
+  part.offset = slot->address;
+  part.size = slot->size;
+  esp_image_metadata_t metadata = {};
+  esp_err_t err = esp_image_get_metadata(&part, &metadata);
+  if (err != ESP_OK || metadata.image_len == 0 || metadata.image_len > slot->size) {
+    return false;
+  }
+
+  // Manifest trailer is at offset image_len (after the ESP-IDF image)
+  const size_t trailerOffset = metadata.image_len;
+  if (trailerOffset + MIA_MANIFEST_TRAILER_SIZE > slot->size) {
+    return false;
+  }
+
+  uint8_t buf[MIA_MANIFEST_TRAILER_SIZE];
+  err = esp_partition_read(slot, trailerOffset, buf, sizeof(buf));
+  if (err != ESP_OK) return false;
+
+  memcpy(manifest, buf, sizeof(buf));
+  return miaManifestIsValid(manifest) != 0;
+}
+
+bool miaReadManifestFromFile(const char *sdPath, OtaAppManifest *manifest) {
+  if (!sdPath || !manifest) return false;
+
+  File file = SD.open(sdPath);
+  if (!file) return false;
+
+  const size_t fileSize = file.size();
+  if (fileSize < static_cast<size_t>(MIA_MANIFEST_TRAILER_SIZE)) {
+    file.close();
+    return false;
+  }
+
+  if (!file.seek(fileSize - MIA_MANIFEST_TRAILER_SIZE)) {
+    file.close();
+    return false;
+  }
+
+  uint8_t buf[MIA_MANIFEST_TRAILER_SIZE];
+  if (file.read(buf, sizeof(buf)) != static_cast<int>(sizeof(buf))) {
+    file.close();
+    return false;
+  }
+  file.close();
+
+  memcpy(manifest, buf, sizeof(buf));
+  return miaManifestIsValid(manifest) != 0;
+}
+
 OtaAppExportResult miaExportAppSlotToSd(const char *sdPath, bool sdReady) {
   char vfsPath[192];
   esp_partition_pos_t part = {};
@@ -283,9 +355,70 @@ OtaAppExportResult miaExportAppSlotToSd(const char *sdPath, bool sdReady) {
   }
 
   free(buf);
+
+  OtaAppManifest trailer;
+  if (offset + MIA_MANIFEST_TRAILER_SIZE <= slot->size) {
+    uint8_t trailerBuf[MIA_MANIFEST_TRAILER_SIZE];
+    err = esp_partition_read(slot, offset, trailerBuf, sizeof(trailerBuf));
+    if (err == ESP_OK) {
+      memcpy(&trailer, trailerBuf, sizeof(trailer));
+      if (miaManifestIsValid(&trailer)) {
+        const size_t written = out.write(trailerBuf, sizeof(trailerBuf));
+        if (written == sizeof(trailerBuf)) {
+          offset += written;
+          launcherTracef("[ota-export] manifest trailer included (%u bytes)",
+                         static_cast<unsigned>(written));
+        }
+      }
+    }
+  }
+
   out.close();
   launcherTracef("[ota-export] done bytes=%u -> %s", static_cast<unsigned>(offset), sdPath);
   return {OtaAppExportStatus::Ok, 0, offset};
+}
+
+OtaAppExportResult miaExportOtaToSd(bool sdReady) {
+  if (!sdReady) {
+    return {OtaAppExportStatus::SdUnavailable, 0, 0};
+  }
+
+  OtaAppManifest manifest;
+  if (!miaReadOtaManifest(&manifest)) {
+    launcherTrace("[ota-export-auto] no manifest in ota_1");
+    return {OtaAppExportStatus::ManifestMissing, 0, 0};
+  }
+
+  char category[16];
+  char appName[32];
+  strncpy(category, manifest.category, sizeof(category) - 1);
+  category[sizeof(category) - 1] = '\0';
+  strncpy(appName, manifest.name, sizeof(appName) - 1);
+  appName[sizeof(appName) - 1] = '\0';
+
+  char sdPath[128];
+  const int pathLen = snprintf(sdPath, sizeof(sdPath), "/MiaOS/%s/%s.app/%s.bin",
+                                category, appName, appName);
+  if (pathLen < 0 || static_cast<size_t>(pathLen) >= sizeof(sdPath)) {
+    return {OtaAppExportStatus::InvalidPath, 0, 0};
+  }
+
+  launcherTracef("[ota-export-auto] manifest category=%s name=%s path=%s",
+                 category, appName, sdPath);
+
+  char dirPath[96];
+  const int dirLen = snprintf(dirPath, sizeof(dirPath), "/MiaOS/%s/%s.app",
+                               category, appName);
+  if (dirLen < 0 || static_cast<size_t>(dirLen) >= sizeof(dirPath)) {
+    return {OtaAppExportStatus::InvalidPath, 0, 0};
+  }
+
+  if (!SD.mkdir(dirPath)) {
+    launcherTracef("[ota-export-auto] mkdir failed: %s", dirPath);
+    return {OtaAppExportStatus::MkdirFailed, 0, 0};
+  }
+
+  return miaExportAppSlotToSd(sdPath, sdReady);
 }
 
 const char *miaOtaAppExportStatusText(OtaAppExportStatus status) {
@@ -306,6 +439,10 @@ const char *miaOtaAppExportStatusText(OtaAppExportStatus status) {
       return "Flash read failed";
     case OtaAppExportStatus::WriteFailed:
       return "SD write failed";
+    case OtaAppExportStatus::ManifestMissing:
+      return "No manifest in ota_1";
+    case OtaAppExportStatus::MkdirFailed:
+      return "SD mkdir failed";
   }
   return "Unknown";
 }

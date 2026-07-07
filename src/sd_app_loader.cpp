@@ -20,7 +20,7 @@ static constexpr const char *APP_ROOTS[] = {
 };
 static constexpr char SD_VFS_ROOT[] = "/sd";
 static constexpr char APP_SUFFIX[] = ".app";
-static constexpr char APP_ELF_NAME[] = "firmware.bin";
+static constexpr char APP_FIRMWARE_EXT[] = ".bin";
 static constexpr uint16_t MAX_SCAN_ENTRIES = 128;
 
 static void scanYield() { delay(1); }
@@ -75,11 +75,19 @@ static void copyAppCategory(char *dest, size_t destSize, const char *rootPath) {
 }
 
 static bool formatElfPath(char *path, size_t pathSize, const char *rootPath,
-                          const char *appName) {
+                           const char *appName) {
   const char *name = strrchr(appName, '/');
   name = name == nullptr ? appName : name + 1;
-  const int written = snprintf(path, pathSize, "%s/%s/%s", rootPath, name,
-                               APP_ELF_NAME);
+
+  // Strip .app suffix to get the firmware filename base
+  size_t nameLen = strlen(name);
+  const size_t suffixLen = strlen(APP_SUFFIX);
+  if (nameLen >= suffixLen && strcmp(name + nameLen - suffixLen, APP_SUFFIX) == 0) {
+    nameLen -= suffixLen;
+  }
+
+  const int written = snprintf(path, pathSize, "%s/%s/%.*s%s", rootPath, name,
+                                static_cast<int>(nameLen), name, APP_FIRMWARE_EXT);
   return written >= 0 && static_cast<size_t>(written) < pathSize;
 }
 
@@ -252,9 +260,26 @@ SdAppLoaderResult exportSdAppByPath(const char *path, bool sdReady) {
     case OtaAppExportStatus::NoPartition:
     case OtaAppExportStatus::InvalidImage:
     case OtaAppExportStatus::ReadFailed:
+    case OtaAppExportStatus::ManifestMissing:
+    case OtaAppExportStatus::MkdirFailed:
       return {SdAppLoaderStatus::RunError, 0, result.errorCode};
   }
   return {SdAppLoaderStatus::RunError, 0, result.errorCode};
+}
+
+bool sdManifestMatchesOta(const char *sdPath) {
+  OtaAppManifest sdManifest;
+  if (!miaReadManifestFromFile(sdPath, &sdManifest)) {
+    return false;
+  }
+  OtaAppManifest slotManifest;
+  if (!miaReadOtaManifest(&slotManifest)) {
+    return false;
+  }
+  if (sdManifest.magic != slotManifest.magic) return false;
+  if (memcmp(sdManifest.category, slotManifest.category, MIA_MANIFEST_CATEGORY_SIZE) != 0) return false;
+  if (memcmp(sdManifest.name, slotManifest.name, MIA_MANIFEST_NAME_SIZE) != 0) return false;
+  return sdManifest.crc == slotManifest.crc;
 }
 
 const char *sdAppLoaderStatusText(SdAppLoaderStatus status) {
