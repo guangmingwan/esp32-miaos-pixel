@@ -12,11 +12,7 @@ idf_component_register(
     "lava_native_display.cpp"
     "rtc_clock.cpp"
     "audio_host.cpp"
-    "mia_elf_runner.cpp"
-    "mia_host_abi.cpp"
-    "mia_host_abi_audio.cpp"
-    "mia_host_abi_system.cpp"
-    "mia_host_abi_network.cpp"
+    "ota_app_flash.cpp"
     "launcher_log.cpp"
     "serial_file_service.cpp"
     "sd_app_loader.cpp"
@@ -25,5 +21,5 @@ idf_component_register(
     "wifi_file_paths.cpp"
     ${APP_SOURCES}
   INCLUDE_DIRS "../include"
-  REQUIRES framework-arduinoespressif32 elf_loader
+  REQUIRES framework-arduinoespressif32
 )
