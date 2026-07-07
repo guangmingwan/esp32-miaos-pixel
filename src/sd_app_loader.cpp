@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 
 #include "launcher_log.h"
-#include "mia_elf_runner.h"
+#include "ota_app_flash.h"
 
 static constexpr const char *APP_ROOTS[] = {
     "/MiaOS/Games",
@@ -20,7 +20,7 @@ static constexpr const char *APP_ROOTS[] = {
 };
 static constexpr char SD_VFS_ROOT[] = "/sd";
 static constexpr char APP_SUFFIX[] = ".app";
-static constexpr char APP_ELF_NAME[] = "app.elf";
+static constexpr char APP_ELF_NAME[] = "firmware.bin";
 static constexpr uint16_t MAX_SCAN_ENTRIES = 128;
 
 static void scanYield() { delay(1); }
@@ -211,17 +211,47 @@ SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
 SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady) {
   launcherTracef("[sd-run] path='%s' sdReady=%d", path == nullptr ? "<null>" : path,
                  sdReady ? 1 : 0);
-  MiaElfRunResult result = miaRunElfApp(path, sdReady);
-  launcherTracef("[sd-run] result status=%s code=%d", miaElfRunStatusText(result.status),
-                 result.errorCode);
+  OtaAppFlashResult result = miaFlashAppToSlot(path, sdReady);
+  launcherTracef("[sd-run] result status=%s code=%d",
+                 miaOtaAppFlashStatusText(result.status), result.errorCode);
   switch (result.status) {
-    case MiaElfRunStatus::Ok:
+    case OtaAppFlashStatus::Ok:
       return {SdAppLoaderStatus::Ok, 1, result.errorCode};
-    case MiaElfRunStatus::SdUnavailable:
+    case OtaAppFlashStatus::SdUnavailable:
       return {SdAppLoaderStatus::SdUnavailable, 0, result.errorCode};
-    case MiaElfRunStatus::ReadError:
+    case OtaAppFlashStatus::InvalidPath:
+    case OtaAppFlashStatus::OpenFailed:
+    case OtaAppFlashStatus::EmptyFile:
+    case OtaAppFlashStatus::TooLarge:
+    case OtaAppFlashStatus::ReadFailed:
       return {SdAppLoaderStatus::ReadError, 0, result.errorCode};
-    case MiaElfRunStatus::RunError:
+    case OtaAppFlashStatus::NoPartition:
+    case OtaAppFlashStatus::EraseFailed:
+    case OtaAppFlashStatus::WriteFailed:
+    case OtaAppFlashStatus::AllocFailed:
+    case OtaAppFlashStatus::OtaDataFailed:
+      return {SdAppLoaderStatus::RunError, 0, result.errorCode};
+  }
+  return {SdAppLoaderStatus::RunError, 0, result.errorCode};
+}
+
+SdAppLoaderResult exportSdAppByPath(const char *path, bool sdReady) {
+  OtaAppExportResult result = miaExportAppSlotToSd(path, sdReady);
+  launcherTracef("[sd-export] path='%s' status=%s code=%d",
+                 path == nullptr ? "<null>" : path,
+                 miaOtaAppExportStatusText(result.status), result.errorCode);
+  switch (result.status) {
+    case OtaAppExportStatus::Ok:
+      return {SdAppLoaderStatus::Ok, 1, result.errorCode};
+    case OtaAppExportStatus::SdUnavailable:
+      return {SdAppLoaderStatus::SdUnavailable, 0, result.errorCode};
+    case OtaAppExportStatus::InvalidPath:
+    case OtaAppExportStatus::OpenFailed:
+    case OtaAppExportStatus::WriteFailed:
+      return {SdAppLoaderStatus::ReadError, 0, result.errorCode};
+    case OtaAppExportStatus::NoPartition:
+    case OtaAppExportStatus::InvalidImage:
+    case OtaAppExportStatus::ReadFailed:
       return {SdAppLoaderStatus::RunError, 0, result.errorCode};
   }
   return {SdAppLoaderStatus::RunError, 0, result.errorCode};

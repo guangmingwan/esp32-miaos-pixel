@@ -25,4 +25,5 @@ struct SdAppLoaderResult {
 SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
                               bool sdReady);
 SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady);
+SdAppLoaderResult exportSdAppByPath(const char *path, bool sdReady);
 const char *sdAppLoaderStatusText(SdAppLoaderStatus status);
