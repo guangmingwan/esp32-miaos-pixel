@@ -35,6 +35,11 @@
 
 SPIClass tftSpi(FSPI);
 
+enum class SdAppAction : uint8_t {
+  DownloadAndRun = 0,
+  UploadToSd = 1,
+};
+
 // Helper to set SD mountpoint after ESP-IDF VFS mount
 struct SDFSAccess : public fs::SDFS {
   void setMountPt(const char *mp) { _impl->mountpoint(mp); }
@@ -67,6 +72,11 @@ static constexpr uint8_t BUTTON_INDEX_R = 4;
 static constexpr uint8_t SYSTEM_TAB_INDEX = 0;
 static uint8_t g_selectedTab = SYSTEM_TAB_INDEX;
 static bool g_bootLoaderHintVisible = false;
+static bool g_sdActionMenuVisible = false;
+static uint8_t g_sdActionMenuSelection = 0;
+
+static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex);
+static void drawLauncher();
 
 static const LauncherApp *const BUILTIN_APPS[] = {
     &serialTransferApp(),
@@ -76,84 +86,33 @@ static const LauncherApp *const BUILTIN_APPS[] = {
 };
 static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]);
 
-static constexpr uint8_t USB_DISK_MENU_INDEX = BUILTIN_APP_COUNT;
-static constexpr uint8_t BOOTLOADER_MENU_INDEX = BUILTIN_APP_COUNT + 1;
-static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 2;
+static constexpr uint8_t BOOTLOADER_MENU_INDEX = BUILTIN_APP_COUNT;
+static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 1;
 static constexpr uint8_t SYSTEM_ITEM_COUNT = TOTAL_LAUNCHER_ITEMS_FIXED;
-
-static const esp_partition_t *findOtaPartition() {
-  return esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
-                                  ESP_PARTITION_SUBTYPE_DATA_OTA, NULL);
-}
-
-// Manual OTA boot partition set — bypasses esp_image_verify inside
-// esp_ota_set_boot_partition which was triggering TG1 WDT on ESP32-S3
-static esp_err_t forceOtaBoot(const esp_partition_t *target) {
-  const esp_partition_t *otap = findOtaPartition();
-  if (!otap || !target) return ESP_ERR_NOT_FOUND;
-
-  // Build entry matching esp_ota_select_entry_t from bootloader:
-  //   ota_seq(4) + seq_label[20](20) + ota_state(4) + crc(4) = 32 bytes
-  // CRC = esp_rom_crc32_le(UINT32_MAX, &ota_seq, 4)
-  typedef struct __attribute__((packed)) {
-    uint32_t ota_seq;
-    uint8_t  seq_label[20];
-    uint32_t ota_state;
-    uint32_t crc;
-  } OtaEntry;
-
-  uint8_t slot = target->subtype - ESP_PARTITION_SUBTYPE_APP_OTA_MIN;
-  uint8_t ota_app_count = 2; // ota_0 and ota_1
-
-  auto setEntry = [](OtaEntry *e, uint32_t seq, uint32_t state) {
-    memset(e, 0, sizeof(OtaEntry));
-    e->ota_seq = seq;
-    e->ota_state = state;
-    e->crc = esp_rom_crc32_le(UINT32_MAX, (uint8_t *)&e->ota_seq, 4);
-  };
-
-  // ota_slot = (seq - 1) % ota_app_count (2 slots: ota_0, ota_1)
-  // For slot=1 (ota_1): need seq ≡ 2 mod 2 → 2, 4, 6...
-  // Bootloader picks highest seq, so write seq=2 in sector 0, seq=4 in sector 1
-  OtaEntry entries[2];
-  setEntry(&entries[0], /*seq=*/slot + 1,               /*state=*/ESP_OTA_IMG_VALID);
-  setEntry(&entries[1], /*seq=*/slot + 1 + ota_app_count, /*state=*/ESP_OTA_IMG_VALID); // higher seq = active
-
-  esp_err_t err = esp_partition_erase_range(otap, 0, otap->size);
-  if (err != ESP_OK) return err;
-
-  err = esp_partition_write(otap, 0,      &entries[0], sizeof(OtaEntry));
-  if (err != ESP_OK) return err;
-  err = esp_partition_write(otap, 4096,   &entries[1], sizeof(OtaEntry));
-  return err;
-}
-
-static void rebootToUsbDisk() {
-  const esp_partition_t *ota1 = esp_partition_find_first(
-      ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
-  if (!ota1) {
-    launcherTrace("[usb-disk] ota_1 partition NOT FOUND");
-    delay(1000);
-    return;
-  }
-  launcherTracef("[usb-disk] ota_1 at 0x%08x", (unsigned)ota1->address);
-
-  esp_err_t err = forceOtaBoot(ota1);
-  launcherTracef("[usb-disk] force_boot => %s", esp_err_to_name(err));
-  if (err != ESP_OK) {
-    delay(2000);
-    return;
-  }
-
-  launcherTrace("[usb-disk] rebooting now");
-  Serial.flush();
-  delay(100);
-  ESP.restart();
-}
 
 static void showBootloaderInstructions() {
   launcherTrace("[boot-loader] showing manual entry instructions");
   g_bootLoaderHintVisible = true;
+}
+
+static void openSdActionMenu() {
+  if (g_selectedTab == SYSTEM_TAB_INDEX) {
+    return;
+  }
+  if (selectedSdApp(g_selectedApp) == nullptr) {
+    return;
+  }
+  launcherTrace("[sd-menu] open");
+  g_sdActionMenuVisible = true;
+  g_sdActionMenuSelection = 0;
+}
+
+static void closeSdActionMenu() {
+  if (!g_sdActionMenuVisible) {
+    return;
+  }
+  launcherTrace("[sd-menu] close");
+  g_sdActionMenuVisible = false;
 }
 
 enum LavaPalette : uint8_t {
@@ -166,6 +125,7 @@ enum LavaPalette : uint8_t {
   LAVA_CYAN = 6,
   LAVA_GRAY = 7,
   LAVA_DARK_BLUE = 8,
+  LAVA_LIGHT_GRAY = 15,
 };
 
 static constexpr uint8_t LOADING_BITMAP_H = 22;
@@ -624,12 +584,9 @@ static void drawLauncher() {
     const int16_t y = 64 + (i - firstApp) * 18;
     const bool selected = i == g_selectedApp;
     const bool sdApp = g_selectedTab != SYSTEM_TAB_INDEX;
-    const bool isUsbDisk = g_selectedTab == SYSTEM_TAB_INDEX && i == USB_DISK_MENU_INDEX;
     const bool isBootloader = g_selectedTab == SYSTEM_TAB_INDEX && i == BOOTLOADER_MENU_INDEX;
     const char *name;
-    if (isUsbDisk) {
-      name = "USB Disk";
-    } else if (isBootloader) {
+    if (isBootloader) {
       name = "Boot Loader";
     } else if (sdApp) {
       const SdAppManifestSummary *app = selectedSdApp(i);
@@ -675,18 +632,55 @@ static void drawLauncher() {
     lavaDrawText(86, 198, "A/B:Back", LAVA_YELLOW, LAVA_DARK_BLUE);
     launcherRenderYield();
   }
+
+  if (g_sdActionMenuVisible) {
+    static constexpr const char *MENU_ITEMS[] = {
+        "Download and run",
+        "Upload to SD",
+    };
+    const SdAppManifestSummary *app = selectedSdApp(g_selectedApp);
+    lavaFillRect(26, 52, 268, 136, LAVA_GRAY);
+    lavaFillRect(28, 54, 264, 132, LAVA_LIGHT_GRAY);
+    lavaFillRect(28, 54, 264, 20, LAVA_YELLOW);
+    lavaDrawText(34, 60, app == nullptr ? "SD App" : app->name, LAVA_BLACK, LAVA_YELLOW);
+    for (uint8_t i = 0; i < 2; ++i) {
+      const bool selected = i == g_sdActionMenuSelection;
+      const uint8_t bg = selected ? LAVA_BLUE : LAVA_LIGHT_GRAY;
+      const uint8_t fg = selected ? LAVA_YELLOW : LAVA_BLACK;
+      lavaFillRect(40, 88 + i * 22, 240, 16, bg);
+      lavaDrawText(52, 92 + i * 22, MENU_ITEMS[i], fg, bg);
+    }
+    lavaDrawText(52, 148, "A:Confirm  B/SEL:Back", LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
+    launcherRenderYield();
+  }
   launcherRenderYield();
   lavaPresent();
   launcherRenderYield();
 }
 
-static void enterSelectedApp() {
-  if (g_selectedApp >= totalLauncherItems()) {
+static void runSelectedSdAction() {
+  const SdAppManifestSummary *app = selectedSdApp(g_selectedApp);
+  if (app == nullptr) {
+    closeSdActionMenu();
     return;
   }
 
-  if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == USB_DISK_MENU_INDEX) {
-    rebootToUsbDisk();
+  if (g_sdActionMenuSelection == static_cast<uint8_t>(SdAppAction::DownloadAndRun)) {
+    g_lastSdRun = runSdAppByPath(app->path, g_context.sdReady);
+    launcherLogRecordSdRun(*app, g_lastSdRun);
+    return;
+  }
+
+  if (g_sdActionMenuSelection == static_cast<uint8_t>(SdAppAction::UploadToSd)) {
+    g_lastSdRun = exportSdAppByPath(app->path, g_context.sdReady);
+    launcherLogRecordSdRun(*app, g_lastSdRun);
+  }
+  closeSdActionMenu();
+  drawLauncher();
+}
+
+static void enterSelectedApp() {
+  if (g_selectedApp >= totalLauncherItems()) {
     return;
   }
 
@@ -731,6 +725,29 @@ static void tickLauncher(uint32_t nowMs) {
     return;
   }
 
+  if (g_sdActionMenuVisible) {
+    if (g_context.buttons[2].pressed && g_sdActionMenuSelection > 0) {
+      --g_sdActionMenuSelection;
+      drawLauncher();
+      return;
+    }
+    if (g_context.buttons[3].pressed && g_sdActionMenuSelection < 1) {
+      ++g_sdActionMenuSelection;
+      drawLauncher();
+      return;
+    }
+    if (g_context.buttons[0].pressed) {
+      runSelectedSdAction();
+      return;
+    }
+    if (g_context.buttons[1].pressed || g_allButtons[BUTTON_INDEX_SELECT].pressed || systemExitPressed()) {
+      closeSdActionMenu();
+      drawLauncher();
+      return;
+    }
+    return;
+  }
+
   if (g_allButtons[BUTTON_INDEX_LEFT].pressed) {
     switchLauncherTab(-1);
     drawLauncher();
@@ -752,6 +769,11 @@ static void tickLauncher(uint32_t nowMs) {
   }
   if (g_context.buttons[0].pressed) {
     enterSelectedApp();
+    return;
+  }
+  if (g_allButtons[BUTTON_INDEX_SELECT].pressed && g_selectedTab != SYSTEM_TAB_INDEX) {
+    openSdActionMenu();
+    drawLauncher();
     return;
   }
 
