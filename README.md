@@ -31,8 +31,8 @@ Detected with `esptool v5.3.1` on Windows `COM10` (`TinyUSB CDC`, USB VID:PID
 ## Launcher Model
 
 The launcher uses one firmware image with built-in apps linked at compile time.
-It can also discover native ELF apps on the SD card and run them in the same
-firmware address space through the ESP-IDF `elf_loader` component.
+It can also discover OTA partition apps on the SD card and flash them to the
+`ota_1` partition, then reboot into the selected app.
 
 - `A` starts the selected app.
 - `B` exits the active app and returns to the launcher.
@@ -82,89 +82,83 @@ WinSCP.
 Use passive mode (`PASV`) in the FTP client. The app is intended for direct,
 temporary access while you are connected to the device hotspot.
 
-## SD ELF Apps
+## SD OTA Apps
 
-`include/sd_app_loader.h` discovers native ELF apps on the already-mounted
+`include/sd_app_loader.h` discovers OTA partition apps on the already-mounted
 Arduino SD card without remounting it. Apps are listed from category folders at
 the SD root plus the legacy MiaOS path:
 
 ```text
-/Games/*.app/app.elf
-/Utils/*.app/app.elf
-/Settings/*.app/app.elf
-/Emulators/*.app/app.elf
-/Media/*.app/app.elf
-/Application/*.app/app.elf
-/MiaOS/Games/*.app/app.elf
-/MiaOS/Utils/*.app/app.elf
-/MiaOS/Settings/*.app/app.elf
-/MiaOS/Emulators/*.app/app.elf
-/MiaOS/Media/*.app/app.elf
-/MiaOS/Application/*.app/app.elf
+/Games/*.app/<name>.bin
+/Utils/*.app/<name>.bin
+/Settings/*.app/<name>.bin
+/Emulators/*.app/<name>.bin
+/Media/*.app/<name>.bin
+/Application/*.app/<name>.bin
+/MiaOS/Games/*.app/<name>.bin
+/MiaOS/Utils/*.app/<name>.bin
+/MiaOS/Settings/*.app/<name>.bin
+/MiaOS/Emulators/*.app/<name>.bin
+/MiaOS/Media/*.app/<name>.bin
+/MiaOS/Application/*.app/<name>.bin
 ```
 
-Selecting an SD app calls the runner API in `include/mia_elf_runner.h`, which
-loads the ELF bytes through Arduino `SD.open()`, registers the experimental host
-ABI symbols from `include/mia_host_abi.h`, and runs the app when the ESP-IDF
-`elf_loader` component is available. The current host ABI is version 2. For
-button input, apps must call `mia_host_buttons_poll()` once per logical loop,
-then read cached state through `mia_host_button_down()`,
-`mia_host_button_pressed()`, or `mia_host_button_released()`. Do not poll more
-than once per loop before all input decisions are made; doing so can advance the
-pressed/released edges before later handlers consume them. ABI v1 apps must be
-rebuilt against the matching v2 host header.
+Where `<name>` matches the directory name without the `.app` suffix.
+For example, `calculator.app/calculator.bin`, `minesweeper.app/minesweeper.bin`.
 
-The ABI includes:
+Selecting an SD app calls `runSdAppByPath()`, which reads the firmware binary
+from the SD card, flashes it to the `ota_1` partition using the OTA app flash
+helpers (`include/ota_app_flash.h`), sets the OTA boot data, and reboots into
+the flashed app.
 
-```c
-uint32_t mia_host_abi_version(void);
-void mia_host_log(const char *message);
-void mia_host_buttons_poll(void);
-uint8_t mia_host_button_down(uint8_t button);
-uint8_t mia_host_button_pressed(uint8_t button);
-uint8_t mia_host_button_released(uint8_t button);
-```
+On returning to the launcher (by re-flashing the launcher to `ota_0`), the
+action menu also supports "Upload to SD": exporting the current `ota_1` content
+back to the SD card as a firmware binary.
 
-Build the sample app and copy it to the SD card as `app.elf`:
+Build each OTA app as a standalone ESP-IDF project and copy its binary to the SD
+card with the app name:
 
 ```sh
-pio run -d experiments/elf_apps/hello
+idf.py build -C experiments/ota_apps/hello
+python tools/append_manifest.py \
+    --input experiments/ota_apps/hello/build/hello.bin \
+    --category Application --name hello
 ```
 
 Generated artifact:
 
 ```text
-experiments/elf_apps/hello/.pio/build/esp32s3/app.elf
+experiments/ota_apps/hello/build/hello.bin  (with manifest appended)
 ```
 
 SD card target path:
 
 ```text
-/MiaOS/Application/hello.app/app.elf
+/MiaOS/Application/hello.app/hello.bin
 ```
 
-Expected SD card layout for the apps now shipped as SD ELF apps:
+Expected SD card layout for the OTA apps:
 
 ```text
 SD card root/
 ├── Emulators/
 ├── Games/
-│   └── minesweeper.app/app.elf
+│   └── minesweeper.app/minesweeper.bin
 ├── Media/
 ├── Settings/
-│   ├── diagnostic.app/app.elf
-│   ├── rtc_set.app/app.elf
-│   └── wifi_scan.app/app.elf
+│   ├── diagnostic.app/diagnostic.bin
+│   ├── rtc_set.app/rtc_set.bin
+│   └── wifi_scan.app/wifi_scan.bin
 ├── Utils/
-│   ├── calculator.app/app.elf
-│   ├── flashlight.app/app.elf
-│   ├── ftp_server.app/app.elf
-│   ├── screen_test.app/app.elf
-│   ├── sd_browser.app/app.elf
-│   ├── timer.app/app.elf
-│   └── wifi_files.app/app.elf
+│   ├── calculator.app/calculator.bin
+│   ├── flashlight.app/flashlight.bin
+│   ├── ftp_server.app/ftp_server.bin
+│   ├── screen_test.app/screen_test.bin
+│   ├── sd_browser.app/sd_browser.bin
+│   ├── timer.app/timer.bin
+│   └── wifi_files.app/wifi_files.bin
 └── Application/
-    └── hello.app/app.elf
+    └── hello.app/hello.bin
 ```
 
 On the launcher, use `LEFT` / `RIGHT` to switch tabs. `Boot Loader` now shows a
@@ -173,10 +167,10 @@ press `RESET` to enter the boot loader, and press `RESET` alone to boot normally
 
 The `Logs` entry in the `System` tab reads `/MiaOS/logs/latest.log` from the SD
 card. The launcher overwrites this file on startup and records the current boot
-summary plus the most recent SD ELF launch result and error code. The file also
-includes launcher-owned serial traces from startup, SD scanning, USB Disk, and
-ELF loader execution; it does not automatically capture every third-party library
-message written directly to `Serial`.
+summary plus the most recent SD OTA app launch result and error code. The file
+also includes launcher-owned serial traces from startup, SD scanning, USB Disk,
+and OTA app flash execution; it does not automatically capture every third-party
+library message written directly to `Serial`.
 
 ## Serial File Transfer
 
@@ -232,6 +226,92 @@ Copy each generated `.pio/build/esp32s3/app.elf` to the matching SD directory:
 
 ELF apps are not sandboxed. A bad or incompatible ELF can crash or corrupt the
 launcher. Keep the ABI versioned and rebuild apps against the matching host ABI.
+
+---
+
+## 开发者备忘录 — OTA App Manifest 与命名规则
+
+本文档记录 OTA app 的 manifest 机制、SD 卡固件命名规则、以及 launcher 的运行/导出优化逻辑。
+
+### 1. Manifest 尾随数据（Trailer）格式
+
+每个 OTA app 的 firmware binary 尾部附加一个 56 字节的 `OtaAppManifest` 结构：
+
+| 偏移 | 大小 | 字段 | 说明 |
+|------|------|------|------|
+| 0 | 4 | `magic` | `0x3141494D`（ASCII `"MIA1"`） |
+| 4 | 16 | `category` | 分类，例如 `"Utils"`，不足用 `\0` 填充 |
+| 20 | 32 | `name` | 名称，例如 `"calculator"`，不足用 `\0` 填充 |
+| 52 | 4 | `crc` | CRC32(magic + category + name) |
+
+该 trailer 位于 ESP-IDF 有效 image 之后。ESP-IDF bootloader 只读 `image_len` 字节，不会访问 trailer，因此对正常启动和 OTA 更新无影响。
+
+定义见 `include/ota_app_manifest.h`。
+
+### 2. 固件文件命名规则
+
+SD 卡上每个 app 目录的固件文件从 `firmware.bin` 改为 `<appname>.bin`：
+
+- 目录名：`<name>.app`（不变）
+- 固件文件：`<name>.bin`（例如 `calculator.app/calculator.bin`）
+- Launcher 扫描时自动从目录名剥离 `.app` 后缀作为文件名
+
+### 3. 构建 OTA App 并附加 Manifest
+
+```sh
+# 1. 正常构建
+idf.py build -C experiments/ota_apps/calculator
+
+# 2. 附加 manifest
+python tools/append_manifest.py \
+    --input experiments/ota_apps/calculator/build/calculator.bin \
+    --category Utils --name calculator
+
+# 3. 复制到 SD 卡
+cp experiments/ota_apps/calculator/build/calculator.bin \
+   /sd/Utils/calculator.app/calculator.bin
+```
+
+分类值对照：
+- `Utils` — calculator, flashlight, ftp_server, screen_test, sd_browser, timer, wifi_files
+- `Settings` — diagnostic, rtc_set, wifi_scan
+- `Games` — minesweeper
+- `Application` — hello
+- `Media` — music
+
+### 4. Launcher 运行优化（Manifest 比对）
+
+当用户在 SD app 上按 A 选择 "Download and run" 时：
+
+1. 读取 SD 卡上 `<appname>.bin` 尾部的 manifest
+2. 读取 `ota_1` 分区 `image_len` 偏移处的 manifest
+3. 如果两者都存在且 `category + name + crc` 完全一致，跳过 flash 阶段
+4. 直接调用 `miaBootAppSlot()`：写入 otadata → reboot
+
+此优化使相同 app 的重复启动时间从 ~5 秒（擦除 + flash）降至 ~0.5 秒。
+
+实现见 `src/main.cpp` 中 `enterSelectedApp()` 的 `sdManifestMatchesOta()` 分支。
+
+### 5. Export OTA to SD（System 标签）
+
+在 System 标签页新增 "Export OTA to SD" 系统项：
+
+1. 读取 `ota_1` 分区的 manifest trailer
+2. 自动构造路径 `/MiaOS/<category>/<name>.app/<name>.bin`
+3. 自动创建目录并写入固件（含 manifest trailer）
+4. 如果 `ota_1` 没有 manifest（旧格式），返回错误
+
+此功能解决"直接 flash ota_1 后 SD 卡上没有 app 文件"的循环依赖问题。
+
+### 6. 导出/导入 Manifest 保留
+
+- **SD → ota_1**（Download and run）：`miaFlashAppToSlot()` 直接按字节写入，manifest trailer 自动保留
+- **ota_1 → SD**（Upload to SD / Export OTA）：`miaExportAppSlotToSd()` 在写完 `image_len` 字节后检查 trailer 并追加写入，确保 round-trip 不丢失 manifest
+
+### 7. 兼容性
+
+- 旧版 `firmware.bin`（无 manifest trailer）：launcher 仍可运行和导出，但不支持优化跳过 flash
+- 旧版 `*.app/firmware.bin` 目录：launcher 扫描 `calculator.app/` 时只找 `calculator.bin`，旧 `firmware.bin` 不会被识别。需要按新命名复制一份或重命名。
 
 ## Hardware
 

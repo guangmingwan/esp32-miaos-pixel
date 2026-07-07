@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "wifi_files_main.c"
+        "../../common_host/host_platform.cpp"
+        "../../common_host/display_host.cpp"
+    PRIV_REQUIRES
+        esp_http_server
+    INCLUDE_DIRS
+        "."
+        "../../common_host"
+        "../../../../include"
+)
