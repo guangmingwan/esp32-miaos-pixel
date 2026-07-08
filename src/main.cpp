@@ -24,12 +24,13 @@
 #include "app.h"
 #include "apps/about_app.h"
 #include "apps/log_viewer_app.h"
-#include "apps/psram_test_app.h"
 #include "apps/serial_transfer_app.h"
 #include "launcher_log.h"
 #include "ota_app_flash.h"
 #include "lcd_ili9342.h"
+#include "lava_text.h"
 #include "lava_native_display.h"
+#include "mia_i18n.h"
 #include "pins.h"
 #include "rtc_clock.h"
 #include "sd_app_loader.h"
@@ -80,21 +81,32 @@ static bool g_otaExportConfirmVisible = false;
 static bool g_otaExportResultVisible = false;
 static OtaAppManifest g_otaExportManifest = {};
 static bool g_otaExportSuccess = false;
+static bool g_fontRestartPromptVisible = false;
+static LavaFontFace g_pendingFontFace = LavaFontFace::Basic8;
 
 static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex);
+static inline void launcherRenderYield();
+static const char *sdScanStatusText();
+static const char *launcherTabName(uint8_t tabIndex);
 static void drawLauncher();
+
+static bool needsSafeLauncherFont(LavaFontFace face) {
+  return miaLanguage() == MiaLanguage::Chinese && face != LavaFontFace::DroidGbk12 &&
+         face != LavaFontFace::Small5x7;
+}
 
 static const LauncherApp *const BUILTIN_APPS[] = {
     &serialTransferApp(),
     &logViewerApp(),
-    &psramTestApp(),
     &aboutApp(),
 };
 static constexpr uint8_t BUILTIN_APP_COUNT = sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]);
 
-static constexpr uint8_t BOOTLOADER_MENU_INDEX = BUILTIN_APP_COUNT;
-static constexpr uint8_t EXPORT_OTA_MENU_INDEX = BUILTIN_APP_COUNT + 1;
-static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 2;
+static constexpr uint8_t LANGUAGE_MENU_INDEX = BUILTIN_APP_COUNT;
+static constexpr uint8_t FONT_MENU_INDEX = BUILTIN_APP_COUNT + 1;
+static constexpr uint8_t BOOTLOADER_MENU_INDEX = BUILTIN_APP_COUNT + 2;
+static constexpr uint8_t EXPORT_OTA_MENU_INDEX = BUILTIN_APP_COUNT + 3;
+static constexpr uint8_t TOTAL_LAUNCHER_ITEMS_FIXED = BUILTIN_APP_COUNT + 4;
 static constexpr uint8_t SYSTEM_ITEM_COUNT = TOTAL_LAUNCHER_ITEMS_FIXED;
 
 static void showBootloaderInstructions() {
@@ -205,7 +217,7 @@ static void drawLoadingBitmap(int16_t x, int16_t y, const uint8_t *bitmap, uint8
 static void drawSdAppLoadingMessage() {
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(6, 6, "MiaOS Launcher", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(6, 2, miaTr("MiaOS Launcher"), LAVA_BLACK, LAVA_YELLOW);
 
   const int16_t line1X = (LAVA_SCREEN_W - LOADING_LINE1_W) / 2;
   const int16_t line2X = (LAVA_SCREEN_W - LOADING_LINE2_W) / 2;
@@ -387,17 +399,17 @@ static void updateBeep() {
 static const char *sdScanStatusText() {
   switch (g_sdScan.status) {
     case SdAppLoaderStatus::Ok:
-      return "SD card:ready";
+      return miaTr("SD card:ready");
     case SdAppLoaderStatus::SdUnavailable:
-      return "SD card:unavailable";
+      return miaTr("SD card:unavailable");
     case SdAppLoaderStatus::NoAppsFound:
-      return "SD card:no apps";
+      return miaTr("SD card:no apps");
     case SdAppLoaderStatus::ReadError:
-      return "SD card:read error";
+      return miaTr("SD card:read error");
     case SdAppLoaderStatus::RunError:
-      return "SD card:run error";
+      return miaTr("SD card:run error");
   }
-  return "SD card:unknown";
+  return miaTr("SD card:unknown");
 }
 
 static bool sameSdCategory(const char *lhs, const char *rhs) {
@@ -428,7 +440,7 @@ static uint8_t launcherTabCount() {
 
 static const char *launcherTabName(uint8_t tabIndex) {
   if (tabIndex == SYSTEM_TAB_INDEX) {
-    return "System";
+    return miaTr("System");
   }
 
   const uint8_t sdTabIndex = tabIndex - 1;
@@ -526,10 +538,10 @@ static void drawLauncherClock() {
              rtcWeekdayShortName(rtcNow.weekday), rtcNow.year, rtcNow.month,
              rtcNow.day, rtcNow.hour, rtcNow.minute, rtcNow.second);
   } else {
-    snprintf(clockText, sizeof(clockText), "RTC unavailable");
+    snprintf(clockText, sizeof(clockText), "%s", miaTr("RTC unavailable"));
   }
-  const int16_t textX = LAVA_SCREEN_W - 6 - static_cast<int16_t>(strlen(clockText) * 6);
-  lavaDrawText(textX, 6, clockText, LAVA_BLACK, LAVA_YELLOW);
+  const int16_t textX = LAVA_SCREEN_W - 6 - lavaTextWidth(clockText);
+  lavaDrawText(textX, 2, clockText, LAVA_BLACK, LAVA_YELLOW);
 }
 
 extern "C" void esp32_task_wdt_reset(void) {
@@ -551,7 +563,7 @@ static void drawLauncher() {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(6, 6, "MiaOS Launcher", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(6, 2, miaTr("MiaOS Launcher"), LAVA_BLACK, LAVA_YELLOW);
   drawLauncherClock();
   launcherRenderYield();
   if (g_launcherNeedsInitialRender) {
@@ -563,21 +575,22 @@ static void drawLauncher() {
   int16_t tabX = 8;
   const uint8_t tabCount = launcherTabCount();
   for (uint8_t tab = 0; tab < tabCount; ++tab) {
-    const char *tabName = launcherTabName(tab);
-    if (tabName == nullptr) {
+    const char *tabNameKey = launcherTabName(tab);
+    if (tabNameKey == nullptr) {
       continue;
     }
+    const char *tabName = miaTr(tabNameKey);
     const uint8_t bg = tab == g_selectedTab ? LAVA_BLUE : LAVA_BLACK;
     const uint8_t fg = tab == g_selectedTab ? LAVA_YELLOW : LAVA_GRAY;
-    const int16_t tabWidth = static_cast<int16_t>(strlen(tabName) * 6 + 12);
-    lavaFillRect(tabX, 28, tabWidth, 16, bg);
-    lavaDrawText(tabX + 6, 33, tabName, fg, bg);
+    const int16_t tabWidth = static_cast<int16_t>(lavaTextWidth(tabName) + 12);
+    lavaFillRect(tabX, 28, tabWidth, 20, bg);
+    lavaDrawText(tabX + 6, 30, tabName, fg, bg);
     tabX += tabWidth + 4;
     launcherRenderYield();
   }
   launcherRenderYield();
 
-  const uint8_t maxVisibleApps = 8;
+  const uint8_t maxVisibleApps = 7;
   uint8_t firstApp = 0;
   const uint8_t itemCount = totalLauncherItems();
   if (itemCount > maxVisibleApps && g_selectedApp >= maxVisibleApps) {
@@ -588,27 +601,39 @@ static void drawLauncher() {
     visibleEnd = min<uint8_t>(visibleEnd, firstApp + INITIAL_DRAW_ITEM_LIMIT);
   }
   for (uint8_t i = firstApp; i < visibleEnd; ++i) {
-    const int16_t y = 64 + (i - firstApp) * 18;
+    const int16_t y = 62 + (i - firstApp) * 20;
     const bool selected = i == g_selectedApp;
     const bool sdApp = g_selectedTab != SYSTEM_TAB_INDEX;
+    const bool isLanguage = g_selectedTab == SYSTEM_TAB_INDEX && i == LANGUAGE_MENU_INDEX;
+    const bool isFont = g_selectedTab == SYSTEM_TAB_INDEX && i == FONT_MENU_INDEX;
     const bool isBootloader = g_selectedTab == SYSTEM_TAB_INDEX && i == BOOTLOADER_MENU_INDEX;
     const bool isExportOta = g_selectedTab == SYSTEM_TAB_INDEX && i == EXPORT_OTA_MENU_INDEX;
     const char *name;
-    if (isBootloader) {
-      name = "Boot Loader";
+    char languageLine[48];
+    char fontLine[48];
+    if (isLanguage) {
+      snprintf(languageLine, sizeof(languageLine), "%s: %s", miaTr("Language"),
+               miaLanguageName(miaLanguage()));
+      name = languageLine;
+    } else if (isFont) {
+      snprintf(fontLine, sizeof(fontLine), "%s: %s", miaTr("Font"),
+               lavaFontName(lavaFontFace()));
+      name = fontLine;
+    } else if (isBootloader) {
+      name = miaTr("Boot Loader");
     } else if (isExportOta) {
-      name = "Export OTA to SD";
+      name = miaTr("Export OTA to SD");
     } else if (sdApp) {
       const SdAppManifestSummary *app = selectedSdApp(i);
-      name = app == nullptr ? "<missing>" : app->name;
+      name = app == nullptr ? miaTr("<missing>") : miaTr(app->name);
     } else {
-      name = BUILTIN_APPS[i]->name;
+      name = miaTr(BUILTIN_APPS[i]->name);
     }
     const uint8_t itemBg = selected ? LAVA_BLUE : LAVA_BLACK;
     const uint8_t itemText = selected ? LAVA_BLACK : LAVA_WHITE;
     const uint8_t itemTag = selected ? LAVA_BLACK : LAVA_GREEN;
     const uint8_t itemCursor = selected ? LAVA_YELLOW : LAVA_YELLOW;
-    lavaFillRect(6, y - 3, 308, 15, itemBg);
+    lavaFillRect(6, y - 2, 308, 18, itemBg);
     lavaDrawText(12, y, selected ? ">" : " ", itemCursor, itemBg);
     lavaDrawText(28, y, sdApp ? "[sd]" : "", itemTag, itemBg);
     lavaDrawText(sdApp ? 52 : 28, y, name, itemText, itemBg);
@@ -617,29 +642,34 @@ static void drawLauncher() {
   launcherRenderYield();
 
   const char *sdStatus = sdScanStatusText();
-  const int16_t sdStatusX = LAVA_SCREEN_W - 8 - static_cast<int16_t>(strlen(sdStatus) * 6);
-  lavaDrawText(sdStatusX, 224, sdStatus, g_context.sdReady ? LAVA_GREEN : LAVA_RED,
-               LAVA_BLACK);
+  const char *controlText = miaTr("A:Open UP/DN:Move LEFT/RIGHT:Tab");
+  const int16_t sdStatusWidth = lavaTextWidth(sdStatus);
+  const int16_t controlWidth = lavaTextWidth(controlText);
+  const bool splitFooter = sdStatusWidth + controlWidth + 24 > LAVA_SCREEN_W;
+  const int16_t sdStatusX = LAVA_SCREEN_W - 8 - sdStatusWidth;
+  lavaDrawText(sdStatusX, splitFooter ? 204 : 224, sdStatus,
+               g_context.sdReady ? LAVA_GREEN : LAVA_RED, LAVA_BLACK);
   if (g_lastSdRun.status != SdAppLoaderStatus::Ok) {
     char errorLine[32];
-    snprintf(errorLine, sizeof(errorLine), "%s no:%d",
-             sdAppLoaderStatusText(g_lastSdRun.status), g_lastSdRun.errorCode);
+    snprintf(errorLine, sizeof(errorLine), "%s %s:%d",
+             miaTr(sdAppLoaderStatusText(g_lastSdRun.status)), miaTr("code"),
+             g_lastSdRun.errorCode);
     lavaDrawText(8, 214, errorLine, LAVA_RED, LAVA_BLACK);
   }
-  lavaDrawText(8, 224, "A:Open UP/DN:Move LEFT/RIGHT:Tab", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 224, controlText, LAVA_GRAY, LAVA_BLACK);
   launcherRenderYield();
 
   if (g_bootLoaderHintVisible) {
     lavaFillRect(24, 44, 272, 156, LAVA_DARK_BLUE);
     lavaFillRect(24, 44, 272, 20, LAVA_YELLOW);
-    lavaDrawText(30, 50, "Boot Loader", LAVA_BLACK, LAVA_YELLOW);
-    lavaDrawText(40, 82, "1. Hold ST", LAVA_WHITE, LAVA_DARK_BLUE);
-    lavaDrawText(40, 100, "2. Press RESET", LAVA_WHITE, LAVA_DARK_BLUE);
-    lavaDrawText(40, 118, "3. Release RESET into", LAVA_WHITE, LAVA_DARK_BLUE);
-    lavaDrawText(58, 136, "download mode", LAVA_CYAN, LAVA_DARK_BLUE);
-    lavaDrawText(40, 162, "RESET alone returns to", LAVA_GRAY, LAVA_DARK_BLUE);
-    lavaDrawText(58, 180, "normal boot", LAVA_GRAY, LAVA_DARK_BLUE);
-    lavaDrawText(86, 198, "A/B:Back", LAVA_YELLOW, LAVA_DARK_BLUE);
+    lavaDrawText(30, 46, miaTr("Boot Loader"), LAVA_BLACK, LAVA_YELLOW);
+    lavaDrawText(40, 82, miaTr("1. Hold ST"), LAVA_WHITE, LAVA_DARK_BLUE);
+    lavaDrawText(40, 100, miaTr("2. Press RESET"), LAVA_WHITE, LAVA_DARK_BLUE);
+    lavaDrawText(40, 118, miaTr("3. Release RESET into"), LAVA_WHITE, LAVA_DARK_BLUE);
+    lavaDrawText(58, 136, miaTr("download mode"), LAVA_CYAN, LAVA_DARK_BLUE);
+    lavaDrawText(40, 162, miaTr("RESET alone returns to"), LAVA_GRAY, LAVA_DARK_BLUE);
+    lavaDrawText(58, 180, miaTr("normal boot"), LAVA_GRAY, LAVA_DARK_BLUE);
+    lavaDrawText(86, 198, miaTr("A/B:Back"), LAVA_YELLOW, LAVA_DARK_BLUE);
     launcherRenderYield();
   }
 
@@ -652,15 +682,16 @@ static void drawLauncher() {
     lavaFillRect(26, 52, 268, 136, LAVA_GRAY);
     lavaFillRect(28, 54, 264, 132, LAVA_LIGHT_GRAY);
     lavaFillRect(28, 54, 264, 20, LAVA_YELLOW);
-    lavaDrawText(34, 60, app == nullptr ? "SD App" : app->name, LAVA_BLACK, LAVA_YELLOW);
+    lavaDrawText(34, 56, app == nullptr ? miaTr("SD App") : miaTr(app->name), LAVA_BLACK,
+                 LAVA_YELLOW);
     for (uint8_t i = 0; i < 2; ++i) {
       const bool selected = i == g_sdActionMenuSelection;
       const uint8_t bg = selected ? LAVA_BLUE : LAVA_LIGHT_GRAY;
       const uint8_t fg = selected ? LAVA_YELLOW : LAVA_BLACK;
       lavaFillRect(40, 88 + i * 22, 240, 16, bg);
-      lavaDrawText(52, 92 + i * 22, MENU_ITEMS[i], fg, bg);
+      lavaDrawText(52, 92 + i * 22, miaTr(MENU_ITEMS[i]), fg, bg);
     }
-    lavaDrawText(52, 148, "A:Confirm  B/SEL:Back", LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
+    lavaDrawText(52, 148, miaTr("A:Confirm  B/SEL:Back"), LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
     launcherRenderYield();
   }
 
@@ -672,19 +703,19 @@ static void drawLauncher() {
     lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, LAVA_YELLOW);
-    lavaDrawText(boxX + 8, boxY + 6, "Export OTA to SD", LAVA_BLACK, LAVA_YELLOW);
+    lavaDrawText(boxX + 8, boxY + 4, miaTr("Export OTA to SD"), LAVA_BLACK, LAVA_YELLOW);
     char catLine[48];
-    snprintf(catLine, sizeof(catLine), "Category: %s", g_otaExportManifest.category);
+    snprintf(catLine, sizeof(catLine), miaTr("Category: %s"), miaTr(g_otaExportManifest.category));
     lavaDrawText(boxX + 12, boxY + 30, catLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
     char nameLine[48];
-    snprintf(nameLine, sizeof(nameLine), "Name: %s", g_otaExportManifest.name);
+    snprintf(nameLine, sizeof(nameLine), miaTr("Name: %s"), miaTr(g_otaExportManifest.name));
     lavaDrawText(boxX + 12, boxY + 48, nameLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
     char pathLine[120];
-    snprintf(pathLine, sizeof(pathLine), "To: /MiaOS/%s/%s.app/%s.bin",
+    snprintf(pathLine, sizeof(pathLine), miaTr("To: /MiaOS/%s/%s.app/%s.bin"),
              g_otaExportManifest.category, g_otaExportManifest.name,
              g_otaExportManifest.name);
     lavaDrawText(boxX + 12, boxY + 72, pathLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
-    lavaDrawText(boxX + 12, boxY + 96, "Press A to export, B to cancel",
+    lavaDrawText(boxX + 12, boxY + 96, miaTr("Press A to export, B to cancel"),
                  LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
     launcherRenderYield();
   }
@@ -697,13 +728,33 @@ static void drawLauncher() {
     lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, g_otaExportSuccess ? LAVA_GREEN : LAVA_RED);
-    lavaDrawText(boxX + 8, boxY + 6, g_otaExportSuccess ? "Export OK" : "Export Failed",
+    lavaDrawText(boxX + 8, boxY + 4, g_otaExportSuccess ? miaTr("Export OK") : miaTr("Export Failed"),
                  LAVA_BLACK, g_otaExportSuccess ? LAVA_GREEN : LAVA_RED);
     const char *msg = g_otaExportSuccess
-        ? "OTA app exported to SD."
-        : "No valid manifest in ota_1.";
+        ? miaTr("OTA app exported to SD.")
+        : miaTr("No valid manifest in ota_1.");
     lavaDrawText(boxX + 12, boxY + 36, msg, LAVA_BLACK, LAVA_LIGHT_GRAY);
-    lavaDrawText(boxX + 12, boxY + 58, "Press any button", LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
+    lavaDrawText(boxX + 12, boxY + 58, miaTr("Press any button"), LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
+    launcherRenderYield();
+  }
+
+  if (g_fontRestartPromptVisible) {
+    constexpr int16_t boxW = 248;
+    constexpr int16_t boxH = 90;
+    constexpr int16_t boxX = (LAVA_SCREEN_W - boxW) / 2;
+    constexpr int16_t boxY = (LAVA_SCREEN_H - boxH) / 2;
+    lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
+    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
+    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, LAVA_YELLOW);
+    lavaDrawText(boxX + 8, boxY + 4, miaTr("Font"), LAVA_BLACK, LAVA_YELLOW);
+    char pendingFontLine[48];
+    snprintf(pendingFontLine, sizeof(pendingFontLine), "%s: %s", miaTr("Apply font"),
+             lavaFontName(g_pendingFontFace));
+    lavaDrawText(boxX + 12, boxY + 30, pendingFontLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
+    lavaDrawText(boxX + 12, boxY + 48, miaTr("Press A to apply and restart"), LAVA_DARK_BLUE,
+                 LAVA_LIGHT_GRAY);
+    lavaDrawText(boxX + 12, boxY + 66, miaTr("B/SEL:Later"), LAVA_DARK_BLUE,
+                 LAVA_LIGHT_GRAY);
     launcherRenderYield();
   }
 
@@ -740,6 +791,24 @@ static void enterSelectedApp() {
 
   if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == BOOTLOADER_MENU_INDEX) {
     showBootloaderInstructions();
+    drawLauncher();
+    return;
+  }
+
+  if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == LANGUAGE_MENU_INDEX) {
+    miaCycleLanguage();
+    launcherTracef("[language] switched to %s", miaLanguageName(miaLanguage()));
+    drawLauncher();
+    return;
+  }
+
+  if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == FONT_MENU_INDEX) {
+    const uint8_t next = static_cast<uint8_t>(lavaFontFace()) + 1;
+    g_pendingFontFace = next > static_cast<uint8_t>(LavaFontFace::DroidGbk12)
+        ? LavaFontFace::Small5x7
+        : static_cast<LavaFontFace>(next);
+    launcherTracef("[font] pending switch to %s", lavaFontName(g_pendingFontFace));
+    g_fontRestartPromptVisible = true;
     drawLauncher();
     return;
   }
@@ -861,6 +930,24 @@ static void tickLauncher(uint32_t nowMs) {
     return;
   }
 
+  if (g_fontRestartPromptVisible) {
+    if (g_context.buttons[0].pressed) {
+      lavaSetFontFace(g_pendingFontFace);
+      launcherTracef("[font] applied %s, restart confirmed", lavaFontName(g_pendingFontFace));
+      delay(50);
+      ESP.restart();
+      return;
+    }
+    if (g_context.buttons[1].pressed || g_allButtons[BUTTON_INDEX_SELECT].pressed ||
+        systemExitPressed()) {
+      g_fontRestartPromptVisible = false;
+      launcherTrace("[font] restart deferred");
+      drawLauncher();
+      return;
+    }
+    return;
+  }
+
   if (g_allButtons[BUTTON_INDEX_LEFT].pressed) {
     switchLauncherTab(-1);
     drawLauncher();
@@ -921,7 +1008,6 @@ static void printStartupInfo() {
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
 
   Serial.println();
   Serial.println("ESP32-S3 Retro-Pixel launcher (ILI9342 320x240)");
@@ -938,6 +1024,12 @@ void setup() {
   printStartupInfo();
   initDisplay();
   launcherTrace("[setup] initDisplay done");
+  const LavaFontFace persistedFont = lavaFontFace();
+  if (needsSafeLauncherFont(persistedFont)) {
+    launcherTracef("[font] startup session override %s -> %s", lavaFontName(persistedFont),
+                   lavaFontName(LavaFontFace::DroidGbk12));
+    lavaUseFontFaceForSession(LavaFontFace::DroidGbk12);
+  }
   initSdCard();
   launcherTrace("[setup] initSdCard done");
 

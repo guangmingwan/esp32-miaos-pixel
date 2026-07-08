@@ -28,15 +28,18 @@ static void scan_current_directory(void) {
 }
 
 static void selected_entry_path(char *dest, uint32_t dest_size) {
+  char base_path[sizeof(current_path)];
   if (file_count == 0 || selected_file >= file_count) {
     strncpy(dest, current_path, dest_size - 1);
     dest[dest_size - 1] = 0;
     return;
   }
-  if (strcmp(current_path, "/") == 0) {
+  strncpy(base_path, current_path, sizeof(base_path) - 1);
+  base_path[sizeof(base_path) - 1] = 0;
+  if (strcmp(base_path, "/") == 0) {
     snprintf(dest, dest_size, "/%s", files[selected_file].name);
   } else {
-    snprintf(dest, dest_size, "%s/%s", current_path, files[selected_file].name);
+    snprintf(dest, dest_size, "%s/%s", base_path, files[selected_file].name);
   }
 }
 

@@ -12,6 +12,7 @@
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_rom_sys.h>
 #include <esp_timer.h>
 #include <esp_vfs_fat.h>
 #include <esp_wifi.h>
@@ -100,7 +101,7 @@ static sdmmc_card_t *g_card = nullptr;
 static AudioStatus g_audio = {};
 static int16_t g_stereo_scratch[1024 * 2] = {};
 
-static void delay_us(uint32_t us) { ets_delay_us(us); }
+static void delay_us(uint32_t us) { esp_rom_delay_us(us); }
 
 static void scan_hc165() {
   gpio_set_level(HC165_PL_PIN, 0);
