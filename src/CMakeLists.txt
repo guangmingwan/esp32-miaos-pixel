@@ -18,7 +18,7 @@ idf_component_register(
     "fonts/droid_gbk_12.c"
     "fonts/vera_bold_11.c"
     "fonts/vera_bold_14.c"
-    "mia_i18n.cpp"
+    "../experiments/ota_apps/common_host/mia_i18n.cpp"
     "rtc_clock.cpp"
     "audio_host.cpp"
     "ota_app_flash.cpp"

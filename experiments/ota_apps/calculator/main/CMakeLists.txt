@@ -4,6 +4,7 @@ idf_component_register(
         "calculator_main.c"
         "../../common_host/host_platform.cpp"
         "../../common_host/display_host.cpp"
+        "../../common_host/mia_i18n.cpp"
     INCLUDE_DIRS
         "."
         "../../common_host"
