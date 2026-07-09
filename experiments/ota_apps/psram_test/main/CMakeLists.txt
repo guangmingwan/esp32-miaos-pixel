@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "psram_test_main.cpp"
+        "../../common_host/host_platform.cpp"
+        "../../common_host/display_host.cpp"
+    INCLUDE_DIRS
+        "."
+        "../../common_host"
+        "../../../../include"
+)
