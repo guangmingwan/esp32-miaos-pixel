@@ -25,6 +25,7 @@
 #include "apps/about_app.h"
 #include "apps/log_viewer_app.h"
 #include "apps/serial_transfer_app.h"
+#include "int_wdt_guard.h"
 #include "launcher_log.h"
 #include "ota_app_flash.h"
 #include "lcd_ili9342.h"
@@ -83,17 +84,13 @@ static OtaAppManifest g_otaExportManifest = {};
 static bool g_otaExportSuccess = false;
 static bool g_fontRestartPromptVisible = false;
 static LavaFontFace g_pendingFontFace = LavaFontFace::Basic8;
+static int16_t g_tabScrollX = 0;
 
 static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex);
 static inline void launcherRenderYield();
 static const char *sdScanStatusText();
 static const char *launcherTabName(uint8_t tabIndex);
 static void drawLauncher();
-
-static bool needsSafeLauncherFont(LavaFontFace face) {
-  return miaLanguage() == MiaLanguage::Chinese && face != LavaFontFace::DroidGbk12 &&
-         face != LavaFontFace::Small5x7;
-}
 
 static const LauncherApp *const BUILTIN_APPS[] = {
     &serialTransferApp(),
@@ -115,9 +112,6 @@ static void showBootloaderInstructions() {
 }
 
 static void openSdActionMenu() {
-  if (g_selectedTab == SYSTEM_TAB_INDEX) {
-    return;
-  }
   if (selectedSdApp(g_selectedApp) == nullptr) {
     return;
   }
@@ -416,11 +410,25 @@ static bool sameSdCategory(const char *lhs, const char *rhs) {
   return strcmp(lhs, rhs) == 0;
 }
 
+static bool isSystemCategory(const char *category) {
+  return strcmp(category, "System") == 0;
+}
+
+static uint8_t sdSystemAppCount() {
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < g_sdScan.appCount && i < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++i) {
+    if (isSystemCategory(g_sdApps[i].category)) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 static uint8_t sdCategoryTabCount() {
   uint8_t count = 0;
   for (uint8_t index = 0;
        index < g_sdScan.appCount && index < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++index) {
-    bool seen = false;
+    bool seen = isSystemCategory(g_sdApps[index].category);
     for (uint8_t previous = 0; previous < index; ++previous) {
       if (sameSdCategory(g_sdApps[index].category, g_sdApps[previous].category)) {
         seen = true;
@@ -447,7 +455,7 @@ static const char *launcherTabName(uint8_t tabIndex) {
   uint8_t count = 0;
   for (uint8_t index = 0;
        index < g_sdScan.appCount && index < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++index) {
-    bool seen = false;
+    bool seen = isSystemCategory(g_sdApps[index].category);
     for (uint8_t previous = 0; previous < index; ++previous) {
       if (sameSdCategory(g_sdApps[index].category, g_sdApps[previous].category)) {
         seen = true;
@@ -481,12 +489,25 @@ static uint8_t sdAppCountForTab(uint8_t tabIndex) {
 }
 
 static uint8_t totalLauncherItems() {
-  return g_selectedTab == SYSTEM_TAB_INDEX ? SYSTEM_ITEM_COUNT : sdAppCountForTab(g_selectedTab);
+  return g_selectedTab == SYSTEM_TAB_INDEX ? SYSTEM_ITEM_COUNT + sdSystemAppCount() : sdAppCountForTab(g_selectedTab);
 }
 
 static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex) {
+  if (g_selectedTab == SYSTEM_TAB_INDEX) {
+    // SD apps in System category are appended after built-in items
+    const uint8_t sdIndex = itemIndex - SYSTEM_ITEM_COUNT;
+    uint8_t currentIndex = 0;
+    for (uint8_t i = 0;
+         i < g_sdScan.appCount && i < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++i) {
+      if (!isSystemCategory(g_sdApps[i].category)) continue;
+      if (currentIndex == sdIndex) return &g_sdApps[i];
+      ++currentIndex;
+    }
+    return nullptr;
+  }
+
   const char *tabName = launcherTabName(g_selectedTab);
-  if (tabName == nullptr || g_selectedTab == SYSTEM_TAB_INDEX) {
+  if (tabName == nullptr) {
     return nullptr;
   }
 
@@ -561,6 +582,8 @@ static void drawLauncher() {
     return;
   }
 
+  ScopedIntWdtPause wdtGuard;
+
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
   lavaDrawText(6, 2, miaTr("MiaOS Launcher"), LAVA_BLACK, LAVA_YELLOW);
@@ -572,25 +595,55 @@ static void drawLauncher() {
     return;
   }
 
-  int16_t tabX = 8;
   const uint8_t tabCount = launcherTabCount();
-  for (uint8_t tab = 0; tab < tabCount; ++tab) {
+  int16_t tabWidths[16];
+  int16_t selTabStart = 0;
+  int16_t totalWidth = 8;
+  for (uint8_t tab = 0; tab < tabCount && tab < 16; ++tab) {
     const char *tabNameKey = launcherTabName(tab);
     if (tabNameKey == nullptr) {
+      tabWidths[tab] = 0;
       continue;
     }
     const char *tabName = miaTr(tabNameKey);
-    const uint8_t bg = tab == g_selectedTab ? LAVA_BLUE : LAVA_BLACK;
-    const uint8_t fg = tab == g_selectedTab ? LAVA_YELLOW : LAVA_GRAY;
-    const int16_t tabWidth = static_cast<int16_t>(lavaTextWidth(tabName) + 12);
-    lavaFillRect(tabX, 28, tabWidth, 20, bg);
-    lavaDrawText(tabX + 6, 30, tabName, fg, bg);
-    tabX += tabWidth + 4;
+    tabWidths[tab] = static_cast<int16_t>(lavaTextWidth(tabName) + 12);
+    if (tab == g_selectedTab) selTabStart = totalWidth;
+    totalWidth += tabWidths[tab] + 4;
+  }
+  if (totalWidth > LAVA_SCREEN_W) {
+    const int16_t selTabEnd = selTabStart + tabWidths[g_selectedTab];
+    if (selTabStart - g_tabScrollX < 8) {
+      g_tabScrollX = selTabStart - 8;
+    } else if (selTabEnd - g_tabScrollX > LAVA_SCREEN_W - 8) {
+      g_tabScrollX = selTabEnd - (LAVA_SCREEN_W - 8);
+    }
+    if (g_tabScrollX < 0) g_tabScrollX = 0;
+    const int16_t maxScroll = totalWidth - LAVA_SCREEN_W;
+    if (g_tabScrollX > maxScroll) g_tabScrollX = maxScroll;
+  } else {
+    g_tabScrollX = 0;
+  }
+  int16_t tabX = 8;
+  for (uint8_t tab = 0; tab < tabCount; ++tab) {
+    const char *tabNameKey = launcherTabName(tab);
+    if (tabNameKey == nullptr || tabWidths[tab] == 0) {
+      continue;
+    }
+    const int16_t drawX = tabX - g_tabScrollX;
+    const int16_t drawEnd = drawX + tabWidths[tab];
+    if (drawEnd > 0 && drawX < LAVA_SCREEN_W) {
+      const char *tabName = miaTr(tabNameKey);
+      const uint8_t bg = tab == g_selectedTab ? LAVA_BLUE : LAVA_BLACK;
+      const uint8_t fg = tab == g_selectedTab ? LAVA_YELLOW : LAVA_GRAY;
+      lavaFillRect(drawX, 28, tabWidths[tab], 20, bg);
+      lavaDrawText(drawX + 6, 30, tabName, fg, bg);
+    }
+    tabX += tabWidths[tab] + 4;
     launcherRenderYield();
   }
   launcherRenderYield();
 
-  const uint8_t maxVisibleApps = 7;
+  const uint8_t maxVisibleApps = 9;
   uint8_t firstApp = 0;
   const uint8_t itemCount = totalLauncherItems();
   if (itemCount > maxVisibleApps && g_selectedApp >= maxVisibleApps) {
@@ -601,13 +654,14 @@ static void drawLauncher() {
     visibleEnd = min<uint8_t>(visibleEnd, firstApp + INITIAL_DRAW_ITEM_LIMIT);
   }
   for (uint8_t i = firstApp; i < visibleEnd; ++i) {
-    const int16_t y = 62 + (i - firstApp) * 20;
+    const int16_t y = 58 + (i - firstApp) * 16;
     const bool selected = i == g_selectedApp;
-    const bool sdApp = g_selectedTab != SYSTEM_TAB_INDEX;
-    const bool isLanguage = g_selectedTab == SYSTEM_TAB_INDEX && i == LANGUAGE_MENU_INDEX;
-    const bool isFont = g_selectedTab == SYSTEM_TAB_INDEX && i == FONT_MENU_INDEX;
-    const bool isBootloader = g_selectedTab == SYSTEM_TAB_INDEX && i == BOOTLOADER_MENU_INDEX;
-    const bool isExportOta = g_selectedTab == SYSTEM_TAB_INDEX && i == EXPORT_OTA_MENU_INDEX;
+    const bool isSystemSdItem = g_selectedTab == SYSTEM_TAB_INDEX && i >= SYSTEM_ITEM_COUNT;
+    const bool sdApp = isSystemSdItem || g_selectedTab != SYSTEM_TAB_INDEX;
+    const bool isLanguage = g_selectedTab == SYSTEM_TAB_INDEX && !isSystemSdItem && i == LANGUAGE_MENU_INDEX;
+    const bool isFont = g_selectedTab == SYSTEM_TAB_INDEX && !isSystemSdItem && i == FONT_MENU_INDEX;
+    const bool isBootloader = g_selectedTab == SYSTEM_TAB_INDEX && !isSystemSdItem && i == BOOTLOADER_MENU_INDEX;
+    const bool isExportOta = g_selectedTab == SYSTEM_TAB_INDEX && !isSystemSdItem && i == EXPORT_OTA_MENU_INDEX;
     const char *name;
     char languageLine[48];
     char fontLine[48];
@@ -633,10 +687,15 @@ static void drawLauncher() {
     const uint8_t itemText = selected ? LAVA_BLACK : LAVA_WHITE;
     const uint8_t itemTag = selected ? LAVA_BLACK : LAVA_GREEN;
     const uint8_t itemCursor = selected ? LAVA_YELLOW : LAVA_YELLOW;
-    lavaFillRect(6, y - 2, 308, 18, itemBg);
+    lavaFillRect(6, y - 2, 308, 16, itemBg);
     lavaDrawText(12, y, selected ? ">" : " ", itemCursor, itemBg);
-    lavaDrawText(28, y, sdApp ? "[sd]" : "", itemTag, itemBg);
-    lavaDrawText(sdApp ? 52 : 28, y, name, itemText, itemBg);
+    char sdLine[128];
+    const char *displayText = name;
+    if (sdApp) {
+      snprintf(sdLine, sizeof(sdLine), "[sd]%s", name);
+      displayText = sdLine;
+    }
+    lavaDrawText(28, y, displayText, sdApp ? itemTag : itemText, itemBg);
     launcherRenderYield();
   }
   launcherRenderYield();
@@ -833,7 +892,7 @@ static void enterSelectedApp() {
     return;
   }
 
-  if (g_selectedTab != SYSTEM_TAB_INDEX) {
+  if (g_selectedTab != SYSTEM_TAB_INDEX || g_selectedApp >= SYSTEM_ITEM_COUNT) {
     const SdAppManifestSummary *app = selectedSdApp(g_selectedApp);
     if (app == nullptr) {
       return;
@@ -971,7 +1030,8 @@ static void tickLauncher(uint32_t nowMs) {
     enterSelectedApp();
     return;
   }
-  if (g_allButtons[BUTTON_INDEX_SELECT].pressed && g_selectedTab != SYSTEM_TAB_INDEX) {
+  if (g_allButtons[BUTTON_INDEX_SELECT].pressed &&
+      (g_selectedTab != SYSTEM_TAB_INDEX || g_selectedApp >= SYSTEM_ITEM_COUNT)) {
     openSdActionMenu();
     drawLauncher();
     return;
@@ -1020,16 +1080,18 @@ void setup() {
   launcherTrace("[setup] updateAllButtons");
   updateAllButtons();
 
+  if (g_allButtons[2].down) {
+    launcherTrace("[setup] KEY_M held: safe mode, skipping persisted settings");
+    miaI18nSkipPersisted();
+    lavaFontSkipPersisted();
+  }
+
   launcherTrace("[setup] printStartupInfo");
   printStartupInfo();
   initDisplay();
   launcherTrace("[setup] initDisplay done");
   const LavaFontFace persistedFont = lavaFontFace();
-  if (needsSafeLauncherFont(persistedFont)) {
-    launcherTracef("[font] startup session override %s -> %s", lavaFontName(persistedFont),
-                   lavaFontName(LavaFontFace::DroidGbk12));
-    lavaUseFontFaceForSession(LavaFontFace::DroidGbk12);
-  }
+  (void)persistedFont;
   initSdCard();
   launcherTrace("[setup] initSdCard done");
 
