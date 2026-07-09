@@ -196,6 +196,8 @@ static void draw_spectrum_bars(const int16_t *pcm, uint32_t frames,
 
   for (int b = 0; b < SPECTRUM_BARS; b++) {
     float norm = bars[b] / peak;
+    /* sqrt compression: makes quiet bars visible while peak stays full height */
+    norm = sqrtf(norm);
     int h = (int)(norm * AREA_H);
     if (h < 1) h = 1;
     if (h > AREA_H) h = AREA_H;
@@ -254,14 +256,25 @@ static void audio_task_func(void *arg) {
       break;
     }
 
-    /* Share PCM samples for UI spectrum (core 1 will read via critical section) */
+    /* Share PCM samples for UI spectrum (core 1 will read via critical section).
+     * Always store mono-mixed samples so the UI's 128-element fft_buf works
+     * regardless of the source channel count. */
     uint32_t copy_count = (samples / channels);
     if (copy_count > FFT_SHARED_SAMPLES) {
       copy_count = FFT_SHARED_SAMPLES;
     }
     portENTER_CRITICAL(&s_fft_mux);
-    memcpy(s_fft_shared, g_pcm, copy_count * sizeof(int16_t));
-    s_fft_channels = channels;
+    if (channels >= 2) {
+      /* Stereo → mono mix on the fly as we copy */
+      for (uint32_t i = 0; i < copy_count; i++) {
+        int32_t l = g_pcm[i * 2];
+        int32_t r = g_pcm[i * 2 + 1];
+        s_fft_shared[i] = (int16_t)((l + r) >> 1);
+      }
+    } else {
+      memcpy(s_fft_shared, g_pcm, copy_count * sizeof(int16_t));
+    }
+    s_fft_channels = 1;  /* always report mono to the UI */
     portEXIT_CRITICAL(&s_fft_mux);
   }
 
@@ -314,9 +327,15 @@ static MusicPlayResult play_mp3(const char *path, char *status,
 
   /* Wait for audio file to open (or fail) with timeout.
    * s_audio_open_ok is a latch set once on success — it stays true
-   * even after playback ends, so short files don't get mis-detected. */
+   * even after playback ends, so short files don't get mis-detected.
+   * s_audio_task_handle is set to NULL when the audio task deletes
+   * itself on open failure — detect that to exit early.
+   * The timeout is generous (10 s) because mp3dec_ex_open() over
+   * SPI SD card can be slow for some files. */
+  mia_host_draw_text(84, 96, "Opening...", MIA_HOST_YELLOW, MIA_HOST_BLACK);
+  mia_host_present();
   int wait_ms = 0;
-  while (!s_audio_open_ok && wait_ms < 3000) {
+  while (!s_audio_open_ok && s_audio_task_handle != NULL && wait_ms < 10000) {
     mia_host_delay_ms(20);
     wait_ms += 20;
   }

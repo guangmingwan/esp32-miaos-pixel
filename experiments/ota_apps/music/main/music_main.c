@@ -199,6 +199,9 @@ int music_main_impl(int argc, char *argv[]) {
     }
     if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       open_selected_entry();
+      /* re-poll to flush any stale button state accumulated during
+       * the blocking playback call (e.g. B used to stop playback) */
+      mia_host_buttons_poll();
       changed = 1;
     }
     if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {

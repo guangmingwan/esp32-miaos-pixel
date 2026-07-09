@@ -5,6 +5,7 @@
 
 #include <dirent.h>
 #include <driver/gpio.h>
+#include <driver/i2c.h>
 #include <driver/i2s.h>
 #include <driver/sdspi_host.h>
 #include <driver/spi_common.h>
@@ -13,7 +14,13 @@
 #include <esp_log.h>
 #include <esp_netif.h>
 #include <esp_rom_sys.h>
+#include <nvs_flash.h>
 #include <esp_timer.h>
+#include <esp_chip_info.h>
+#include <esp_flash.h>
+#include <esp_heap_caps.h>
+#include <driver/adc.h>
+#include <esp_private/esp_clk.h>
 #include <esp_vfs_fat.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
@@ -23,6 +30,7 @@
 #include <sdmmc_cmd.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #if __has_include(<esp_http_server.h>)
 #include <esp_http_server.h>
@@ -371,9 +379,53 @@ static bool load_wifi_config(char *ssid, size_t ssid_sz, char *password,
   return true;
 }
 
+// --- RTC (PCF8563) helpers ---
+constexpr gpio_num_t RTC_SCL_PIN = GPIO_NUM_4;
+constexpr gpio_num_t RTC_SDA_PIN = GPIO_NUM_16;
+constexpr uint8_t RTC_I2C_ADDR = 0x51;
+constexpr uint8_t RTC_TIME_REG = 0x02;
+
+static uint8_t toBcd(uint8_t v) {
+  return static_cast<uint8_t>(((v / 10) << 4) | (v % 10));
+}
+
+static uint8_t fromBcd(uint8_t v) {
+  return static_cast<uint8_t>(((v >> 4) * 10) + (v & 0x0F));
+}
+
+static bool isLeapYear(uint16_t y) {
+  return (y % 400 == 0) || (y % 100 != 0 && y % 4 == 0);
+}
+
+static uint8_t daysInMonth(uint16_t year, uint8_t month) {
+  static const uint8_t kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (month == 2 && isLeapYear(year)) return 29;
+  return (month >= 1 && month <= 12) ? kDays[month - 1] : 0;
+}
+
+static uint8_t dayOfWeek(uint16_t year, uint8_t month, uint8_t day) {
+  int y = year, m = month;
+  if (m < 3) { m += 12; --y; }
+  const int k = y % 100, j = y / 100;
+  const int h = (day + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;
+  return static_cast<uint8_t>((h + 6) % 7);
+}
+
 } // namespace
 
 extern "C" esp_err_t host_platform_init(void) {
+  // Initialize NVS before WiFi or any other component that needs it.
+  esp_err_t nvs_err = nvs_flash_init();
+  if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    const esp_err_t erase_err = nvs_flash_erase();
+    if (erase_err == ESP_OK) {
+      nvs_err = nvs_flash_init();
+    }
+  }
+  if (nvs_err != ESP_OK && nvs_err != ESP_ERR_NVS_NOT_INITIALIZED) {
+    ESP_LOGE(TAG, "nvs_flash_init failed: %d", nvs_err);
+  }
+
   gpio_reset_pin(AMP_CTRL_PIN);
   gpio_set_direction(AMP_CTRL_PIN, GPIO_MODE_OUTPUT);
   gpio_set_level(AMP_CTRL_PIN, 0);
@@ -402,6 +454,24 @@ extern "C" esp_err_t host_platform_init(void) {
   gpio_reset_pin(KEY_SELECT_PIN);
   gpio_set_direction(KEY_SELECT_PIN, GPIO_MODE_INPUT);
   gpio_set_pull_mode(KEY_SELECT_PIN, GPIO_PULLUP_ONLY);
+
+  // --- I2C (PCF8563 RTC + expansion) ---
+  i2c_config_t i2c_conf = {
+      .mode = I2C_MODE_MASTER,
+      .sda_io_num = RTC_SDA_PIN,
+      .scl_io_num = RTC_SCL_PIN,
+      .sda_pullup_en = GPIO_PULLUP_ENABLE,
+      .scl_pullup_en = GPIO_PULLUP_ENABLE,
+      .master = {.clk_speed = 100000},
+      .clk_flags = 0,
+  };
+  esp_err_t i2c_err = i2c_param_config(I2C_NUM_0, &i2c_conf);
+  if (i2c_err == ESP_OK) {
+    i2c_err = i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
+  }
+  if (i2c_err != ESP_OK) {
+    ESP_LOGE(TAG, "I2C init failed: %d", i2c_err);
+  }
 
   if (!display_host_init()) {
     return ESP_FAIL;
@@ -489,6 +559,27 @@ extern "C" int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entri
   return (int32_t)count;
 }
 
+extern "C" int32_t mia_host_sd_remove(const char *path) {
+  if (!g_sd_ready || path == nullptr) {
+    return -1;
+  }
+  char vfs_path[288];
+  if (strcmp(path, "/") == 0) {
+    return -1;
+  }
+  snprintf(vfs_path, sizeof(vfs_path), "%s%s", ROOT_DIR, path);
+
+  struct stat st;
+  if (stat(vfs_path, &st) != 0) {
+    return -1;
+  }
+
+  if (S_ISDIR(st.st_mode)) {
+    return rmdir(vfs_path);
+  }
+  return unlink(vfs_path);
+}
+
 extern "C" uint8_t mia_host_audio_open(uint32_t sample_rate, uint8_t channels, uint8_t bits_per_sample) {
   return audio_install(sample_rate, channels, bits_per_sample) ? 1 : 0;
 }
@@ -547,12 +638,142 @@ extern "C" uint8_t mia_host_audio_get_status(MiaHostAudioStatus *status) {
   return 1;
 }
 
-extern "C" uint8_t mia_host_rtc_read(MiaHostDateTime *) { return 0; }
-extern "C" uint8_t mia_host_rtc_write(const MiaHostDateTime *) { return 0; }
-extern "C" uint8_t mia_host_rtc_days_in_month(uint16_t, uint8_t) { return 0; }
-extern "C" uint8_t mia_host_rtc_day_of_week(const MiaHostDateTime *) { return 0; }
-extern "C" uint8_t mia_host_get_system_info(MiaHostSystemInfo *) { return 0; }
-extern "C" uint8_t mia_host_read_battery(MiaHostBatteryInfo *) { return 0; }
+/* Write bytes to the RTC starting at the given register. */
+static bool rtcWriteRegs(uint8_t reg, const uint8_t *data, size_t len) {
+  i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+  i2c_master_start(cmd);
+  i2c_master_write_byte(cmd, (RTC_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+  i2c_master_write_byte(cmd, reg, true);
+  for (size_t i = 0; i < len; ++i) {
+    i2c_master_write_byte(cmd, data[i], true);
+  }
+  i2c_master_stop(cmd);
+  esp_err_t err = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+  i2c_cmd_link_delete(cmd);
+  return err == ESP_OK;
+}
+
+/* Read bytes from the RTC starting at the given register. */
+static bool rtcReadRegs(uint8_t reg, uint8_t *buf, size_t len) {
+  i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+  /* Write register address (with repeated start) */
+  i2c_master_start(cmd);
+  i2c_master_write_byte(cmd, (RTC_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+  i2c_master_write_byte(cmd, reg, true);
+  /* Repeated start + read */
+  i2c_master_start(cmd);
+  i2c_master_write_byte(cmd, (RTC_I2C_ADDR << 1) | I2C_MASTER_READ, true);
+  if (len > 1) {
+    i2c_master_read(cmd, buf, len - 1, I2C_MASTER_ACK);
+  }
+  i2c_master_read_byte(cmd, &buf[len - 1], I2C_MASTER_NACK);
+  i2c_master_stop(cmd);
+  esp_err_t err = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+  i2c_cmd_link_delete(cmd);
+  return err == ESP_OK;
+}
+
+extern "C" uint8_t mia_host_rtc_read(MiaHostDateTime *dt) {
+  if (dt == nullptr) return 0;
+  uint8_t buf[7];
+  if (!rtcReadRegs(RTC_TIME_REG, buf, 7)) return 0;
+
+  dt->second  = fromBcd(buf[0] & 0x7F);
+  dt->minute  = fromBcd(buf[1] & 0x7F);
+  dt->hour    = fromBcd(buf[2] & 0x3F);
+  dt->day     = fromBcd(buf[3] & 0x3F);
+  dt->weekday = buf[4] & 0x07;
+  dt->month   = fromBcd(buf[5] & 0x1F);
+  dt->year    = static_cast<uint16_t>(2000 + fromBcd(buf[6]));
+  if (dt->month < 1) dt->month = 1;
+  if (dt->month > 12) dt->month = 12;
+  const uint8_t maxDay = daysInMonth(dt->year, dt->month);
+  if (dt->day < 1) dt->day = 1;
+  if (dt->day > maxDay) dt->day = maxDay;
+  if (dt->weekday > 6) dt->weekday = dayOfWeek(dt->year, dt->month, dt->day);
+  return 1;
+}
+
+extern "C" uint8_t mia_host_rtc_write(const MiaHostDateTime *dt) {
+  if (dt == nullptr) return 0;
+  uint8_t wday = dayOfWeek(dt->year, dt->month, dt->day);
+  /* Clear the PCF8563 control/status so the clock runs and alarms are off. */
+  const uint8_t ctrl[2] = {0x00, 0x00};
+  rtcWriteRegs(0x00, ctrl, 2);
+  /* Write the 7 time registers starting at 0x02. VL bit (bit7 of seconds) = 0. */
+  uint8_t data[7];
+  data[0] = toBcd(dt->second);
+  data[1] = toBcd(dt->minute);
+  data[2] = toBcd(dt->hour);
+  data[3] = toBcd(dt->day);
+  data[4] = static_cast<uint8_t>(toBcd(wday) & 0x07);
+  data[5] = static_cast<uint8_t>(toBcd(dt->month) & 0x1F);
+  data[6] = toBcd(static_cast<uint8_t>(dt->year % 100));
+  bool ok = rtcWriteRegs(RTC_TIME_REG, data, 7);
+  return ok ? 1 : 0;
+}
+
+extern "C" uint8_t mia_host_rtc_days_in_month(uint16_t year, uint8_t month) {
+  return daysInMonth(year, month);
+}
+
+extern "C" uint8_t mia_host_rtc_day_of_week(const MiaHostDateTime *dt) {
+  if (dt == nullptr) return 0;
+  return dayOfWeek(dt->year, dt->month, dt->day);
+}
+extern "C" uint8_t mia_host_get_system_info(MiaHostSystemInfo *info) {
+  if (info == nullptr) return 0;
+  memset(info, 0, sizeof(MiaHostSystemInfo));
+
+  esp_chip_info_t chip;
+  esp_chip_info(&chip);
+
+  switch (chip.model) {
+    case CHIP_ESP32:    strncpy(info->chip_model, "ESP32",    sizeof(info->chip_model) - 1); break;
+    case CHIP_ESP32S2:  strncpy(info->chip_model, "ESP32-S2", sizeof(info->chip_model) - 1); break;
+    case CHIP_ESP32S3:  strncpy(info->chip_model, "ESP32-S3", sizeof(info->chip_model) - 1); break;
+    case CHIP_ESP32C2:  strncpy(info->chip_model, "ESP32-C2", sizeof(info->chip_model) - 1); break;
+    case CHIP_ESP32C3:  strncpy(info->chip_model, "ESP32-C3", sizeof(info->chip_model) - 1); break;
+    case CHIP_ESP32C6:  strncpy(info->chip_model, "ESP32-C6", sizeof(info->chip_model) - 1); break;
+    case CHIP_ESP32H2:  strncpy(info->chip_model, "ESP32-H2", sizeof(info->chip_model) - 1); break;
+    default:            strncpy(info->chip_model, "ESP32",    sizeof(info->chip_model) - 1); break;
+  }
+
+  info->chip_revision = (uint8_t)chip.revision;
+  info->cpu_mhz = (uint16_t)(esp_clk_cpu_freq() / 1000000);
+  info->free_heap_kb = esp_get_free_heap_size() / 1024;
+
+  uint32_t flash_size = 0;
+  if (esp_flash_get_size(NULL, &flash_size) == ESP_OK) {
+    info->flash_mb = flash_size / (1024 * 1024);
+  }
+
+  info->tft_ready = display_host_ready() ? 1 : 0;
+  info->sd_ready = g_sd_ready ? 1 : 0;
+  return 1;
+}
+
+extern "C" uint8_t mia_host_read_battery(MiaHostBatteryInfo *info) {
+  if (info == nullptr) return 0;
+  memset(info, 0, sizeof(MiaHostBatteryInfo));
+
+  // ADC1_CH0 = GPIO1 (VBAT_VOLTAGE_PIN)
+  static bool adc_initialized = false;
+  if (!adc_initialized) {
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_DB_11);
+    adc_initialized = true;
+  }
+
+  int raw = adc1_get_raw(ADC1_CHANNEL_0);
+  if (raw < 0) raw = 0;
+
+  info->raw = raw;
+  // VBAT = raw * 3.3V / 4095 * 2.0 (VBAT_DIVIDER)
+  float volts = (float)raw * 3.3f / 4095.0f * 2.0f;
+  info->millivolts = (uint32_t)(volts * 1000.0f);
+  return 1;
+}
 
 // ---------------------------------------------------------------------------
 // WiFi scan ABI
@@ -963,7 +1184,7 @@ extern "C" uint8_t mia_host_wifi_files_start(void) {
                    sizeof(station_pass), ap_ssid, sizeof(ap_ssid));
 
   if (ap_ssid[0] == '\0') {
-    strcpy(ap_ssid, "MiaOS-SD");
+    strcpy(ap_ssid, "MiaOS");
   }
 
   bool connected = false;
@@ -1009,6 +1230,7 @@ extern "C" uint8_t mia_host_wifi_files_start(void) {
   // Start HTTP server
   httpd_config_t httpd_cfg = HTTPD_DEFAULT_CONFIG();
   httpd_cfg.max_uri_handlers = 8;
+  httpd_cfg.max_open_sockets = 2;
   httpd_cfg.lru_purge_enable = true;
   if (httpd_start(&s_wf_server, &httpd_cfg) != ESP_OK) {
     strcpy(s_wf_status, "HTTP fail");
@@ -1550,7 +1772,7 @@ extern "C" uint8_t mia_host_ftp_start(void) {
   strcpy(s_ftp_status, "Starting...");
 
   // Start AP
-  if (wifi_start_ap("MiaOS-FTP", nullptr) != ESP_OK) {
+  if (wifi_start_ap("MiaOS", nullptr) != ESP_OK) {
     strcpy(s_ftp_status, "WiFi fail");
     return 0;
   }
@@ -1583,7 +1805,7 @@ extern "C" uint8_t mia_host_ftp_start(void) {
   listen(s_ftp_ctrl_sock, 1);
   s_ftp_running = true;
   strcpy(s_ftp_status, "FTP ready");
-  ESP_LOGI(FTP_TAG, "FTP server ftp://%s user=guest pass=guest", s_ftp_ip);
+  ESP_LOGI(FTP_TAG, "FTP server ftp://%s user=miaos pass=miaos", s_ftp_ip);
   return 1;
 }
 
@@ -1640,9 +1862,9 @@ extern "C" uint8_t mia_host_ftp_get_status(MiaHostFtpStatus *status) {
   memset(status, 0, sizeof(*status));
   status->running = s_ftp_running ? 1 : 0;
   strncpy(status->status, s_ftp_status, sizeof(status->status) - 1);
-  strncpy(status->ssid, "MiaOS-FTP", sizeof(status->ssid) - 1);
+  strncpy(status->ssid, "MiaOS", sizeof(status->ssid) - 1);
   strncpy(status->ip, s_ftp_ip, sizeof(status->ip) - 1);
-  strncpy(status->user, "guest", sizeof(status->user) - 1);
-  strncpy(status->pass, "guest", sizeof(status->pass) - 1);
+  strncpy(status->user, "miaos", sizeof(status->user) - 1);
+  strncpy(status->pass, "miaos", sizeof(status->pass) - 1);
   return 1;
 }

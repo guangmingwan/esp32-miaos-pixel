@@ -16,9 +16,17 @@ static uint32_t file_count;
 static uint32_t selected_file;
 static char current_path[256] = "/";
 
+static uint8_t delete_confirming;
+static char delete_target[260];
+
 static uint8_t exit_pressed(void) {
   return mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
          mia_host_button_down(MIA_HOST_BUTTON_START);
+}
+
+static uint8_t delete_combination(void) {
+  return mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
+         mia_host_button_pressed(MIA_HOST_BUTTON_A);
 }
 
 static void scan_current_directory(void) {
@@ -83,9 +91,27 @@ static void draw_sd_browser(void) {
     mia_host_draw_text(8, y, line, fg, bg);
   }
 
-  mia_host_draw_text(8, 222, "UP/DN Scroll  A:Enter  B:Up", MIA_HOST_GRAY,
-                     MIA_HOST_BLACK);
+  mia_host_draw_text(8, 222, "UP/DN Scroll  A:Enter  B:Up  SEL+A:Del",
+                     MIA_HOST_GRAY, MIA_HOST_BLACK);
   mia_host_present();
+
+  if (delete_confirming) {
+    mia_host_fill_rect(20, 80, 280, 60, MIA_HOST_BLUE);
+    mia_host_fill_rect(21, 81, 278, 58, MIA_HOST_BLACK);
+    mia_host_draw_text(40, 92, "Delete?", MIA_HOST_RED, MIA_HOST_BLACK);
+    char name_part[48];
+    const char *slash = strrchr(delete_target, '/');
+    if (slash) {
+      strncpy(name_part, slash + 1, sizeof(name_part) - 1);
+      name_part[sizeof(name_part) - 1] = 0;
+    } else {
+      strncpy(name_part, delete_target, sizeof(name_part) - 1);
+    }
+    mia_host_draw_text(40, 112, name_part, MIA_HOST_WHITE, MIA_HOST_BLACK);
+    mia_host_draw_text(40, 132, "A:Delete  B:Cancel", MIA_HOST_GRAY,
+                       MIA_HOST_BLACK);
+    mia_host_present();
+  }
 }
 
 int sd_browser_main_impl(int argc, char *argv[]) {
@@ -95,6 +121,7 @@ int sd_browser_main_impl(int argc, char *argv[]) {
     return 1;
   }
   strcpy(current_path, "/");
+  delete_confirming = 0;
   scan_current_directory();
   draw_sd_browser();
   while (1) {
@@ -103,26 +130,46 @@ int sd_browser_main_impl(int argc, char *argv[]) {
       break;
     }
     uint8_t changed = 0;
-    if (mia_host_button_pressed(MIA_HOST_BUTTON_UP) && selected_file > 0) {
-      --selected_file;
-      changed = 1;
-    }
-    if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN) && selected_file + 1 < file_count) {
-      ++selected_file;
-      changed = 1;
-    }
-    if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
-      if (file_count > 0 && selected_file < file_count && files[selected_file].is_dir) {
-        selected_entry_path(current_path, sizeof(current_path));
+
+    if (delete_confirming) {
+      if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
+        mia_host_sd_remove(delete_target);
+        delete_confirming = 0;
         scan_current_directory();
+        changed = 1;
+      } else if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
+        delete_confirming = 0;
+        changed = 1;
       }
-      changed = 1;
+    } else {
+      if (mia_host_button_pressed(MIA_HOST_BUTTON_UP) && selected_file > 0) {
+        --selected_file;
+        changed = 1;
+      }
+      if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN) && selected_file + 1 < file_count) {
+        ++selected_file;
+        changed = 1;
+      }
+      if (mia_host_button_pressed(MIA_HOST_BUTTON_A) &&
+          !mia_host_button_down(MIA_HOST_BUTTON_SELECT)) {
+        if (file_count > 0 && selected_file < file_count && files[selected_file].is_dir) {
+          selected_entry_path(current_path, sizeof(current_path));
+          scan_current_directory();
+        }
+        changed = 1;
+      }
+      if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
+        navigate_to_parent();
+        scan_current_directory();
+        changed = 1;
+      }
+      if (delete_combination() && file_count > 0 && selected_file < file_count) {
+        selected_entry_path(delete_target, sizeof(delete_target));
+        delete_confirming = 1;
+        changed = 1;
+      }
     }
-    if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
-      navigate_to_parent();
-      scan_current_directory();
-      changed = 1;
-    }
+
     if (changed) {
       draw_sd_browser();
     }
