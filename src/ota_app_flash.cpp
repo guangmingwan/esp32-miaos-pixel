@@ -240,23 +240,88 @@ bool miaReadOtaManifest(OtaAppManifest *manifest) {
   part.offset = slot->address;
   part.size = slot->size;
   esp_image_metadata_t metadata = {};
-  esp_err_t err = esp_image_get_metadata(&part, &metadata);
+  esp_err_t err;
+  {
+    // Pause TG1 IWDT during image header verification; on this ESP32-S3 board
+    // esp_image_get_metadata can trigger a watchdog reset when the partition
+    // has no valid image or corrupted data.
+    ScopedIntWdtPause wdtGuard;
+    err = esp_image_get_metadata(&part, &metadata);
+  }
   if (err != ESP_OK || metadata.image_len == 0 || metadata.image_len > slot->size) {
     return false;
   }
 
-  // Manifest trailer is at offset image_len (after the ESP-IDF image)
-  const size_t trailerOffset = metadata.image_len;
-  if (trailerOffset + MIA_MANIFEST_TRAILER_SIZE > slot->size) {
-    return false;
+  // Scan forward from image_len to find the manifest trailer.
+  // esptool.py pads each segment to 16 bytes and appends an optional SHA-256
+  // hash, so metadata.image_len points before the trailer location.  Scan a
+  // reasonable region for the MIA1 magic.
+  {
+    const size_t scanBytes = 512;
+    const size_t scanEnd = min(metadata.image_len + scanBytes, slot->size);
+    const size_t actualBytes = scanEnd - metadata.image_len;
+
+    uint8_t *scanBuf = (uint8_t *)heap_caps_malloc(actualBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!scanBuf) return false;
+
+    err = esp_partition_read(slot, metadata.image_len, scanBuf, actualBytes);
+    if (err != ESP_OK) {
+      free(scanBuf);
+      return false;
+    }
+
+    bool found = false;
+    for (size_t i = 0; i + MIA_MANIFEST_TRAILER_SIZE <= actualBytes; i++) {
+      uint32_t magic;
+      memcpy(&magic, scanBuf + i, sizeof(magic));
+      if (magic == MIA_APP_MANIFEST_MAGIC) {
+        memcpy(manifest, scanBuf + i, sizeof(*manifest));
+        if (miaManifestIsValid(manifest)) {
+          found = true;
+          break;
+        }
+      }
+    }
+    free(scanBuf);
+    if (found) return true;
   }
 
+  // Last resort: try the exact image_len offset (unpadded — works only when
+  // there is no padding/hash between image data and the trailer).
+  if (metadata.image_len + MIA_MANIFEST_TRAILER_SIZE > slot->size) {
+    return false;
+  }
   uint8_t buf[MIA_MANIFEST_TRAILER_SIZE];
-  err = esp_partition_read(slot, trailerOffset, buf, sizeof(buf));
+  err = esp_partition_read(slot, metadata.image_len, buf, sizeof(buf));
   if (err != ESP_OK) return false;
-
   memcpy(manifest, buf, sizeof(buf));
   return miaManifestIsValid(manifest) != 0;
+}
+
+// Create a directory and all parents.  Arduino SD.mkdir doesn't create
+// intermediate directories, so we split at '/' and create each component.
+static bool recursiveSdMkdir(const char *path) {
+  if (!path || path[0] == '\0') return false;
+
+  char buf[128];
+  const size_t len = strnlen(path, sizeof(buf) - 1);
+  if (len >= sizeof(buf) - 1) return false;
+  memcpy(buf, path, len);
+  buf[len] = '\0';
+
+  char *p = buf;
+  if (*p == '/') ++p;
+  while (true) {
+    char *slash = strchr(p, '/');
+    if (slash) *slash = '\0';
+    if (buf[0] != '\0' && !SD.mkdir(buf)) {
+      if (!SD.exists(buf)) return false;  // mkdir fails if dir exists
+    }
+    if (!slash) break;
+    *slash = '/';
+    p = slash + 1;
+  }
+  return true;
 }
 
 bool miaReadManifestFromFile(const char *sdPath, OtaAppManifest *manifest) {
@@ -309,7 +374,11 @@ OtaAppExportResult miaExportAppSlotToSd(const char *sdPath, bool sdReady) {
 
   part.offset = slot->address;
   part.size = slot->size;
-  esp_err_t err = esp_image_get_metadata(&part, &metadata);
+  esp_err_t err;
+  {
+    ScopedIntWdtPause wdtGuard;
+    err = esp_image_get_metadata(&part, &metadata);
+  }
   if (err != ESP_OK || metadata.image_len == 0 || metadata.image_len > slot->size) {
     launcherTracef("[ota-export] invalid image err=0x%x len=%u", err,
                    static_cast<unsigned>(metadata.image_len));
@@ -413,7 +482,7 @@ OtaAppExportResult miaExportOtaToSd(bool sdReady) {
     return {OtaAppExportStatus::InvalidPath, 0, 0};
   }
 
-  if (!SD.mkdir(dirPath)) {
+  if (!recursiveSdMkdir(dirPath)) {
     launcherTracef("[ota-export-auto] mkdir failed: %s", dirPath);
     return {OtaAppExportStatus::MkdirFailed, 0, 0};
   }

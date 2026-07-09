@@ -3,7 +3,7 @@
 #include <SD.h>
 
 static constexpr const char *CONFIG_PATH = "/wifi.txt";
-static constexpr const char *DEFAULT_AP_SSID = "MiaOS-SD";
+static constexpr const char *DEFAULT_AP_SSID = "MiaOS";
 
 static void applyConfigLine(WifiFileConfig &config, const String &line) {
   const int separator = line.indexOf('=');

@@ -10,15 +10,8 @@
 #include "launcher_log.h"
 #include "ota_app_flash.h"
 
-static constexpr const char *APP_ROOTS[] = {
-    "/MiaOS/Games",
-    "/MiaOS/Utils",
-    "/MiaOS/Settings",
-    "/MiaOS/Emulators",
-    "/MiaOS/Media",
-    "/MiaOS/Application",
-};
 static constexpr char SD_VFS_ROOT[] = "/sd";
+static constexpr char MIAOS_ROOT[] = "/MiaOS";
 static constexpr char APP_SUFFIX[] = ".app";
 static constexpr char APP_FIRMWARE_EXT[] = ".bin";
 static constexpr uint16_t MAX_SCAN_ENTRIES = 128;
@@ -198,10 +191,31 @@ SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
 
   uint16_t scanned = 0;
   uint8_t found = 0;
-  for (size_t i = 0; i < sizeof(APP_ROOTS) / sizeof(APP_ROOTS[0]) &&
-                     scanned < MAX_SCAN_ENTRIES;
-       ++i) {
-    scanAppRoot(APP_ROOTS[i], apps, capacity, found, scanned);
+
+  // Dynamically list subdirectories under /MiaOS/ as category roots.
+  char vfsMiaos[64];
+  formatVfsPath(vfsMiaos, sizeof(vfsMiaos), MIAOS_ROOT);
+  DIR *miaosDir = opendir(vfsMiaos);
+  if (miaosDir != nullptr) {
+    while (true) {
+      scanYield();
+      struct dirent *entry = readdir(miaosDir);
+      if (entry == nullptr) break;
+
+      const char *name = entry->d_name;
+      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+
+      char rootPath[64];
+      const int rpLen = snprintf(rootPath, sizeof(rootPath), "%s/%s", MIAOS_ROOT, name);
+      if (rpLen < 0 || static_cast<size_t>(rpLen) >= sizeof(rootPath)) continue;
+
+      if (isDirectoryPath(rootPath)) {
+        scanAppRoot(rootPath, apps, capacity, found, scanned);
+      }
+    }
+    closedir(miaosDir);
+  } else {
+    launcherTracef("[sd-scan] missing miaos root: %s", vfsMiaos);
   }
 
   if (found > capacity) {

@@ -21,9 +21,9 @@ enum LavaPalette : uint8_t {
   LAVA_DARK_BLUE = 8,
 };
 
-static constexpr const char *FTP_AP_SSID = "MiaOS-FTP";
-static constexpr const char *FTP_USER = "guest";
-static constexpr const char *FTP_PASS = "guest";
+static constexpr const char *FTP_AP_SSID = "MiaOS";
+static constexpr const char *FTP_USER = "miaos";
+static constexpr const char *FTP_PASS = "miaos";
 
 static FtpServer g_ftp;
 static bool g_ftpStarted = false;
@@ -48,8 +48,8 @@ static void drawFtpServer(AppContext &context) {
   lavaDrawText(4, 56, FTP_AP_SSID, LAVA_CYAN, LAVA_BLACK);
   String host = "ftp://" + g_ip.toString();
   lavaDrawText(4, 82, host.c_str(), LAVA_YELLOW, LAVA_BLACK);
-  lavaDrawText(4, 108, "User: guest", LAVA_WHITE, LAVA_BLACK);
-  lavaDrawText(4, 126, "Pass: guest", LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(4, 108, "User: miaos", LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(4, 126, "Pass: miaos", LAVA_WHITE, LAVA_BLACK);
   lavaDrawText(4, 222, "Use PASV  SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }

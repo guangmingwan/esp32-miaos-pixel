@@ -20,10 +20,10 @@ extern AppContext g_context;
 namespace {
 
 constexpr uint32_t WIFI_STA_CONNECT_TIMEOUT_MS = 12000;
-constexpr char WIFI_FILES_DEFAULT_AP_SSID[] = "MiaOS-SD";
-constexpr char FTP_AP_SSID[] = "MiaOS-FTP";
-constexpr char FTP_USER[] = "guest";
-constexpr char FTP_PASS[] = "guest";
+constexpr char WIFI_FILES_DEFAULT_AP_SSID[] = "MiaOS";
+constexpr char FTP_AP_SSID[] = "MiaOS";
+constexpr char FTP_USER[] = "miaos";
+constexpr char FTP_PASS[] = "miaos";
 
 WifiFileConfig g_wifiFilesConfig = {"", "", WIFI_FILES_DEFAULT_AP_SSID, ""};
 bool g_wifiFilesRunning = false;

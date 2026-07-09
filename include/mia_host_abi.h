@@ -47,6 +47,7 @@ typedef struct MiaHostDirEntry {
 
 int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entries,
                              uint32_t capacity);
+int32_t mia_host_sd_remove(const char *path);
 
 typedef struct MiaHostSystemInfo {
   char chip_model[24];
