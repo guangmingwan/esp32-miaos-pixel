@@ -1,0 +1,15 @@
+menu "USB WiFi app"
+
+config USB_WIFI_FALLBACK_SSID
+    string "Fallback WiFi SSID"
+    default ""
+    help
+        Optional development fallback used only when /sd/wifi.txt has no ssid= entry.
+
+config USB_WIFI_FALLBACK_PASSWORD
+    string "Fallback WiFi password"
+    default ""
+    help
+        Optional development fallback used with USB_WIFI_FALLBACK_SSID.
+
+endmenu

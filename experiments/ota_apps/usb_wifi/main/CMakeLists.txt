@@ -1,0 +1,29 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "usb_wifi_main.c"
+        "../../common_host/host_platform.cpp"
+        "../../common_host/display_host.cpp"
+    PRIV_REQUIRES
+        app_update
+        driver
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_i2s
+        esp_driver_sdspi
+        esp_driver_spi
+        esp_event
+        esp_http_server
+        esp_netif
+        esp_partition
+        esp_rom
+        esp_timer
+        esp_wifi
+        fatfs
+        nvs_flash
+        sdmmc
+    INCLUDE_DIRS
+        "."
+        "../../common_host"
+        "../../../../include"
+)
