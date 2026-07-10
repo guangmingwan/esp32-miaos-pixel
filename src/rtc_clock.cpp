@@ -74,6 +74,7 @@ const char *rtcWeekdayShortName(uint8_t weekday) {
 }
 
 bool rtcReadDateTime(RtcDateTime &dateTime) {
+  Wire.setTimeOut(50);
   Wire.beginTransmission(RTC_I2C_ADDR);
   Wire.write(RTC_TIME_REG);
   if (Wire.endTransmission(false) != 0) {
