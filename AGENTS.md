@@ -38,6 +38,15 @@
 - USB MSC exits back to launcher with `SELECT + START` and writes `seq=1, seq=3` for `ota_0`; launcher writes the matching `ota_1` entries before rebooting to USB Disk.
 - `sdkconfig.defaults` disables task WDT and previously enabled ELF loader options (now disabled — OTA partition mode replaces ELF loader); `sdkconfig.esp32s3` and `dependencies.lock` are generated/ignored locally, so avoid treating local diffs there as source edits.
 
+## Droid GBK Font Rendering Gotchas
+
+- `fontDroidGbk12` is a variable-length font containing printable ASCII plus GBK Chinese glyphs. Its generated GBK offset table does not index ASCII, so never resolve ASCII by repeatedly scanning the font blob from the beginning; launcher text measurement and drawing amplify that into a long render that can trigger the 300 ms TG1 interrupt WDT.
+- Keep printable ASCII U+0020 through U+007E on the compile-time `DROID_ASCII_OFFSETS` O(1) path in `src/lava_text.cpp`. Chinese characters use Unicode-to-GBK lookup followed by `DROID_GBK12_GLYPH_OFFSETS`. Do not add a mutable runtime glyph cache or fall back to `fontBasic8x8` for Droid ASCII.
+- U+0020 space is a valid zero-bitmap Droid glyph (`width=0`, `height=0`, `xDelta=3`). Treat it as advance-only instead of rejecting it as malformed or drawing a fallback box.
+- `drawLauncher()` pauses TG1 WDT with `ScopedIntWdtPause`. While `g_launcherDrawing` is true, the project `esp32_task_wdt_reset()` yield shim must not call `delay(1)` from inside font decoding; the launcher render scope suppresses that delay and restores normal yielding after the frame completes.
+- Do not hide this class of bug by increasing the interrupt-WDT timeout. Keep the ESP-IDF default 300 ms timeout, optimize glyph lookup, and bound/validate glyph offsets and bitmap dimensions.
+- Serial logging changes rendering timing and previously masked the failure. For timing-sensitive renderer diagnosis, use a foreground time-bounded serial capture for reset causes and RTC-retained numeric breadcrumbs for the last render stage; remove all breadcrumbs after locating the fault.
+
 ## App And OTA App Boundaries
 
 - Built-in launcher apps implement `LauncherApp` from `include/app.h`; add new built-ins by adding the module/header and registering it in the `BUILTIN_APPS` array in `src/main.cpp`.
