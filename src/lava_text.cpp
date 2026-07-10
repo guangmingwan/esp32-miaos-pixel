@@ -10,12 +10,18 @@
 
 #include "int_wdt_guard.h"
 #include "lava_font.h"
+#include "launcher_log.h"
 
 static constexpr uint8_t LAVA_FONT_MAX_HEIGHT = 32;
 static constexpr uint8_t LAVA_FONT_FALLBACK_WIDTH = 8;
 static constexpr uint8_t LAVA_DRAW_CHARS_PER_YIELD = 8;
 static constexpr const char *LAVA_TEXT_NAMESPACE = "lava-text";
 static constexpr const char *LAVA_TEXT_FONT_KEY = "font";
+static constexpr size_t DROID_GBK12_DATA_BYTES = 456429;
+
+static const uint8_t *droidFontDataEnd() {
+  return fontDroidGbk12.data + DROID_GBK12_DATA_BYTES;
+}
 
 extern "C" void esp32_task_wdt_reset(void);
 
@@ -196,6 +202,15 @@ static uint16_t glyphCode(const uint8_t *glyph) {
 static uint8_t glyphY(const uint8_t *glyph) { return glyph[2]; }
 static uint8_t glyphWidth(const uint8_t *glyph) { return glyph[3]; }
 static uint8_t glyphHeight(const uint8_t *glyph) { return glyph[4]; }
+
+static bool glyphLooksValid(const uint8_t *glyph) {
+  if (glyph == nullptr) {
+    return false;
+  }
+  const uint8_t height = glyphHeight(glyph);
+  const uint8_t width = glyphWidth(glyph);
+  return height > 0 && height <= LAVA_FONT_MAX_HEIGHT && width > 0 && width <= 31;
+}
 static uint8_t glyphXOffset(const uint8_t *glyph) { return glyph[5]; }
 static uint8_t glyphXDelta(const uint8_t *glyph) { return glyph[6]; }
 static const uint8_t *glyphData(const uint8_t *glyph) { return glyph + 7; }
@@ -207,6 +222,21 @@ static size_t glyphByteSize(const uint8_t *glyph) {
   }
   return 7 + (((width * glyphHeight(glyph)) - 1) / 8) + 1;
 }
+
+static constexpr uint32_t DROID_ASCII_OFFSETS[] = {
+    0x00000000u, 0x00000007u, 0x00000010u, 0x00000019u, 0x00000028u, 0x00000036u, 0x00000046u, 0x00000056u,
+    0x0000005Eu, 0x0000006Au, 0x00000076u, 0x00000082u, 0x0000008Du, 0x00000095u, 0x0000009Du, 0x000000A5u,
+    0x000000B1u, 0x000000BEu, 0x000000C9u, 0x000000D6u, 0x000000E3u, 0x000000F2u, 0x000000FFu, 0x0000010Cu,
+    0x00000119u, 0x00000126u, 0x00000133u, 0x0000013Bu, 0x00000145u, 0x00000150u, 0x0000015Au, 0x00000165u,
+    0x00000172u, 0x00000185u, 0x00000195u, 0x000001A3u, 0x000001B1u, 0x000001C0u, 0x000001CDu, 0x000001DAu,
+    0x000001E9u, 0x000001F8u, 0x00000204u, 0x00000210u, 0x0000021Eu, 0x0000022Bu, 0x0000023Du, 0x0000024Cu,
+    0x0000025Cu, 0x0000026Au, 0x0000027Cu, 0x0000028Au, 0x00000297u, 0x000002A6u, 0x000002B5u, 0x000002C4u,
+    0x000002D8u, 0x000002E7u, 0x000002F6u, 0x00000304u, 0x00000310u, 0x0000031Cu, 0x00000328u, 0x00000334u,
+    0x0000033Cu, 0x00000344u, 0x00000350u, 0x0000035Fu, 0x0000036Au, 0x00000378u, 0x00000384u, 0x00000392u,
+    0x000003A0u, 0x000003AEu, 0x000003B7u, 0x000003C3u, 0x000003D1u, 0x000003DAu, 0x000003E9u, 0x000003F5u,
+    0x00000402u, 0x00000411u, 0x0000041Fu, 0x0000042Au, 0x00000435u, 0x00000441u, 0x0000044Du, 0x0000045Au,
+    0x00000469u, 0x00000476u, 0x00000485u, 0x00000491u, 0x0000049Eu, 0x000004A7u, 0x000004B4u,
+};
 
 static bool unicodeToGbkCode(uint16_t unicode, uint16_t &gbk) {
   size_t low = 0;
@@ -232,15 +262,22 @@ static const uint8_t *droidGlyphByGbkCode(int codepoint) {
     return nullptr;
   }
 
-  uint16_t gbk = 0;
+  if (codepoint >= 0x20 && codepoint <= 0x7E) {
+    return fontDroidGbk12.data + DROID_ASCII_OFFSETS[codepoint - 0x20];
+  }
   if (codepoint < 0x80) {
-    gbk = static_cast<uint16_t>(codepoint);
-  } else if (!unicodeToGbkCode(static_cast<uint16_t>(codepoint), gbk)) {
+    return nullptr;
+  }
+
+  uint16_t gbk = 0;
+  if (!unicodeToGbkCode(static_cast<uint16_t>(codepoint), gbk)) {
     return nullptr;
   }
 
   const uint32_t offset = DROID_GBK12_GLYPH_OFFSETS[gbk];
-  return offset == DROID_GBK12_NO_GLYPH ? nullptr : fontDroidGbk12.data + offset;
+  return offset == DROID_GBK12_NO_GLYPH || offset > DROID_GBK12_DATA_BYTES - 7
+             ? nullptr
+             : fontDroidGbk12.data + offset;
 }
 
 static uint8_t glyphAdvance(const LavaFont &font, uint8_t points, uint32_t *rows, int codepoint) {
@@ -265,18 +302,16 @@ static uint8_t glyphAdvance(const LavaFont &font, uint8_t points, uint32_t *rows
 
   const uint8_t *matchedGlyph = nullptr;
   const LavaFont *effectiveFont = &font;
-  if (&font == &fontDroidGbk12 && codepoint >= 0x80) {
+  if (&font == &fontDroidGbk12) {
     matchedGlyph = droidGlyphByGbkCode(codepoint);
-  } else if (&font == &fontDroidGbk12) {
-    effectiveFont = &fontBasic8x8;
   }
 
-  if (matchedGlyph == nullptr && (effectiveFont == &font || (&font == &fontDroidGbk12 && codepoint < 0x80))) {
+  if (matchedGlyph == nullptr && &font != &fontDroidGbk12) {
     const uint8_t *ptr = glyphSearchStart(*effectiveFont, codepoint);
     const uint8_t *end = glyphSearchEnd(*effectiveFont, codepoint);
     esp32_task_wdt_reset();
-    for (size_t i = 0; ptr != nullptr && (end == nullptr || ptr < end) && i < effectiveFont->chars &&
-                       glyphCode(ptr) != 0; ++i) {
+    for (size_t i = 0; ptr != nullptr && (end == nullptr || ptr < end) &&
+                       i < effectiveFont->chars && glyphCode(ptr) != 0; ++i) {
       if (glyphCode(ptr) == codepoint) {
         matchedGlyph = ptr;
         break;
@@ -294,6 +329,18 @@ static uint8_t glyphAdvance(const LavaFont &font, uint8_t points, uint32_t *rows
     memset(rows, 0, sizeof(uint32_t) * height);
   }
 
+  if (matchedGlyph != nullptr && glyphWidth(matchedGlyph) == 0 &&
+      glyphHeight(matchedGlyph) == 0 && glyphXDelta(matchedGlyph) > 0) {
+    const uint8_t advance = glyphXDelta(matchedGlyph);
+    return points == effectiveFont->height
+               ? advance
+               : std::max<uint8_t>(1, (advance * points) / effectiveFont->height);
+  }
+
+  if (matchedGlyph != nullptr && !glyphLooksValid(matchedGlyph)) {
+    matchedGlyph = nullptr;
+  }
+
   if (matchedGlyph == nullptr) {
     const uint8_t boxWidth = effectiveFont->width == 0 ? LAVA_FONT_FALLBACK_WIDTH : effectiveFont->width;
     if (rows != nullptr) {
@@ -306,21 +353,56 @@ static uint8_t glyphAdvance(const LavaFont &font, uint8_t points, uint32_t *rows
   }
 
   const uint8_t *glyph = matchedGlyph;
-
   const uint8_t rawXOffset = glyphXOffset(glyph);
-  const int xOffset = rawXOffset < 0x80 ? rawXOffset : -(0xFF - rawXOffset);
+  const int xOffset = static_cast<int8_t>(rawXOffset);
   const uint8_t drawHeight = glyphHeight(glyph);
+  const uint8_t glyphW = glyphWidth(glyph);
+  if (drawHeight == 0 || drawHeight > LAVA_FONT_MAX_HEIGHT || glyphW == 0 || glyphW > 31) {
+    const uint8_t boxWidth = effectiveFont->width == 0 ? LAVA_FONT_FALLBACK_WIDTH : effectiveFont->width;
+    if (rows != nullptr) {
+      const uint32_t mask = boxWidth >= 31 ? 0x7FFFFFFE : ~((0xFFFFFFFFu << (boxWidth - 1)) | 1u);
+      for (uint8_t i = 0; i < height; ++i) {
+        rows[i] = (0xAAAAAAAAu << (i & 1u)) & mask;
+      }
+    }
+    return boxWidth;
+  }
+
   const uint8_t *data = glyphData(glyph);
+  if (&font == &fontDroidGbk12 && (data < fontDroidGbk12.data || data >= droidFontDataEnd())) {
+    const uint8_t boxWidth = effectiveFont->width == 0 ? LAVA_FONT_FALLBACK_WIDTH : effectiveFont->width;
+    if (rows != nullptr) {
+      const uint32_t mask = boxWidth >= 31 ? 0x7FFFFFFE : ~((0xFFFFFFFFu << (boxWidth - 1)) | 1u);
+      for (uint8_t i = 0; i < height; ++i) {
+        rows[i] = (0xAAAAAAAAu << (i & 1u)) & mask;
+      }
+    }
+    return boxWidth;
+  }
+
   if (rows != nullptr) {
     int byte = 0;
     int mask = 0x80;
     uint32_t nativeRows[LAVA_FONT_MAX_HEIGHT];
     memset(nativeRows, 0, sizeof(nativeRows));
+    const size_t bitmapBytes =
+        static_cast<size_t>(((drawHeight * glyphW) - 1) / 8) + 1;
+    if (&font == &fontDroidGbk12 &&
+        (data > droidFontDataEnd() ||
+         static_cast<size_t>(droidFontDataEnd() - data) < bitmapBytes)) {
+      launcherTracef("[lava] glyph U+%04X out of bounds", codepoint);
+      const uint8_t boxWidth = effectiveFont->width == 0 ? LAVA_FONT_FALLBACK_WIDTH : effectiveFont->width;
+      const uint32_t fallbackMask =
+          boxWidth >= 31 ? 0x7FFFFFFE : ~((0xFFFFFFFFu << (boxWidth - 1)) | 1u);
+      for (uint8_t i = 0; i < height; ++i) {
+        rows[i] = (0xAAAAAAAAu << (i & 1u)) & fallbackMask;
+      }
+      return boxWidth;
+    }
     for (uint8_t y = 0; y < drawHeight; ++y) {
       uint32_t row = 0;
-      const uint8_t width = glyphWidth(glyph);
-      for (uint8_t x = 0; x < width; ++x) {
-        if (((x + (y * width)) % 8) == 0) {
+      for (uint8_t x = 0; x < glyphW; ++x) {
+        if (((x + (y * glyphW)) % 8) == 0) {
           mask = 0x80;
           byte = *data++;
         }
@@ -344,7 +426,7 @@ static uint8_t glyphAdvance(const LavaFont &font, uint8_t points, uint32_t *rows
       }
     }
   }
-  const uint8_t advance = std::max<uint8_t>(glyphWidth(glyph), glyphXDelta(glyph));
+  const uint8_t advance = std::max<uint8_t>(glyphW, glyphXDelta(glyph));
   return points == effectiveFont->height ? advance : std::max<uint8_t>(1, (advance * points) / effectiveFont->height);
 }
 
@@ -552,7 +634,7 @@ int16_t lavaDrawTextUtf8(LavaSurface &surface, int16_t x, int16_t y,
       }
       for (uint8_t col = 0; col < advance; ++col) {
         const int16_t px = cursor + col;
-        if (px >= 0 && px < surface.w && ((rows[row] >> col) & 1u) != 0) {
+        if (px >= 0 && px < surface.w && col < 32 && ((rows[row] >> col) & 1u) != 0) {
           surface.pixels[py * surface.pitch + px] = fg;
         }
       }
