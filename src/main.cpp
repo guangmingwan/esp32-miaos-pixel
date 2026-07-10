@@ -53,6 +53,7 @@ ButtonState g_allButtons[ALL_BUTTON_COUNT] = {};
 static bool g_allButtonLast[ALL_BUTTON_COUNT] = {};
 static uint8_t g_hc165State = 0xFF;
 static int64_t g_lastWatchdogYieldUs = 0;
+static bool g_launcherDrawing = false;
 static uint32_t g_lastLauncherRenderMs = 0;
 static bool g_launcherNeedsInitialRender = true;
 static uint32_t g_launcherInitialRenderAtMs = 0;
@@ -82,8 +83,7 @@ static bool g_otaExportConfirmVisible = false;
 static bool g_otaExportResultVisible = false;
 static OtaAppManifest g_otaExportManifest = {};
 static bool g_otaExportSuccess = false;
-static bool g_fontRestartPromptVisible = false;
-static LavaFontFace g_pendingFontFace = LavaFontFace::Basic8;
+
 static int16_t g_tabScrollX = 0;
 
 static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex);
@@ -567,7 +567,11 @@ static void drawLauncherClock() {
 
 extern "C" void esp32_task_wdt_reset(void) {
   const int64_t now_us = esp_timer_get_time();
-  if (now_us - g_lastWatchdogYieldUs >= 500000) {
+  if (g_launcherDrawing) {
+    g_lastWatchdogYieldUs = now_us;
+    return;
+  }
+  if (now_us - g_lastWatchdogYieldUs >= 50000) {
     delay(1);
     g_lastWatchdogYieldUs = now_us;
   }
@@ -582,6 +586,10 @@ static void drawLauncher() {
     return;
   }
 
+  struct LauncherDrawingScope {
+    LauncherDrawingScope() { g_launcherDrawing = true; }
+    ~LauncherDrawingScope() { g_launcherDrawing = false; }
+  } drawingScope;
   ScopedIntWdtPause wdtGuard;
 
   lavaClear(LAVA_BLACK);
@@ -649,10 +657,7 @@ static void drawLauncher() {
   if (itemCount > maxVisibleApps && g_selectedApp >= maxVisibleApps) {
     firstApp = g_selectedApp - maxVisibleApps + 1;
   }
-  uint8_t visibleEnd = min<uint8_t>(itemCount, firstApp + maxVisibleApps);
-  if (g_launcherNeedsInitialRender) {
-    visibleEnd = min<uint8_t>(visibleEnd, firstApp + INITIAL_DRAW_ITEM_LIMIT);
-  }
+  const uint8_t visibleEnd = min<uint8_t>(itemCount, firstApp + maxVisibleApps);
   for (uint8_t i = firstApp; i < visibleEnd; ++i) {
     const int16_t y = 58 + (i - firstApp) * 16;
     const bool selected = i == g_selectedApp;
@@ -797,26 +802,6 @@ static void drawLauncher() {
     launcherRenderYield();
   }
 
-  if (g_fontRestartPromptVisible) {
-    constexpr int16_t boxW = 248;
-    constexpr int16_t boxH = 90;
-    constexpr int16_t boxX = (LAVA_SCREEN_W - boxW) / 2;
-    constexpr int16_t boxY = (LAVA_SCREEN_H - boxH) / 2;
-    lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
-    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
-    lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, LAVA_YELLOW);
-    lavaDrawText(boxX + 8, boxY + 4, miaTr("Font"), LAVA_BLACK, LAVA_YELLOW);
-    char pendingFontLine[48];
-    snprintf(pendingFontLine, sizeof(pendingFontLine), "%s: %s", miaTr("Apply font"),
-             lavaFontName(g_pendingFontFace));
-    lavaDrawText(boxX + 12, boxY + 30, pendingFontLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
-    lavaDrawText(boxX + 12, boxY + 48, miaTr("Press A to apply and restart"), LAVA_DARK_BLUE,
-                 LAVA_LIGHT_GRAY);
-    lavaDrawText(boxX + 12, boxY + 66, miaTr("B/SEL:Later"), LAVA_DARK_BLUE,
-                 LAVA_LIGHT_GRAY);
-    launcherRenderYield();
-  }
-
   launcherRenderYield();
   lavaPresent();
   launcherRenderYield();
@@ -863,11 +848,11 @@ static void enterSelectedApp() {
 
   if (g_selectedTab == SYSTEM_TAB_INDEX && g_selectedApp == FONT_MENU_INDEX) {
     const uint8_t next = static_cast<uint8_t>(lavaFontFace()) + 1;
-    g_pendingFontFace = next > static_cast<uint8_t>(LavaFontFace::DroidGbk12)
+    const LavaFontFace newFace = next > static_cast<uint8_t>(LavaFontFace::DroidGbk12)
         ? LavaFontFace::Small5x7
         : static_cast<LavaFontFace>(next);
-    launcherTracef("[font] pending switch to %s", lavaFontName(g_pendingFontFace));
-    g_fontRestartPromptVisible = true;
+    lavaSetFontFace(newFace);
+    launcherTracef("[font] switched to %s", lavaFontName(newFace));
     drawLauncher();
     return;
   }
@@ -983,24 +968,6 @@ static void tickLauncher(uint32_t nowMs) {
     if (g_context.buttons[0].pressed || g_context.buttons[1].pressed ||
         g_allButtons[BUTTON_INDEX_SELECT].pressed || systemExitPressed()) {
       g_otaExportResultVisible = false;
-      drawLauncher();
-      return;
-    }
-    return;
-  }
-
-  if (g_fontRestartPromptVisible) {
-    if (g_context.buttons[0].pressed) {
-      lavaSetFontFace(g_pendingFontFace);
-      launcherTracef("[font] applied %s, restart confirmed", lavaFontName(g_pendingFontFace));
-      delay(50);
-      ESP.restart();
-      return;
-    }
-    if (g_context.buttons[1].pressed || g_allButtons[BUTTON_INDEX_SELECT].pressed ||
-        systemExitPressed()) {
-      g_fontRestartPromptVisible = false;
-      launcherTrace("[font] restart deferred");
       drawLauncher();
       return;
     }
@@ -1124,9 +1091,11 @@ void loop() {
     if (now < g_launcherInitialRenderAtMs) {
       return;
     }
-    g_launcherNeedsInitialRender = false;
-    g_lastLauncherRenderMs = now;
     drawLauncher();
+    g_launcherNeedsInitialRender = false;
+    delay(1);
+    drawLauncher();
+    g_lastLauncherRenderMs = millis();
     return;
   }
 
