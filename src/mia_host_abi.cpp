@@ -8,6 +8,7 @@
 #include "app.h"
 #include "lcd_ili9342.h"
 #include "lava_native_display.h"
+#include "mia_i18n.h"
 #include "pins.h"
 #include "rtc_clock.h"
 
@@ -110,6 +111,10 @@ uint8_t mia_host_button_released(uint8_t button) {
 void mia_host_delay_ms(uint32_t ms) { delay(ms); }
 
 uint32_t mia_host_millis(void) { return millis(); }
+
+uint8_t mia_host_language(void) {
+  return miaLanguage() == MiaLanguage::Chinese ? 1 : 0;
+}
 
 void mia_host_backlight_set(uint8_t enabled) {
   if (TFT_BL_PIN >= 0) {

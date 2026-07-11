@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.16)
+project(msx_policy_tests C)
+add_executable(msx_policy_tests msx_policy_tests.c ../target/msx_policy.c)
+target_include_directories(msx_policy_tests PRIVATE ../target)
+enable_testing()
+add_test(NAME msx_policy_tests COMMAND msx_policy_tests)
+add_executable(msx_policy_mutant msx_policy_tests.c ../target/msx_policy.c)
+target_include_directories(msx_policy_mutant PRIVATE ../target)
+target_compile_definitions(msx_policy_mutant PRIVATE MIA_MSX_MUTANT_DISK_REJECTED=1)
+add_test(NAME msx_policy_mutant
+    COMMAND sh -c "$<TARGET_FILE:msx_policy_mutant> >/dev/null 2>&1; test $? -ne 0")

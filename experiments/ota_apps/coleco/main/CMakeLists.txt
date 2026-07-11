@@ -1,0 +1,7 @@
+set(MIA_TARGET coleco)
+set(MIA_EXTENSION col)
+set(MIA_SECOND_EXTENSION rom)
+set(MIA_WIDTH 256)
+set(MIA_HEIGHT 192)
+set(MIA_SMSPLUS_MODE_VALUE 2)
+include(../../emulator_common/template/smsplus_main.cmake)

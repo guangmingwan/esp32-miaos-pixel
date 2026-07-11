@@ -38,11 +38,30 @@ enum class OtaAppExportStatus : uint8_t {
   WriteFailed,
   ManifestMissing,
   MkdirFailed,
+  VerifyFailed,
 };
 
 struct OtaAppExportResult {
   OtaAppExportStatus status;
   int errorCode;
+  size_t bytesWritten;
+};
+
+enum class OtaAppSyncStatus : uint8_t {
+  UpToDate,
+  Updated,
+  SdUnavailable,
+  OtaManifestMissing,
+  OtaManifestLegacy,
+  Failed,
+};
+
+using OtaAppSyncProgress = void (*)(const char *stage, const char *appName,
+                                    size_t completed, size_t total, void *context);
+
+struct OtaAppSyncResult {
+  OtaAppSyncStatus status;
+  OtaAppExportStatus exportStatus;
   size_t bytesWritten;
 };
 
@@ -59,3 +78,5 @@ OtaAppExportResult miaExportOtaToSd(bool sdReady);
 void miaBootAppSlot();
 bool miaReadOtaManifest(OtaAppManifest *manifest);
 bool miaReadManifestFromFile(const char *sdPath, OtaAppManifest *manifest);
+OtaAppSyncResult miaSyncNewerOtaToSd(bool sdReady, OtaAppSyncProgress progress,
+                                     void *context);

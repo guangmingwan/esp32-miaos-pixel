@@ -1,0 +1,6 @@
+set(MIA_TARGET gg)
+set(MIA_EXTENSION gg)
+set(MIA_WIDTH 160)
+set(MIA_HEIGHT 144)
+set(MIA_SMSPLUS_MODE_VALUE 1)
+include(../../emulator_common/template/smsplus_main.cmake)

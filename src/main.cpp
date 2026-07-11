@@ -220,6 +220,46 @@ static void drawSdAppLoadingMessage() {
   lavaPresent();
 }
 
+struct OtaSyncUiState {
+  uint8_t lastPercent;
+  char lastStage[32];
+};
+
+static void drawOtaSyncProgress(const char *stage, const char *appName, size_t completed,
+                                size_t total, void *context) {
+  OtaSyncUiState *state = static_cast<OtaSyncUiState *>(context);
+  const uint8_t percent = total == 0 ? 0 : min<size_t>(100, completed * 100 / total);
+  if (state && strcmp(state->lastStage, stage) == 0 && percent < 100 &&
+      percent < static_cast<uint8_t>(state->lastPercent + 5)) {
+    return;
+  }
+  if (state) {
+    state->lastPercent = percent;
+    strncpy(state->lastStage, stage, sizeof(state->lastStage) - 1);
+    state->lastStage[sizeof(state->lastStage) - 1] = '\0';
+  }
+
+  lavaClear(LAVA_BLACK);
+  lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
+  lavaDrawText(6, 2, miaTr("MiaOS Launcher"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(18, 58, miaTr("OTA App Sync"), LAVA_CYAN, LAVA_BLACK);
+  lavaDrawText(18, 86, miaTr(stage), LAVA_WHITE, LAVA_BLACK);
+  if (appName && appName[0]) {
+    char appLine[48];
+    snprintf(appLine, sizeof(appLine), "%s: %.31s", miaTr("App"), appName);
+    lavaDrawText(18, 108, appLine, LAVA_GRAY, LAVA_BLACK);
+  }
+  if (total > 0) {
+    lavaDrawRect(18, 142, 284, 18, LAVA_GRAY);
+    lavaFillRect(20, 144, static_cast<int16_t>(280u * percent / 100u), 14, LAVA_GREEN);
+    char progressLine[48];
+    snprintf(progressLine, sizeof(progressLine), "%u%%  %u / %u KB", percent,
+             static_cast<unsigned>(completed / 1024), static_cast<unsigned>(total / 1024));
+    lavaDrawText(18, 174, progressLine, LAVA_YELLOW, LAVA_BLACK);
+  }
+  lavaPresent();
+}
+
 static String macAddress() {
   const uint64_t mac = ESP.getEfuseMac();
   char buffer[18];
@@ -350,6 +390,14 @@ static void initSdCard() {
 
   if (!g_context.sdReady) {
     launcherTrace("[sd] continuing without SD");
+  } else {
+    OtaSyncUiState syncUi = {255, {0}};
+    const OtaAppSyncResult sync = miaSyncNewerOtaToSd(true, drawOtaSyncProgress, &syncUi);
+    if (sync.status == OtaAppSyncStatus::Failed) {
+      drawOtaSyncProgress("OTA update failed", "", 0, 0, &syncUi);
+      launcherTracef("[ota-sync] failed: %s", miaOtaAppExportStatusText(sync.exportStatus));
+      delay(1200);
+    }
   }
 #else
   g_context.sdReady = false;

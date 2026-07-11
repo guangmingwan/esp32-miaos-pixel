@@ -1,0 +1,7 @@
+set(MIA_TARGET sms)
+set(MIA_EXTENSION sms)
+set(MIA_SECOND_EXTENSION sg)
+set(MIA_WIDTH 256)
+set(MIA_HEIGHT 192)
+set(MIA_SMSPLUS_MODE_VALUE 0)
+include(../../emulator_common/template/smsplus_main.cmake)

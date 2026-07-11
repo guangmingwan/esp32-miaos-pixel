@@ -276,6 +276,7 @@ SdAppLoaderResult exportSdAppByPath(const char *path, bool sdReady) {
     case OtaAppExportStatus::ReadFailed:
     case OtaAppExportStatus::ManifestMissing:
     case OtaAppExportStatus::MkdirFailed:
+    case OtaAppExportStatus::VerifyFailed:
       return {SdAppLoaderStatus::RunError, 0, result.errorCode};
   }
   return {SdAppLoaderStatus::RunError, 0, result.errorCode};

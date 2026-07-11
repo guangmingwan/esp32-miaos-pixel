@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "@MIA_EMULATOR_MAIN@"
+        "../../common_host/host_platform.cpp"
+        "../../common_host/display_host.cpp"
+    INCLUDE_DIRS
+        "."
+        "../../common_host"
+        "../../emulator_common/hardware/include"
+        "../../emulator_common/runtime/include"
+        "../../emulator_common/storage/include"
+        "../../../../include"
+)

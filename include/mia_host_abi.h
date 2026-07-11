@@ -16,12 +16,21 @@ void mia_host_fill_screen_rgb565(uint16_t color);
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
                         uint8_t bg);
 void mia_host_present(void);
+typedef enum MiaHostResult {
+  MIA_HOST_RESULT_OK = 0,
+  MIA_HOST_RESULT_INVALID_ARGUMENT = -1,
+  MIA_HOST_RESULT_NOT_READY = -2,
+  MIA_HOST_RESULT_IO = -3,
+} MiaHostResult;
+int32_t mia_host_present_rgb565(const uint16_t *pixels, uint32_t width,
+                                uint32_t height, uint32_t pitch_bytes);
 void mia_host_buttons_poll(void);
 uint8_t mia_host_button_down(uint8_t button);
 uint8_t mia_host_button_pressed(uint8_t button);
 uint8_t mia_host_button_released(uint8_t button);
 void mia_host_delay_ms(uint32_t ms);
 uint32_t mia_host_millis(void);
+uint8_t mia_host_language(void);
 void mia_host_backlight_set(uint8_t enabled);
 
 typedef struct MiaHostDateTime {
@@ -40,7 +49,10 @@ uint8_t mia_host_rtc_days_in_month(uint16_t year, uint8_t month);
 uint8_t mia_host_rtc_day_of_week(const MiaHostDateTime *date_time);
 
 typedef struct MiaHostDirEntry {
-  char name[64];
+#ifndef MIA_HOST_DIRENT_NAME_SIZE
+#define MIA_HOST_DIRENT_NAME_SIZE 64
+#endif
+  char name[MIA_HOST_DIRENT_NAME_SIZE];
   uint8_t is_dir;
   uint32_t size;
 } MiaHostDirEntry;

@@ -15,6 +15,7 @@
 #include <esp_netif.h>
 #include <esp_rom_sys.h>
 #include <nvs_flash.h>
+#include <nvs.h>
 #include <esp_timer.h>
 #include <esp_chip_info.h>
 #include <esp_flash.h>
@@ -111,7 +112,7 @@ static int16_t g_stereo_scratch[1024 * 2] = {};
 
 static void delay_us(uint32_t us) { esp_rom_delay_us(us); }
 
-static void scan_hc165() {
+static uint8_t scan_hc165_once() {
   gpio_set_level(HC165_PL_PIN, 0);
   delay_us(5);
   gpio_set_level(HC165_PL_PIN, 1);
@@ -126,7 +127,14 @@ static void scan_hc165() {
     gpio_set_level(HC165_CLK_PIN, 0);
     delay_us(2);
   }
-  g_hc165_state = val;
+  return val;
+}
+
+static void scan_hc165() {
+  const uint8_t first = scan_hc165_once();
+  const uint8_t second = scan_hc165_once();
+  const uint8_t third = scan_hc165_once();
+  g_hc165_state = (first & second) | (first & third) | (second & third);
 }
 
 static void update_buttons() {
@@ -498,6 +506,10 @@ extern "C" void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8
   display_host_draw_text(x, y, text, fg, bg);
 }
 extern "C" void mia_host_present(void) { display_host_present(); }
+extern "C" int32_t mia_host_present_rgb565(const uint16_t *pixels, uint32_t width,
+                                             uint32_t height, uint32_t pitch_bytes) {
+  return display_host_present_rgb565(pixels, width, height, pitch_bytes);
+}
 
 extern "C" void mia_host_buttons_poll(void) { update_buttons(); }
 extern "C" uint8_t mia_host_button_down(uint8_t b) { return b < 14 && g_buttons[b].down ? 1 : 0; }
@@ -516,10 +528,19 @@ extern "C" uint32_t mia_host_millis(void) {
   return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
 
+extern "C" uint8_t mia_host_language(void) {
+  nvs_handle_t language_store;
+  if (nvs_open("mia-i18n", NVS_READONLY, &language_store) != ESP_OK) return 0;
+  uint8_t language = 0;
+  if (nvs_get_u8(language_store, "lang", &language) != ESP_OK) language = 0;
+  nvs_close(language_store);
+  return language == 1 ? 1 : 0;
+}
+
 extern "C" void mia_host_backlight_set(uint8_t enabled) { display_host_backlight_set(enabled); }
 
 extern "C" int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entries, uint32_t capacity) {
-  char vfs_path[256];
+  char vfs_path[1024];
   DIR *dir;
   struct dirent *entry;
   uint32_t count = 0;
@@ -538,7 +559,7 @@ extern "C" int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entri
   }
 
   while (count < capacity && (entry = readdir(dir)) != nullptr) {
-    char child_path[320];
+    char child_path[1280];
     struct stat st = {};
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
       continue;
@@ -559,11 +580,46 @@ extern "C" int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entri
   return (int32_t)count;
 }
 
+#ifdef MIA_SD_BROWSER_FEATURES
+extern "C" uint8_t sd_browser_host_language(void) {
+  return mia_host_language();
+}
+
+extern "C" int32_t sd_browser_host_stat(const char *path, uint32_t *size,
+                                          int64_t *modified) {
+  if (!g_sd_ready || path == nullptr || size == nullptr || modified == nullptr) {
+    return -1;
+  }
+  char vfs_path[1280];
+  const int written = strcmp(path, "/") == 0
+                          ? snprintf(vfs_path, sizeof(vfs_path), "%s", ROOT_DIR)
+                          : snprintf(vfs_path, sizeof(vfs_path), "%s%s", ROOT_DIR, path);
+  if (written < 0 || written >= static_cast<int>(sizeof(vfs_path))) {
+    return -1;
+  }
+  struct stat info = {};
+  if (stat(vfs_path, &info) != 0) {
+    return -1;
+  }
+  *size = S_ISDIR(info.st_mode) ? 0 : static_cast<uint32_t>(info.st_size);
+  *modified = static_cast<int64_t>(info.st_mtime);
+  return 0;
+}
+
+extern "C" int32_t sd_browser_host_capacity(uint64_t *free_bytes,
+                                              uint64_t *total_bytes) {
+  if (!g_sd_ready || free_bytes == nullptr || total_bytes == nullptr) {
+    return -1;
+  }
+  return esp_vfs_fat_info(ROOT_DIR, total_bytes, free_bytes) == ESP_OK ? 0 : -1;
+}
+#endif
+
 extern "C" int32_t mia_host_sd_remove(const char *path) {
   if (!g_sd_ready || path == nullptr) {
     return -1;
   }
-  char vfs_path[288];
+  char vfs_path[1280];
   if (strcmp(path, "/") == 0) {
     return -1;
   }

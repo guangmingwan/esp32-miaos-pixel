@@ -1,0 +1,156 @@
+#include "mia_storage_internal.h"
+
+#include <dirent.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static bool path_is_symlink(const char *path) {
+#ifdef ESP_PLATFORM
+    (void)path;
+    return false;
+#else
+    char target[2];
+    return readlink(path, target, sizeof(target)) >= 0;
+#endif
+}
+
+static MiaStorageStatus append_entry(MiaStoragePickerResult *result, const char *name, const char *path, MiaStorageEntryKind kind, uint64_t size) {
+    MiaStoragePickerEntry *entries = realloc(result->entries, (result->count + 1) * sizeof(*entries));
+    if (entries == NULL) {
+        return mia_storage_error(MIA_STORAGE_ERR_IO, "failed to allocate picker entry");
+    }
+    result->entries = entries;
+    result->entries[result->count] = (MiaStoragePickerEntry){strdup(name), strdup(path), kind, size};
+    if (result->entries[result->count].name == NULL || result->entries[result->count].path == NULL) {
+        return mia_storage_error(MIA_STORAGE_ERR_IO, "failed to allocate picker strings");
+    }
+    result->count += 1;
+    return mia_storage_ok();
+}
+
+void mia_storage_picker_free(MiaStoragePickerResult *result) {
+    if (result == NULL) {
+        return;
+    }
+    for (size_t index = 0; index < result->count; ++index) {
+        free(result->entries[index].name);
+        free(result->entries[index].path);
+    }
+    free(result->entries);
+    result->entries = NULL;
+    result->count = 0;
+}
+
+MiaStorageStatus mia_storage_picker_list(const MiaStorageContext *context, const MiaStorageTarget *target, MiaStoragePickerResult *out_result) {
+    if (target == NULL || out_result == NULL) {
+        return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target and result are required");
+    }
+    *out_result = (MiaStoragePickerResult){0};
+    MiaStoragePath root;
+    MiaStorageStatus status = mia_storage_resolve_virtual(context, target->rom_root, &root);
+    if (status.code != MIA_STORAGE_OK) {
+        return status;
+    }
+    DIR *dir = opendir(root.path);
+    if (dir == NULL) {
+        return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "ROM root is missing");
+    }
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || mia_storage_is_zip(entry->d_name)) {
+            continue;
+        }
+        MiaStoragePath child;
+        status = mia_storage_resolve_child(context, target->rom_root, entry->d_name, &child);
+        if (status.code != MIA_STORAGE_OK) {
+            continue;
+        }
+        struct stat info;
+        if (path_is_symlink(child.path) || stat(child.path, &info) != 0) {
+            continue;
+        }
+        if (S_ISDIR(info.st_mode)) {
+            status = append_entry(out_result, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
+        } else if (S_ISREG(info.st_mode) && mia_storage_extension_matches(entry->d_name, target)) {
+            status = append_entry(out_result, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+        }
+        if (status.code != MIA_STORAGE_OK) {
+            closedir(dir);
+            mia_storage_picker_free(out_result);
+            return status;
+        }
+    }
+    closedir(dir);
+    return mia_storage_ok();
+}
+
+MiaStorageStatus mia_storage_picker_select(const MiaStorageContext *context, const MiaStorageTarget *target, const char *relative_name, MiaStoragePickerResult *out_result) {
+    if (target == NULL || out_result == NULL || relative_name == NULL) {
+        return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target, name, and result are required");
+    }
+    *out_result = (MiaStoragePickerResult){0};
+    if (mia_storage_is_zip(relative_name)) {
+        return mia_storage_error(MIA_STORAGE_ERR_UNSUPPORTED_ARCHIVE, "ZIP archives are not supported");
+    }
+    if (!mia_storage_extension_matches(relative_name, target)) {
+        return mia_storage_error(MIA_STORAGE_ERR_UNSUPPORTED_FILE, "file extension does not match target");
+    }
+    MiaStoragePath path;
+    MiaStorageStatus status = mia_storage_resolve_child(context, target->rom_root, relative_name, &path);
+    if (status.code != MIA_STORAGE_OK) {
+        return status;
+    }
+    struct stat info;
+    if (path_is_symlink(path.path) || stat(path.path, &info) != 0 || !S_ISREG(info.st_mode)) {
+        return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "selected ROM is missing");
+    }
+    return append_entry(out_result, relative_name, path.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+}
+
+static bool wildcard_wad_exists(const char *directory) {
+    DIR *dir = opendir(directory);
+    if (dir == NULL) {
+        return false;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (mia_storage_is_zip(entry->d_name)) {
+            continue;
+        }
+        const char *dot = strrchr(entry->d_name, '.');
+        if (dot != NULL && strcasecmp(dot, ".wad") == 0) {
+            closedir(dir);
+            return true;
+        }
+    }
+    closedir(dir);
+    return false;
+}
+
+MiaStorageStatus mia_storage_validate_requirements(const MiaStorageContext *context, const MiaStorageTarget *target) {
+    if (target == NULL) {
+        return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target is required");
+    }
+    for (size_t index = 0; index < target->requirement_count; ++index) {
+        const MiaStorageRequirement *requirement = &target->requirements[index];
+        if (!requirement->required) {
+            continue;
+        }
+        MiaStoragePath path;
+        if (strstr(requirement->path, "*.wad") != NULL) {
+            MiaStorageStatus status = mia_storage_resolve_virtual(context, target->rom_root, &path);
+            if (status.code != MIA_STORAGE_OK || !wildcard_wad_exists(path.path)) {
+                return mia_storage_error(MIA_STORAGE_ERR_MISSING_REQUIRED_FILE, "required IWAD is missing");
+            }
+            continue;
+        }
+        MiaStorageStatus status = mia_storage_resolve_virtual(context, requirement->path, &path);
+        struct stat info;
+        if (status.code != MIA_STORAGE_OK || stat(path.path, &info) != 0 || S_ISLNK(info.st_mode)) {
+            return mia_storage_error(MIA_STORAGE_ERR_MISSING_REQUIRED_FILE, "required BIOS is missing");
+        }
+    }
+    return mia_storage_ok();
+}
