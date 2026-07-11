@@ -61,10 +61,11 @@ uint32_t mia_app_input_gnuboy_mask(uint32_t input) {
     uint32_t mapped = 0;
     const uint32_t horizontal = input & (MIA_APP_CORE_INPUT_LEFT | MIA_APP_CORE_INPUT_RIGHT);
     const uint32_t vertical = input & (MIA_APP_CORE_INPUT_UP | MIA_APP_CORE_INPUT_DOWN);
-    if (horizontal == MIA_APP_CORE_INPUT_RIGHT) mapped |= 0x01u;
-    if (horizontal == MIA_APP_CORE_INPUT_LEFT) mapped |= 0x02u;
-    if (vertical == MIA_APP_CORE_INPUT_UP) mapped |= 0x04u;
-    if (vertical == MIA_APP_CORE_INPUT_DOWN) mapped |= 0x08u;
+    /* This board's GBC image is mirrored on both input axes at the gnuboy boundary. */
+    if (horizontal == MIA_APP_CORE_INPUT_LEFT) mapped |= 0x01u;
+    if (horizontal == MIA_APP_CORE_INPUT_RIGHT) mapped |= 0x02u;
+    if (vertical == MIA_APP_CORE_INPUT_DOWN) mapped |= 0x04u;
+    if (vertical == MIA_APP_CORE_INPUT_UP) mapped |= 0x08u;
     if (input & MIA_APP_CORE_INPUT_A) mapped |= 0x10u;
     if (input & MIA_APP_CORE_INPUT_B) mapped |= 0x20u;
     if (input & MIA_APP_CORE_INPUT_SELECT) mapped |= 0x40u;

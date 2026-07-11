@@ -146,11 +146,11 @@ static void test_input_maps_host_buttons_and_debounces_exit() {
     mia_app_input_init(&state, 250);
     const uint32_t buttons = (1u << MIA_HOST_KEY_A) | (1u << MIA_HOST_KEY_SELECT) | (1u << MIA_HOST_KEY_START);
     require_true((mia_app_input_core_mask(hardware_target("gb"), buttons) & MIA_APP_CORE_INPUT_A) != 0, "host A maps to core A");
-    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_RIGHT | MIA_APP_CORE_INPUT_A | MIA_APP_CORE_INPUT_START) == 0x91u, "app buttons map to gnuboy native bits");
-    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_LEFT) == 0x02u, "host left maps to gnuboy left");
-    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_RIGHT) == 0x01u, "host right maps to gnuboy right");
-    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_UP) == 0x04u, "host up maps to gnuboy up");
-    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_DOWN) == 0x08u, "host down maps to gnuboy down");
+    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_RIGHT | MIA_APP_CORE_INPUT_A | MIA_APP_CORE_INPUT_START) == 0x92u, "app buttons map to corrected gnuboy native bits");
+    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_LEFT) == 0x01u, "host left maps to corrected gnuboy horizontal bit");
+    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_RIGHT) == 0x02u, "host right maps to corrected gnuboy horizontal bit");
+    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_UP) == 0x08u, "host up maps to corrected gnuboy vertical bit");
+    require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_DOWN) == 0x04u, "host down maps to corrected gnuboy vertical bit");
     require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_LEFT | MIA_APP_CORE_INPUT_RIGHT) == 0,
                  "contradictory horizontal input is neutral");
     require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_UP | MIA_APP_CORE_INPUT_DOWN) == 0,
