@@ -5,8 +5,7 @@
 #include <strings.h>
 
 const char *const mia_msx_bios_files[MIA_MSX_BIOS_COUNT] = {
-    "MSX.ROM", "MSX2.ROM", "MSX2EXT.ROM", "MSX2P.ROM", "MSX2PEXT.ROM",
-    "FMPAC.ROM", "DISK.ROM", "MSXDOS2.ROM", "PAINTER.ROM", "KANJI.ROM",
+    "MSX2.ROM", "MSX2EXT.ROM",
 };
 
 static const uint8_t keys[MIA_MSX_KEYBOARD_ROWS][MIA_MSX_KEYBOARD_COLS] = {

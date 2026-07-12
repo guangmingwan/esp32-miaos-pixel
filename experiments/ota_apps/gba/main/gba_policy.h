@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define MIA_GBA_BIOS_PATH "/sd/bios/gba/gba_bios.bin"
+
 typedef enum {
     MIA_GBA_SAVE_SRAM = 0,
     MIA_GBA_SAVE_FLASH = 1,

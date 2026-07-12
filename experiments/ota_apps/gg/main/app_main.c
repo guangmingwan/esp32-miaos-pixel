@@ -68,5 +68,8 @@ static void emulator_task(void *arg) {
 
 void app_main(void) {
     ESP_ERROR_CHECK(host_platform_init());
-    xTaskCreatePinnedToCore(emulator_task, MIA_APP_NAME "_emu", 32768, NULL, 5, NULL, 1);
+    if (xTaskCreatePinnedToCore(emulator_task, MIA_APP_NAME "_emu", 16384,
+                                NULL, 5, NULL, 1) != pdPASS) {
+        ESP_LOGE(TAG, "emulator task creation failed");
+    }
 }

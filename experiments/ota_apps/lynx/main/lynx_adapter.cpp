@@ -3,10 +3,10 @@ extern "C" {
 #include "mia_host_abi.h"
 #include <esp_rom_crc.h>
 }
+#include <cstring>
 #include "handy.h"
 
 #include <cstdio>
-#include <cstring>
 #include <new>
 
 enum MiaLynxError { MIA_LYNX_ERR_BIOS_MISSING, MIA_LYNX_ERR_BIOS_CORRUPT, MIA_LYNX_ERR_HEADER_CORRUPT, MIA_LYNX_ERR_SAVE_CORRUPT };

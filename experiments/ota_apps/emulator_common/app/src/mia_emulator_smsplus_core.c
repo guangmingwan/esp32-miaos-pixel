@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #define SMS_SURFACE_WIDTH 256u
 #define SMS_SURFACE_HEIGHT 192u
@@ -38,33 +39,53 @@ static MiaCoreStatus file_error(const char *message) {
     return mia_core_error(MIA_CORE_ERR_CALLBACK, message);
 }
 
-static bool has_sega_header(const uint8_t *data, size_t size, size_t *header_offset) {
-    static const size_t offsets[] = {0x1ff0u, 0x3ff0u, 0x7ff0u};
-    for (size_t index = 0; index < sizeof(offsets) / sizeof(offsets[0]); ++index) {
-        if (size >= offsets[index] + 16u && memcmp(data + offsets[index], "TMR SEGA", 8) == 0) {
-            *header_offset = offsets[index];
-            return true;
-        }
-    }
-    return false;
+static bool has_extension(const char *path, const char *extension) {
+    const char *dot = strrchr(path, '.');
+    return dot != NULL && strcasecmp(dot + 1, extension) == 0;
 }
 
 static MiaCoreStatus validate_rom(const char *path) {
     FILE *file = fopen(path, "rb");
     if (file == NULL) return file_error("ROM open failed");
-    uint8_t header[0x8000];
-    const size_t size = fread(header, 1, sizeof(header), file);
-    fclose(file);
-    if (target_mode() == MIA_SMSPLUS_MODE_COLECO) {
-        if (size < 2u || !((header[0] == 0x55u && header[1] == 0xaau) ||
-                           (header[0] == 0xaau && header[1] == 0x55u))) {
-            return file_error("Invalid Coleco ROM header");
-        }
-        return mia_core_ok();
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return file_error("ROM size read failed");
     }
-    size_t offset = 0;
-    if (!has_sega_header(header, size, &offset)) return file_error("Invalid Sega ROM header");
-    const uint8_t region = header[offset + 15u] >> 4u;
+    const long file_size = ftell(file);
+    if (file_size <= 0) {
+        fclose(file);
+        return file_error("ROM is empty");
+    }
+    const long copier_header = file_size > 0x4000 && ((file_size / 512) & 1) ? 512 : 0;
+    const long content_size = file_size - copier_header;
+    if (target_mode() == MIA_SMSPLUS_MODE_COLECO) {
+        uint8_t signature[2];
+        const bool valid = fseek(file, copier_header, SEEK_SET) == 0 &&
+                           fread(signature, 1, sizeof(signature), file) == sizeof(signature) &&
+                           ((signature[0] == 0x55u && signature[1] == 0xaau) ||
+                            (signature[0] == 0xaau && signature[1] == 0x55u));
+        fclose(file);
+        return valid ? mia_core_ok() : file_error("Invalid Coleco ROM header");
+    }
+    if (target_mode() == MIA_SMSPLUS_MODE_SMS && has_extension(path, "sg")) {
+        fclose(file);
+        return content_size > 0 ? mia_core_ok() : file_error("SG-1000 ROM is empty");
+    }
+    static const long offsets[] = {0x1ff0, 0x3ff0, 0x7ff0};
+    uint8_t header[16];
+    size_t size = 0;
+    for (size_t index = 0; index < sizeof(offsets) / sizeof(offsets[0]); ++index) {
+        if (content_size < offsets[index] + (long)sizeof(header)) continue;
+        if (fseek(file, copier_header + offsets[index], SEEK_SET) != 0) continue;
+        if (fread(header, 1, sizeof(header), file) == sizeof(header) &&
+            memcmp(header, "TMR SEGA", 8) == 0) {
+            size = sizeof(header);
+            break;
+        }
+    }
+    fclose(file);
+    if (size == 0) return file_error("Invalid Sega ROM header");
+    const uint8_t region = header[15] >> 4u;
     if (target_mode() == MIA_SMSPLUS_MODE_GG && (region < 5u || region > 7u)) {
         return file_error("ROM is not Game Gear format");
     }
@@ -133,7 +154,9 @@ MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
     option.sndrate = MIA_EMULATOR_SAMPLE_RATE;
     option.overscan = 0;
     option.extra_gg = 0;
-    option.console = target_mode() == MIA_SMSPLUS_MODE_COLECO ? 6 : 0;
+    option.console = target_mode() == MIA_SMSPLUS_MODE_COLECO ? 6 :
+                     target_mode() == MIA_SMSPLUS_MODE_SMS &&
+                     has_extension(runtime->selection.rom_path, "sg") ? 5 : 0;
     if (!load_rom_file(runtime->selection.rom_path)) return file_error("SMS Plus ROM load failed");
     bitmap.width = SMS_SURFACE_WIDTH;
     bitmap.height = SMS_SURFACE_HEIGHT;

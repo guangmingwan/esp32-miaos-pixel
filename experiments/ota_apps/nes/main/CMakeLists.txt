@@ -12,11 +12,14 @@ idf_component_register(
         "../../emulator_common/storage/src/mia_storage_paths.c" "../../emulator_common/storage/src/mia_storage_picker.c"
         "../../emulator_common/storage/src/mia_storage_save.c" "../../emulator_common/storage/src/mia_storage_status.c"
         ${MIA_NOFRENDO_SOURCES} "../../common_host/host_platform.cpp" "../../common_host/display_host.cpp"
+        "../../common_host/droid_gbk_renderer.cpp" "../../../../src/fonts/droid_gbk_12.c"
+        "../../../../src/gbk_unicode_map.cpp" "../../../../src/droid_gbk_index.cpp"
     INCLUDE_DIRS "." "../../common_host" "../../emulator_common/app/include" "../../emulator_common/core/include"
         "../../emulator_common/cores/nes" "../../emulator_common/hardware/include" "../../emulator_common/runtime/include"
         "../../emulator_common/storage/include" "../../emulator_common/storage/src" "../components/nofrendo" "../../../../include")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="nes" MIA_EMULATOR_EXTENSION="nes"
     MIA_EMULATOR_SECOND_EXTENSION="fds" MIA_APP_NAME="nes" MIA_EMULATOR_CATEGORY="Emulators"
     MIA_EMULATOR_ROM_ROOT="/roms/nes" MIA_EMULATOR_SAVE_ROOT="/saves/nes" MIA_EMULATOR_WIDTH=256
-    MIA_EMULATOR_HEIGHT=240 MIA_EMULATOR_SAMPLE_RATE=32000 MIA_EMULATOR_SMSPLUS=1)
+    MIA_EMULATOR_HEIGHT=240 MIA_EMULATOR_SAMPLE_RATE=32000 MIA_EMULATOR_SMSPLUS=1
+    MIA_DISPLAY_DROID_GBK=1 MIA_PICKER_COVERS=1 MIA_HC165_ACTIVE_HIGH=1)
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -Wno-array-bounds -Wno-format)

@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define MIA_STORAGE_PATH_MAX 4096
+#define MIA_STORAGE_PATH_MAX 512
 
 typedef struct {
     char path[MIA_STORAGE_PATH_MAX];

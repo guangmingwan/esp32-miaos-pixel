@@ -3,8 +3,8 @@
 #include <assert.h>
 #include <string.h>
 
-static bool only_base_bios(const char *path) {
-    return strstr(path, "/MSX.ROM") != NULL;
+static bool only_main_bios(const char *path) {
+    return strstr(path, "/MSX2.ROM") != NULL;
 }
 
 static void test_picker_filters_roms_and_disks(void) {
@@ -18,9 +18,8 @@ static void test_picker_filters_roms_and_disks(void) {
 
 static void test_bios_validation_reports_every_missing_file(void) {
     char message[256];
-    assert(mia_msx_missing_bios("/bios/msx", only_base_bios, message, sizeof(message)) == 9u);
-    assert(strstr(message, "MSX2.ROM") != NULL);
-    assert(strstr(message, "KANJI.ROM") != NULL);
+    assert(mia_msx_missing_bios("/bios/msx", only_main_bios, message, sizeof(message)) == 1u);
+    assert(strstr(message, "MSX2EXT.ROM") != NULL);
 }
 
 static void test_keyboard_is_navigable_and_emits_keys(void) {

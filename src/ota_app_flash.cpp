@@ -80,7 +80,8 @@ esp_err_t miaForceOtaBoot(const esp_partition_t *target) {
   return esp_partition_write(otap, 4096, &entries[1], sizeof(OtaEntry));
 }
 
-OtaAppFlashResult miaFlashAppToSlot(const char *sdPath, bool sdReady) {
+OtaAppFlashResult miaFlashAppToSlot(const char *sdPath, bool sdReady,
+                                    OtaAppFlashProgress progress, void *context) {
   launcherTracef("[ota-flash] request path='%s' sdReady=%d",
                  sdPath == nullptr ? "<null>" : sdPath, sdReady ? 1 : 0);
 
@@ -120,6 +121,10 @@ OtaAppFlashResult miaFlashAppToSlot(const char *sdPath, bool sdReady) {
   }
 
   ScopedIntWdtPause wdtGuard;
+
+  if (progress) {
+    progress(0, firmwareSize, context);
+  }
 
   const size_t eraseSize =
       (firmwareSize + SPI_FLASH_SEC_SIZE - 1) & ~(size_t)(SPI_FLASH_SEC_SIZE - 1);
@@ -169,10 +174,13 @@ OtaAppFlashResult miaFlashAppToSlot(const char *sdPath, bool sdReady) {
     }
 
     written += bytesRead;
-    if ((written % (64 * 1024)) == 0) {
+    if ((written % (64 * 1024)) == 0 || written == firmwareSize) {
       launcherTracef("[ota-flash] progress 0x%08x / 0x%08x",
                      static_cast<unsigned>(written),
                      static_cast<unsigned>(firmwareSize));
+      if (progress) {
+        progress(written, firmwareSize, context);
+      }
     }
   }
 

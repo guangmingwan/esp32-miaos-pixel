@@ -1,10 +1,14 @@
 #include "gba_policy.h"
+#include "display_host.h"
 #include "mia_emulator_runtime.h"
 #include "mia_host_abi.h"
 
 #include "common.h"
 
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 #include <mbedtls/md5.h>
 #include <sys/stat.h>
 
@@ -12,8 +16,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *const GBA_BIOS_PATH = "/bios/gba_bios.bin";
 #define AUDIO_FRAMES (GBA_SOUND_FREQUENCY / 60u + 1u)
+#define AUDIO_BLOCK_COUNT 12u
+#define AUDIO_PREBUFFER_BLOCKS 5u
+#define AUDIO_DISPLAY_MIN_BLOCKS 3u
+#define SAVE_FLUSH_INTERVAL_FRAMES 1800u
+#define VIDEO_FRAME_DIVISOR 2u
+#define GBA_DISPLAY_X 40
+#define GBA_DISPLAY_Y 40
+
+typedef struct {
+    u32 frame_count;
+    int16_t samples[AUDIO_FRAMES * 2u];
+} GbaAudioBlock;
 
 u32 idle_loop_target_pc = 0xFFFFFFFFu;
 u32 translation_gate_target_pc[MAX_TRANSLATION_GATES];
@@ -26,9 +41,116 @@ gbsp_memory_t *gbsp_memory = NULL;
 extern u32 gamepak_buffer_count;
 extern void mia_gbsp_execute_arm(u32 cycles);
 
+static GbaAudioBlock *audio_blocks;
+static QueueHandle_t audio_free_blocks;
+static QueueHandle_t audio_ready_blocks;
+static TaskHandle_t audio_task_handle;
+static volatile bool audio_running;
+static volatile bool audio_failed;
+
 void netpacket_poll_receive(void) {}
 void netpacket_send(uint16_t, const void *, size_t) {}
 void set_fastforward_override(bool) {}
+
+static void audio_task(void *argument) {
+    MiaEmulatorRuntime *runtime = argument;
+    bool buffered = false;
+    while (audio_running) {
+        if (!buffered) {
+            if (uxQueueMessagesWaiting(audio_ready_blocks) < AUDIO_PREBUFFER_BLOCKS) {
+                vTaskDelay(pdMS_TO_TICKS(1));
+                continue;
+            }
+            buffered = true;
+        }
+        uint8_t index = 0;
+        if (xQueueReceive(audio_ready_blocks, &index, pdMS_TO_TICKS(20)) != pdTRUE) {
+            buffered = false;
+            continue;
+        }
+        if (!audio_running) {
+            (void)xQueueSend(audio_free_blocks, &index, 0);
+            break;
+        }
+        GbaAudioBlock *block = &audio_blocks[index];
+        const int32_t written = mia_host_audio_write_pcm16(
+            block->samples, block->frame_count, 2);
+        (void)xQueueSend(audio_free_blocks, &index, 0);
+        if (written != (int32_t)block->frame_count) {
+            mia_host_log("GBA audio write failed");
+            audio_failed = true;
+            audio_running = false;
+        } else {
+            runtime->adapter.audio_submitted += block->frame_count;
+        }
+    }
+    audio_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+static bool start_audio_task(MiaEmulatorRuntime *runtime) {
+    audio_blocks = heap_caps_calloc(AUDIO_BLOCK_COUNT, sizeof(*audio_blocks),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    audio_free_blocks = xQueueCreate(AUDIO_BLOCK_COUNT, sizeof(uint8_t));
+    audio_ready_blocks = xQueueCreate(AUDIO_BLOCK_COUNT, sizeof(uint8_t));
+    if (audio_blocks == NULL || audio_free_blocks == NULL || audio_ready_blocks == NULL) return false;
+    for (uint8_t index = 0; index < AUDIO_BLOCK_COUNT; ++index) {
+        (void)xQueueSend(audio_free_blocks, &index, 0);
+    }
+    audio_failed = false;
+    audio_running = true;
+    if (xTaskCreatePinnedToCore(audio_task, "gba_audio", 4096, runtime, 6,
+                                &audio_task_handle, 0) != pdPASS) {
+        audio_running = false;
+        return false;
+    }
+    return true;
+}
+
+static void stop_audio_task(void) {
+    audio_running = false;
+    for (unsigned wait = 0; audio_task_handle != NULL && wait < 40u; ++wait) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (audio_task_handle != NULL) {
+        vTaskDelete(audio_task_handle);
+        audio_task_handle = NULL;
+    }
+    if (audio_free_blocks != NULL) vQueueDelete(audio_free_blocks);
+    if (audio_ready_blocks != NULL) vQueueDelete(audio_ready_blocks);
+    free(audio_blocks);
+    audio_blocks = NULL;
+    audio_free_blocks = NULL;
+    audio_ready_blocks = NULL;
+}
+
+static MiaCoreStatus queue_audio(const int16_t *samples, u32 frame_count) {
+    if (frame_count == 0u) return mia_core_ok();
+    if (audio_failed || !audio_running) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA audio task failed");
+    uint8_t index = 0;
+    if (xQueueReceive(audio_free_blocks, &index, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA audio queue stalled");
+    }
+    GbaAudioBlock *block = &audio_blocks[index];
+    block->frame_count = frame_count;
+    memcpy(block->samples, samples, (size_t)frame_count * 2u * sizeof(int16_t));
+    if (xQueueSend(audio_ready_blocks, &index, pdMS_TO_TICKS(20)) != pdTRUE) {
+        (void)xQueueSend(audio_free_blocks, &index, 0);
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA audio queue stalled");
+    }
+    return mia_core_ok();
+}
+
+static MiaCoreStatus submit_video(MiaEmulatorRuntime *runtime) {
+    const int32_t result = display_host_present_rgb565_region(
+        gba_screen_pixels, GBA_DISPLAY_X, GBA_DISPLAY_Y, GBA_SCREEN_WIDTH,
+        GBA_SCREEN_HEIGHT, GBA_SCREEN_WIDTH * sizeof(uint16_t));
+    if (result != MIA_HOST_RESULT_OK) {
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA video presentation failed");
+    }
+    runtime->adapter.frames_submitted += 1u;
+    return mia_core_ok();
+}
 
 static int16_t input_callback(unsigned, unsigned, unsigned, unsigned id) {
     const uint32_t bits = mia_emulator_host_buttons();
@@ -47,7 +169,7 @@ static int16_t input_callback(unsigned, unsigned, unsigned, unsigned id) {
 }
 
 static bool validate_bios(void) {
-    FILE *file = fopen(GBA_BIOS_PATH, "rb");
+    FILE *file = fopen(MIA_GBA_BIOS_PATH, "rb");
     if (file == NULL) return false;
     mbedtls_md5_context context;
     mbedtls_md5_init(&context);
@@ -76,10 +198,11 @@ static MiaCoreStatus load_native_save(MiaEmulatorRuntime *runtime) {
 MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
     struct stat rom_stat;
     if (stat(runtime->selection.rom_path, &rom_stat) != 0 || !mia_gba_rom_size_valid((size_t)rom_stat.st_size)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA ROM exceeds 32 MiB or has an invalid header size");
-    if (!validate_bios() || load_bios((char *)GBA_BIOS_PATH) != 0) return mia_core_error(MIA_CORE_ERR_CALLBACK, "canonical GBA BIOS missing or corrupt");
+    if (!validate_bios()) return mia_core_error(MIA_CORE_ERR_CALLBACK, "canonical GBA BIOS missing or corrupt");
     gbsp_memory = heap_caps_calloc(1, sizeof(*gbsp_memory), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     gba_screen_pixels = heap_caps_malloc(GBA_SCREEN_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (gbsp_memory == NULL || gba_screen_pixels == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA PSRAM allocation failed");
+    if (load_bios((char *)MIA_GBA_BIOS_PATH) != 0) return mia_core_error(MIA_CORE_ERR_CALLBACK, "canonical GBA BIOS missing or corrupt");
     init_gamepak_buffer();
     if (!mia_gba_page_allocation_valid(gamepak_buffer_count)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA ROM page allocation failed");
     init_sound();
@@ -90,6 +213,7 @@ MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
     MiaCoreStatus save = load_native_save(runtime);
     if (save.code != MIA_CORE_OK) return save;
     reset_gba();
+    display_host_fill_screen_rgb565(0);
     return mia_core_ok();
 }
 
@@ -105,22 +229,38 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
     int16_t audio[AUDIO_FRAMES * 2u];
     unsigned frames = 0;
+    if (!start_audio_task(runtime)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA audio task allocation failed");
     for (;;) {
-        if (mia_app_input_exit_requested(&runtime->input, mia_emulator_host_buttons(), mia_host_millis())) return mia_core_ok();
+        if (mia_app_input_exit_requested(&runtime->input, mia_emulator_host_buttons(), mia_host_millis())) {
+            stop_audio_task();
+            return mia_core_ok();
+        }
         update_input();
         clear_gamepak_stickybits();
         mia_gbsp_execute_arm(execute_cycles);
-        if (skip_next_frame == 0u) {
-            MiaCoreStatus video = mia_core_adapter_submit_video(&runtime->adapter, gba_screen_pixels, GBA_SCREEN_WIDTH * GBA_SCREEN_HEIGHT);
-            if (video.code != MIA_CORE_OK) return video;
+        const bool audio_has_headroom =
+            uxQueueMessagesWaiting(audio_ready_blocks) >= AUDIO_DISPLAY_MIN_BLOCKS;
+        if (skip_next_frame == 0u && audio_has_headroom &&
+            (frames % VIDEO_FRAME_DIVISOR) == 0u) {
+            MiaCoreStatus video = submit_video(runtime);
+            if (video.code != MIA_CORE_OK) {
+                stop_audio_task();
+                return video;
+            }
         }
         const u32 count = sound_read_samples(audio, AUDIO_FRAMES);
-        MiaCoreStatus sound = mia_core_adapter_submit_audio(&runtime->adapter, audio, count);
-        if (sound.code != MIA_CORE_OK) return sound;
-        if (++frames % 60u == 0u) {
-            MiaCoreStatus save = mia_emulator_core_flush(runtime, MIA_STORAGE_FLUSH_CORE_REQUEST, true);
-            if (save.code != MIA_CORE_OK) return save;
+        MiaCoreStatus sound = queue_audio(audio, count);
+        if (sound.code != MIA_CORE_OK) {
+            stop_audio_task();
+            return sound;
         }
-        mia_host_delay_ms(1);
+        if (++frames % SAVE_FLUSH_INTERVAL_FRAMES == 0u) {
+            MiaCoreStatus save = mia_emulator_core_flush(runtime, MIA_STORAGE_FLUSH_CORE_REQUEST, false);
+            if (save.code != MIA_CORE_OK) {
+                stop_audio_task();
+                return save;
+            }
+        }
+        taskYIELD();
     }
 }

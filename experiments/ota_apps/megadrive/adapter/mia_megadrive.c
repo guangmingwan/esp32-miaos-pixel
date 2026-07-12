@@ -11,7 +11,7 @@
 #define MAX_AUDIO_SAMPLES 1056u
 #define MAX_FRAME_PIXELS (320u * 240u)
 
-unsigned char *VRAM;
+extern unsigned char *VRAM;
 int system_clock, scan_line;
 int16_t gwenesis_sn76489_buffer[MAX_AUDIO_SAMPLES];
 int sn76489_index, sn76489_clock;
@@ -25,7 +25,10 @@ extern unsigned int screen_width, screen_height;
 extern int hint_pending;
 extern void m68k_update_irq(unsigned int level);
 extern void m68k_set_irq(unsigned int level);
-extern struct { unsigned int cycles; } m68k;
+
+void gwenesis_io_get_buttons(void) {
+    // Input is synchronized by update_pad() before the core runs each frame.
+}
 
 static MiaCoreStatus failure(const char *message) {
     return mia_core_error(MIA_CORE_ERR_CALLBACK, message);
@@ -120,7 +123,8 @@ static MiaCoreStatus submit_audio(MiaEmulatorRuntime *runtime, uint16_t frames) 
         const int32_t psg = i < (size_t)sn76489_index ? gwenesis_sn76489_buffer[i] : 0;
         for (size_t channel = 0; channel < 2; ++channel) {
             int32_t value = gwenesis_ym2612_buffer[i * 2u + channel] + psg;
-            if (value > INT16_MAX) value = INT16_MAX; if (value < INT16_MIN) value = INT16_MIN;
+            if (value > INT16_MAX) value = INT16_MAX;
+            if (value < INT16_MIN) value = INT16_MIN;
             mixed[i * 2u + channel] = (int16_t)value;
         }
     }

@@ -11,6 +11,8 @@ idf_component_register(
          "../../emulator_common/storage/src/mia_storage_picker.c"
          "../../emulator_common/storage/src/mia_storage_status.c"
          "../../common_host/host_platform.cpp" "../../common_host/display_host.cpp"
+         "../../common_host/droid_gbk_renderer.cpp" "../../../../src/fonts/droid_gbk_12.c"
+         "../../../../src/gbk_unicode_map.cpp" "../../../../src/droid_gbk_index.cpp"
     INCLUDE_DIRS "." "../target" "../vendor/fmsx" "../vendor/fmsx/src/EMULib"
          "../vendor/fmsx/src/fMSX" "../vendor/fmsx/src/Z80" "../../common_host"
          "../../emulator_common/app/include" "../../emulator_common/storage/include"
@@ -21,6 +23,7 @@ idf_component_register(
              esp_driver_i2c fatfs sdmmc nvs_flash esp_timer esp_event esp_netif esp_wifi
              esp_http_server esp_adc)
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE BPS16 BPP16 UNIX LSB_FIRST NARROW GenericSetVideo=SetVideo)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE BPS16 BPP16 UNIX LSB_FIRST NARROW
+    GenericSetVideo=SetVideo MIA_DISPLAY_DROID_GBK=1 MIA_PICKER_COVERS=1)
 target_compile_options(${COMPONENT_LIB} PRIVATE -O2 -include msxfix.h -Wno-implicit-fallthrough
     -Wno-unused-variable -Wno-unused-but-set-variable -Wno-format-overflow -Wno-stringop-truncation)

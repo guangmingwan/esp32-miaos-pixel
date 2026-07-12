@@ -125,7 +125,11 @@ static uint16_t to_rgb565(const Color &c) {
 }
 
 static void yield_once() {
+#ifdef MIA_DISPLAY_NO_DELAY_YIELD
+  taskYIELD();
+#else
   vTaskDelay(pdMS_TO_TICKS(1));
+#endif
 }
 
 static esp_err_t tx_bytes(int dc, const void *data, size_t len) {
@@ -271,7 +275,12 @@ extern "C" int display_host_init(void) {
   vTaskDelay(pdMS_TO_TICKS(120));
   ESP_ERROR_CHECK(tx_cmd(0x29));
 
-  g_pixels = (uint8_t *)heap_caps_malloc(SCREEN_W * SCREEN_H, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#ifdef MIA_DISPLAY_INDEXED_BUFFER_PSRAM
+  constexpr uint32_t pixel_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+#else
+  constexpr uint32_t pixel_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+#endif
+  g_pixels = (uint8_t *)heap_caps_malloc(SCREEN_W * SCREEN_H, pixel_caps);
   if (g_pixels == nullptr) {
     return 0;
   }

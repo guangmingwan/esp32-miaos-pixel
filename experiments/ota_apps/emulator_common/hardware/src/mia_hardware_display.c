@@ -160,6 +160,18 @@ MiaHardwareStatus mia_display_render_rgb565(const MiaRgb565Surface *surface, Mia
     if (!mia_hardware_status_ok(status)) {
         return status;
     }
+    if (mode == MIA_DISPLAY_SCALE_FIT && rect.scale == 1u) {
+        if (rect.width != MIA_DISPLAY_WIDTH || rect.height != MIA_DISPLAY_HEIGHT) {
+            clear_output(out_pixels);
+        }
+        for (uint16_t y = 0; y < surface->height; ++y) {
+            const uint16_t *source_row = surface->pixels + (size_t)y * surface->stride;
+            uint16_t *output_row = out_pixels + (size_t)(rect.y + y) * MIA_DISPLAY_WIDTH + rect.x;
+            memcpy(output_row, source_row, (size_t)surface->width * sizeof(uint16_t));
+        }
+        if (out_rect != NULL) *out_rect = rect;
+        return mia_hardware_ok();
+    }
     if (mode == MIA_DISPLAY_SCALE_STRETCH) {
         uint16_t source_x[MIA_DISPLAY_WIDTH];
         for (uint16_t dx = 0; dx < MIA_DISPLAY_WIDTH; ++dx) {

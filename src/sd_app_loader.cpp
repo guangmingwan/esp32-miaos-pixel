@@ -230,10 +230,11 @@ SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
           found, 0};
 }
 
-SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady) {
+SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady,
+                                 SdAppLoadProgress progress, void *context) {
   launcherTracef("[sd-run] path='%s' sdReady=%d", path == nullptr ? "<null>" : path,
                  sdReady ? 1 : 0);
-  OtaAppFlashResult result = miaFlashAppToSlot(path, sdReady);
+  OtaAppFlashResult result = miaFlashAppToSlot(path, sdReady, progress, context);
   launcherTracef("[sd-run] result status=%s code=%d",
                  miaOtaAppFlashStatusText(result.status), result.errorCode);
   switch (result.status) {

@@ -61,6 +61,13 @@ constexpr gpio_num_t HC165_PL_PIN = GPIO_NUM_2;
 constexpr gpio_num_t HC165_CLK_PIN = GPIO_NUM_39;
 constexpr gpio_num_t HC165_DAT_PIN = GPIO_NUM_38;
 
+#ifndef MIA_AUDIO_DMA_BUF_COUNT
+#define MIA_AUDIO_DMA_BUF_COUNT 6
+#endif
+#ifndef MIA_AUDIO_DMA_BUF_LEN
+#define MIA_AUDIO_DMA_BUF_LEN 256
+#endif
+
 constexpr int HC165_LEFT = 0;
 constexpr int HC165_DOWN = 1;
 constexpr int HC165_UP = 2;
@@ -144,7 +151,11 @@ static void update_buttons() {
     if (BUTTONS[i].direct) {
       down = gpio_get_level(BUTTONS[i].gpio) == 0;
     } else {
+#ifdef MIA_HC165_ACTIVE_HIGH
+      down = (g_hc165_state & (1u << BUTTONS[i].shift_bit)) != 0;
+#else
       down = (g_hc165_state & (1u << BUTTONS[i].shift_bit)) == 0;
+#endif
     }
     g_buttons[i].down = down;
     g_buttons[i].pressed = down && !g_last_buttons[i];
@@ -205,8 +216,8 @@ static bool audio_install(uint32_t sample_rate, uint8_t channels, uint8_t bits_p
   cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags = 0;
-  cfg.dma_buf_count = 6;
-  cfg.dma_buf_len = 256;
+  cfg.dma_buf_count = MIA_AUDIO_DMA_BUF_COUNT;
+  cfg.dma_buf_len = MIA_AUDIO_DMA_BUF_LEN;
   cfg.use_apll = false;
   cfg.tx_desc_auto_clear = true;
   cfg.fixed_mclk = 0;

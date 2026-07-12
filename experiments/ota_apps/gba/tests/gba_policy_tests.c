@@ -23,17 +23,24 @@ static void test_bios_requires_canonical_metadata(void) {
     assert(!mia_gba_bios_metadata_valid(16384u, corrupt_md5));
 }
 
+static void test_bios_path_uses_sd_mount(void) {
+    assert(strcmp(MIA_GBA_BIOS_PATH, "/sd/bios/gba/gba_bios.bin") == 0);
+}
+
 static void test_rom_and_psram_policies_are_bounded(void) {
     assert(mia_gba_rom_size_valid(32u * 1024u * 1024u));
     assert(!mia_gba_rom_size_valid(32u * 1024u * 1024u + 1u));
     assert(mia_gba_page_allocation_valid(1u));
+    assert(mia_gba_page_allocation_valid(4u));
     assert(!mia_gba_page_allocation_valid(0u));
+    assert(!mia_gba_page_allocation_valid(5u));
 }
 
 int main(void) {
     test_save_types_have_native_sizes();
     test_malformed_save_types_are_rejected();
     test_bios_requires_canonical_metadata();
+    test_bios_path_uses_sd_mount();
     test_rom_and_psram_policies_are_bounded();
     return 0;
 }

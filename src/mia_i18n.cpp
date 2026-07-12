@@ -13,6 +13,12 @@ struct MiaTranslation {
   const char *chinese;
 };
 
+struct MiaAppNameTranslation {
+  const char *name;
+  const char *english;
+  const char *chinese;
+};
+
 // Use a dedicated NVS namespace via the native ESP-IDF nvs_flash API to avoid
 // any Arduino Preferences wrapper bugs on ESP32-S3.
 static constexpr const char *MIA_I18N_NAMESPACE = "mia-i18n";
@@ -44,6 +50,7 @@ static const MiaTranslation TRANSLATIONS[] = {
     {"A/B:Back", "A/B:返回"},
     {"SD App", "SD 应用"},
     {"Download and run", "下载并运行"},
+    {"Loading", "加载中"},
     {"Upload to SD", "上传到 SD"},
     {"A:Confirm  B/SEL:Back", "A:确认  B/SEL:返回"},
     {"Category: %s", "分类: %s"},
@@ -99,6 +106,22 @@ static const MiaTranslation TRANSLATIONS[] = {
     {"unknown", "未知"},
     {"code", "代码"},
     {"<missing>", "<缺失>"},
+};
+
+static const MiaAppNameTranslation EMULATOR_NAMES[] = {
+    {"coleco", "ColecoVision", "ColecoVision 游戏机"},
+    {"gb", "Game Boy", "任天堂 Game Boy"},
+    {"gba", "Game Boy Advance", "任天堂 Game Boy Advance"},
+    {"gbc", "Game Boy Color", "任天堂 Game Boy Color"},
+    {"gg", "Game Gear", "世嘉 Game Gear"},
+    {"gw", "Game & Watch", "任天堂 Game & Watch"},
+    {"lynx", "Atari Lynx", "雅达利 Lynx"},
+    {"megadrive", "Mega Drive", "世嘉 Mega Drive"},
+    {"msx", "MSX", "MSX 电脑"},
+    {"nes", "Famicom / NES", "任天堂红白机"},
+    {"pce", "PC Engine", "NEC PC Engine"},
+    {"sms", "Master System", "世嘉 Master System"},
+    {"snes", "Super Famicom / SNES", "任天堂超级任天堂"},
 };
 
 static MiaLanguage g_language = MiaLanguage::English;
@@ -232,6 +255,18 @@ const char *miaTr(const char *english) {
     }
   }
   return english;
+}
+
+const char *miaAppDisplayName(const char *category, const char *name) {
+  if (category == nullptr || name == nullptr || strcmp(category, "Emulators") != 0) {
+    return miaTr(name);
+  }
+  for (const MiaAppNameTranslation &entry : EMULATOR_NAMES) {
+    if (strcmp(entry.name, name) == 0) {
+      return miaLanguage() == MiaLanguage::Chinese ? entry.chinese : entry.english;
+    }
+  }
+  return miaTr(name);
 }
 
 void miaI18nSkipPersisted(void) {

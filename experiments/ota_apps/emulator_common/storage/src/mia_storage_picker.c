@@ -1,6 +1,7 @@
 #include "mia_storage_internal.h"
 
 #include <dirent.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -16,16 +17,24 @@ static bool path_is_symlink(const char *path) {
 #endif
 }
 
-static MiaStorageStatus append_entry(MiaStoragePickerResult *result, const char *name, const char *path, MiaStorageEntryKind kind, uint64_t size) {
-    MiaStoragePickerEntry *entries = realloc(result->entries, (result->count + 1) * sizeof(*entries));
-    if (entries == NULL) {
-        return mia_storage_error(MIA_STORAGE_ERR_IO, "failed to allocate picker entry");
+static MiaStorageStatus append_entry(MiaStoragePickerResult *result, size_t *capacity, const char *name, const char *path, MiaStorageEntryKind kind, uint64_t size) {
+    if (result->count == *capacity) {
+        const size_t next_capacity = *capacity == 0 ? 32u : *capacity * 2u;
+        MiaStoragePickerEntry *entries = realloc(result->entries, next_capacity * sizeof(*entries));
+        if (entries == NULL) {
+            return mia_storage_error(MIA_STORAGE_ERR_IO, "failed to allocate picker entry");
+        }
+        result->entries = entries;
+        *capacity = next_capacity;
     }
-    result->entries = entries;
-    result->entries[result->count] = (MiaStoragePickerEntry){strdup(name), strdup(path), kind, size};
-    if (result->entries[result->count].name == NULL || result->entries[result->count].path == NULL) {
+    char *entry_name = strdup(name);
+    char *entry_path = strdup(path);
+    if (entry_name == NULL || entry_path == NULL) {
+        free(entry_name);
+        free(entry_path);
         return mia_storage_error(MIA_STORAGE_ERR_IO, "failed to allocate picker strings");
     }
+    result->entries[result->count] = (MiaStoragePickerEntry){entry_name, entry_path, kind, size};
     result->count += 1;
     return mia_storage_ok();
 }
@@ -57,25 +66,38 @@ MiaStorageStatus mia_storage_picker_list(const MiaStorageContext *context, const
     if (dir == NULL) {
         return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "ROM root is missing");
     }
+    size_t capacity = 0;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || mia_storage_is_zip(entry->d_name)) {
             continue;
         }
         MiaStoragePath child;
-        status = mia_storage_resolve_child(context, target->rom_root, entry->d_name, &child);
-        if (status.code != MIA_STORAGE_OK) {
+        const int written = snprintf(child.path, sizeof(child.path), "%s/%s", root.path, entry->d_name);
+        if (written < 0 || (size_t)written >= sizeof(child.path)) {
             continue;
         }
+#ifdef ESP_PLATFORM
+        if (entry->d_type == DT_DIR) {
+            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
+        } else if (entry->d_type == DT_REG && mia_storage_extension_matches(entry->d_name, target)) {
+            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, 0);
+        } else {
+            continue;
+        }
+#else
         struct stat info;
         if (path_is_symlink(child.path) || stat(child.path, &info) != 0) {
             continue;
         }
         if (S_ISDIR(info.st_mode)) {
-            status = append_entry(out_result, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
+            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
         } else if (S_ISREG(info.st_mode) && mia_storage_extension_matches(entry->d_name, target)) {
-            status = append_entry(out_result, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+        } else {
+            continue;
         }
+#endif
         if (status.code != MIA_STORAGE_OK) {
             closedir(dir);
             mia_storage_picker_free(out_result);
@@ -106,7 +128,8 @@ MiaStorageStatus mia_storage_picker_select(const MiaStorageContext *context, con
     if (path_is_symlink(path.path) || stat(path.path, &info) != 0 || !S_ISREG(info.st_mode)) {
         return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "selected ROM is missing");
     }
-    return append_entry(out_result, relative_name, path.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+    size_t capacity = 0;
+    return append_entry(out_result, &capacity, relative_name, path.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
 }
 
 static bool wildcard_wad_exists(const char *directory) {

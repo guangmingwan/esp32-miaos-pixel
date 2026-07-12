@@ -14,6 +14,8 @@ idf_component_register(SRCS "app_main.c" "../adapter/megadrive_policy.c" "../ada
     "../../emulator_common/storage/src/mia_storage_paths.c" "../../emulator_common/storage/src/mia_storage_picker.c"
     "../../emulator_common/storage/src/mia_storage_save.c" "../../emulator_common/storage/src/mia_storage_status.c"
     ${GWENESIS_SOURCES} "../../common_host/host_platform.cpp" "../../common_host/display_host.cpp"
+    "../../common_host/droid_gbk_renderer.cpp" "../../../../src/fonts/droid_gbk_12.c"
+    "../../../../src/gbk_unicode_map.cpp" "../../../../src/droid_gbk_index.cpp"
     INCLUDE_DIRS "." "../adapter" "../vendor/gwenesis" "../vendor/gwenesis/src/bus"
     "../vendor/gwenesis/src/cpus/M68K" "../vendor/gwenesis/src/cpus/Z80" "../vendor/gwenesis/src/io"
     "../vendor/gwenesis/src/savestate" "../vendor/gwenesis/src/sound" "../vendor/gwenesis/src/vdp"
@@ -21,9 +23,12 @@ idf_component_register(SRCS "app_main.c" "../adapter/megadrive_policy.c" "../ada
     "../../emulator_common/hardware/include" "../../emulator_common/runtime/include"
     "../../emulator_common/storage/include" "../../emulator_common/storage/src" "../../../../include"
     REQUIRES app_update esp_partition driver esp_driver_gpio esp_driver_spi esp_driver_i2s esp_driver_i2c fatfs sdmmc nvs_flash esp_timer esp_event esp_netif esp_wifi esp_http_server esp_adc)
-target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="megadrive" MIA_APP_NAME="megadrive"
+target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="megadrive"
+    MIA_EMULATOR_EXTENSION="bin" MIA_EMULATOR_SECOND_EXTENSION="smd" MIA_EMULATOR_SMSPLUS=1
+    MIA_APP_NAME="megadrive"
     MIA_EMULATOR_ROM_ROOT="/roms/megadrive" MIA_EMULATOR_SAVE_ROOT="/saves/megadrive"
     MIA_EMULATOR_WIDTH=320 MIA_EMULATOR_HEIGHT=224 MIA_EMULATOR_SAMPLE_RATE=26633
-    RETRO_GO=1 GNW_TARGET_MARIO=0 GNW_TARGET_ZELDA=0 GW_TARGET=0)
+    RETRO_GO=1 GNW_TARGET_MARIO=0 GNW_TARGET_ZELDA=0 GW_TARGET=0
+    MIA_DISPLAY_DROID_GBK=1 MIA_DISPLAY_INDEXED_BUFFER_PSRAM=1 MIA_PICKER_COVERS=1)
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -fomit-frame-pointer -Wno-unused-variable
     -Wno-unused-function -Wno-incompatible-pointer-types -Wno-implicit-fallthrough)

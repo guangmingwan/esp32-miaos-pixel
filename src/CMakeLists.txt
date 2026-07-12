@@ -23,6 +23,7 @@ idf_component_register(
     "audio_host.cpp"
     "ota_app_flash.cpp"
     "launcher_log.cpp"
+    "launcher_return_context.cpp"
     "serial_file_service.cpp"
     "sd_app_loader.cpp"
     "wifi_file_config.cpp"

@@ -68,5 +68,9 @@ static void emulator_task(void *arg) {
 
 void app_main(void) {
     ESP_ERROR_CHECK(host_platform_init());
-    xTaskCreatePinnedToCore(emulator_task, MIA_APP_NAME "_emu", 32768, NULL, 5, NULL, 1);
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        emulator_task, MIA_APP_NAME "_emu", 32768, NULL, 5, NULL, 1);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "emulator task allocation failed");
+    }
 }

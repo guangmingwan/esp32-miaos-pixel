@@ -31,5 +31,5 @@ bool mia_gba_rom_size_valid(size_t size) {
 }
 
 bool mia_gba_page_allocation_valid(size_t page_blocks) {
-    return page_blocks >= 1u && page_blocks <= 2u;
+    return page_blocks >= 1u && page_blocks <= 4u;
 }

@@ -6,7 +6,7 @@
 
 #define MIA_MSX_KEYBOARD_COLS 12u
 #define MIA_MSX_KEYBOARD_ROWS 6u
-#define MIA_MSX_BIOS_COUNT 10u
+#define MIA_MSX_BIOS_COUNT 2u
 
 typedef struct {
     uint8_t row;

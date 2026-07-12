@@ -44,7 +44,20 @@ int main() {
     require_status(mia_display_render_rgb565(&rgb565, MIA_DISPLAY_SCALE_STRETCH, out.data(), out.size(), &rect), MIA_HARDWARE_OK);
     require_true(out.front() == 0x1111 && out[MIA_DISPLAY_WIDTH - 1] == 0x2222 &&
                      out[(MIA_DISPLAY_HEIGHT - 1) * MIA_DISPLAY_WIDTH] == 0x3333 && out.back() == 0x4444,
-                 "rgb565 stretch should map source corners to display corners");
+                  "rgb565 stretch should map source corners to display corners");
+
+    auto nes_frame = pixels(256 * 240, 0x1234);
+    nes_frame.front() = 0xabcd;
+    nes_frame.back() = 0x5678;
+    MiaRgb565Surface nes_rgb565{256, 240, 256, nes_frame.data()};
+    require_status(mia_display_render_rgb565(&nes_rgb565, MIA_DISPLAY_SCALE_FIT,
+                                             out.data(), out.size(), &rect), MIA_HARDWARE_OK);
+    require_true(rect.x == 32 && rect.y == 0 && rect.scale == 1,
+                 "nes fit should center the native frame without scaling");
+    require_true(out[31] == 0 && out[32] == 0xabcd && out[287] == 0x1234 && out[288] == 0,
+                 "nes fit should preserve the horizontal black bars");
+    require_true(out[(MIA_DISPLAY_HEIGHT - 1) * MIA_DISPLAY_WIDTH + 287] == 0x5678,
+                 "nes fit should copy the complete final row");
 
     MiaDisplayBufferPolicy policy{MIA_DISPLAY_BUFFER_DOUBLE, MIA_DISPLAY_MEMORY_PSRAM};
     MiaDisplayBufferDecision decision{};

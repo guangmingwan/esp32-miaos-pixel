@@ -1,4 +1,5 @@
-#include "mia_emulator_runtime.h"
+#include "mia_app_save.h"
+#include "mia_hardware_display.h"
 #include "mia_host_abi.h"
 
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #endif
 
 #define MIA_PICKER_VISIBLE 10u
+#define MIA_PICKER_COVER_DELAY_MS 250u
 
 #ifdef MIA_PICKER_COVERS
 #define MIA_COVER_X 202
@@ -93,10 +95,17 @@ static void draw_cover(const MiaStoragePickerEntry *entry) {
     if (entry == NULL || !cover_path(entry->path, path, sizeof(path))) return;
     uint16_t source_width = 0;
     uint16_t source_height = 0;
-    uint16_t *source = mia_emulator_runtime.display;
-    if (source == NULL || !decode_cover(path, source, &source_width, &source_height)) return;
+    uint16_t *source = malloc(MIA_COVER_DECODE_STRIDE * MIA_DISPLAY_HEIGHT * sizeof(uint16_t));
+    if (source == NULL) return;
+    if (!decode_cover(path, source, &source_width, &source_height)) {
+        free(source);
+        return;
+    }
     uint16_t *cover = malloc(MIA_COVER_WIDTH * MIA_COVER_HEIGHT * sizeof(uint16_t));
-    if (cover == NULL) return;
+    if (cover == NULL) {
+        free(source);
+        return;
+    }
     memset(cover, 0, MIA_COVER_WIDTH * MIA_COVER_HEIGHT * sizeof(uint16_t));
     uint32_t draw_width = MIA_COVER_WIDTH;
     uint32_t draw_height = (uint32_t)source_height * draw_width / source_width;
@@ -118,6 +127,7 @@ static void draw_cover(const MiaStoragePickerEntry *entry) {
                                              MIA_COVER_WIDTH, MIA_COVER_HEIGHT,
                                              MIA_COVER_WIDTH * sizeof(uint16_t));
     free(cover);
+    free(source);
 }
 #endif
 
@@ -130,8 +140,8 @@ typedef struct {
     const char *no_roms;
 } PickerText;
 
-static const PickerText PICKER_EN = {"ROM Picker", "Scanning ROMs...", "UP/DN Select  A:Run  B:Exit", "A:Retry  B:Exit", "ROM root is missing", "No supported ROMs"};
-static const PickerText PICKER_ZH = {"ROM选择", "正在扫描ROM...", "上/下 选择  A:运行  B:退出", "A:重试  B:退出", "ROM目录不存在", "没有支持的ROM"};
+static const PickerText PICKER_EN = {"ROM Picker", "Scanning ROMs...", "UP/DN Select  LT/RT Page  A:Run", "A:Retry  B:Exit", "ROM root is missing", "No supported ROMs"};
+static const PickerText PICKER_ZH = {"ROM选择", "正在扫描ROM...", "上/下选择 左/右翻页 A:运行 B:退出", "A:重试  B:退出", "ROM目录不存在", "没有支持的ROM"};
 
 static const PickerText *picker_text(void) {
     return mia_host_language() == 1 ? &PICKER_ZH : &PICKER_EN;
@@ -168,16 +178,22 @@ static void format_picker_title(const MiaStorageTarget *target, const char *rom_
     char full_title[192];
     snprintf(full_title, sizeof(full_title), "%s-%s %s", target->name,
              picker_text()->title, rom_root);
-    copy_display_name(title, title_size, full_title, 50);
+    copy_display_name(title, title_size, full_title, 38);
 }
 
-static void draw_picker(const MiaStorageTarget *target, const char *rom_root, const MiaStoragePickerResult *result, size_t selected, const char *message) {
+static void draw_picker(const MiaStorageTarget *target, const char *rom_root, const MiaStoragePickerResult *result, size_t selected, size_t rom_count, const char *message) {
     const PickerText *text = picker_text();
     mia_host_clear(MIA_HOST_BLACK);
     mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
     char title[192];
     format_picker_title(target, rom_root, title, sizeof(title));
     mia_host_draw_text(4, 2, title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+    char count_text[24];
+    snprintf(count_text, sizeof(count_text), "ROM:%u", (unsigned)rom_count);
+    const int32_t count_x = mia_host_screen_width() - (int32_t)strlen(count_text) * 8 - 4;
+    mia_host_fill_rect(count_x - 4, 0, mia_host_screen_width() - count_x + 4, 20,
+                       MIA_HOST_YELLOW);
+    mia_host_draw_text(count_x, 2, count_text, MIA_HOST_BLACK, MIA_HOST_YELLOW);
     if (message != NULL) mia_host_draw_text(8, 34, message, MIA_HOST_RED, MIA_HOST_BLACK);
     size_t first = selected >= MIA_PICKER_VISIBLE ? selected - MIA_PICKER_VISIBLE + 1u : 0u;
     size_t row = 0;
@@ -199,8 +215,8 @@ static void draw_picker(const MiaStorageTarget *target, const char *rom_root, co
 #else
                            312,
 #endif
-                           14, active ? MIA_HOST_BLUE : MIA_HOST_BLACK);
-        mia_host_draw_text(8, y, display_name, active ? MIA_HOST_YELLOW : MIA_HOST_WHITE, active ? MIA_HOST_BLUE : MIA_HOST_BLACK);
+                           16, active ? MIA_HOST_BLUE : MIA_HOST_BLACK);
+        mia_host_draw_text(8, y - 4, display_name, active ? MIA_HOST_YELLOW : MIA_HOST_WHITE, active ? MIA_HOST_BLUE : MIA_HOST_BLACK);
         ++row;
     }
 #ifdef MIA_PICKER_COVERS
@@ -213,9 +229,6 @@ static void draw_picker(const MiaStorageTarget *target, const char *rom_root, co
 #endif
     mia_host_draw_text(8, 222, message == NULL ? text->controls : text->retry_controls, MIA_HOST_GRAY, MIA_HOST_BLACK);
     mia_host_present();
-#ifdef MIA_PICKER_COVERS
-    if (message == NULL && selected < result->count) draw_cover(&result->entries[selected]);
-#endif
 }
 
 static void draw_scan_status(const MiaStorageTarget *target, const char *rom_root) {
@@ -247,9 +260,21 @@ static size_t next_rom(const MiaStoragePickerResult *result, size_t start, int d
     return start;
 }
 
+static size_t move_roms(const MiaStoragePickerResult *result, size_t start, int direction,
+                        size_t count) {
+    size_t selected = start;
+    for (size_t step = 0; step < count; ++step) {
+        const size_t next = next_rom(result, selected, direction);
+        if (next == selected) break;
+        selected = next;
+    }
+    return selected;
+}
+
 MiaStorageStatus mia_emulator_picker_run(const MiaStorageContext *context, const MiaStorageTarget *target, MiaAppPickerSelection *selection) {
     MiaStoragePickerResult result;
     MiaStorageStatus status;
+    size_t rom_count = 0;
     char rom_root[160];
     status = mia_storage_rom_root_path(context, target, rom_root, sizeof(rom_root));
     if (status.code != MIA_STORAGE_OK) {
@@ -265,32 +290,57 @@ MiaStorageStatus mia_emulator_picker_run(const MiaStorageContext *context, const
                 snprintf(detail, sizeof(detail), "%s: %s", picker_text()->missing_root, target->rom_root);
                 message = detail;
             }
-            draw_picker(target, rom_root, &(MiaStoragePickerResult){0}, 0, message);
+            draw_picker(target, rom_root, &(MiaStoragePickerResult){0}, 0, 0, message);
             if (!wait_for_retry()) return mia_storage_error(MIA_STORAGE_ERR_INTERRUPTED, "ROM selection cancelled");
             continue;
         }
         size_t first_rom = result.count;
+        rom_count = 0;
         for (size_t index = 0; index < result.count; ++index) {
-            if (result.entries[index].kind == MIA_STORAGE_ENTRY_ROM) { first_rom = index; break; }
+            if (result.entries[index].kind == MIA_STORAGE_ENTRY_ROM) {
+                if (first_rom == result.count) first_rom = index;
+                ++rom_count;
+            }
         }
         if (first_rom != result.count) break;
-        draw_picker(target, rom_root, &result, 0, picker_text()->no_roms);
+        draw_picker(target, rom_root, &result, 0, 0, picker_text()->no_roms);
         mia_storage_picker_free(&result);
         if (!wait_for_retry()) return mia_storage_error(MIA_STORAGE_ERR_INTERRUPTED, "ROM selection cancelled");
     }
     size_t selected = 0;
     while (selected < result.count && result.entries[selected].kind != MIA_STORAGE_ENTRY_ROM) ++selected;
-    draw_picker(target, rom_root, &result, selected, NULL);
+    draw_picker(target, rom_root, &result, selected, rom_count, NULL);
+#ifdef MIA_PICKER_COVERS
+    bool cover_pending = true;
+    uint32_t last_navigation_ms = mia_host_millis();
+#endif
     for (;;) {
         mia_host_buttons_poll();
-        if (mia_host_button_pressed(MIA_HOST_BUTTON_UP)) selected = next_rom(&result, selected, -1);
-        if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN)) selected = next_rom(&result, selected, 1);
+        const bool up = mia_host_button_pressed(MIA_HOST_BUTTON_UP);
+        const bool down = mia_host_button_pressed(MIA_HOST_BUTTON_DOWN);
+        const bool left = mia_host_button_pressed(MIA_HOST_BUTTON_LEFT);
+        const bool right = mia_host_button_pressed(MIA_HOST_BUTTON_RIGHT);
+        const bool navigation = up || down || left || right;
+        const size_t previous = selected;
+        if (up) selected = next_rom(&result, selected, -1);
+        if (down) selected = next_rom(&result, selected, 1);
+        if (left) selected = move_roms(&result, selected, -1, MIA_PICKER_VISIBLE);
+        if (right) selected = move_roms(&result, selected, 1, MIA_PICKER_VISIBLE);
         if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) break;
         if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
             mia_storage_picker_free(&result);
             return mia_storage_error(MIA_STORAGE_ERR_INTERRUPTED, "ROM selection cancelled");
         }
-        if (mia_host_button_pressed(MIA_HOST_BUTTON_UP) || mia_host_button_pressed(MIA_HOST_BUTTON_DOWN)) draw_picker(target, rom_root, &result, selected, NULL);
+        if (selected != previous) draw_picker(target, rom_root, &result, selected, rom_count, NULL);
+#ifdef MIA_PICKER_COVERS
+        if (navigation) {
+            last_navigation_ms = mia_host_millis();
+            cover_pending = true;
+        } else if (cover_pending && mia_host_millis() - last_navigation_ms >= MIA_PICKER_COVER_DELAY_MS) {
+            draw_cover(&result.entries[selected]);
+            cover_pending = false;
+        }
+#endif
         mia_host_delay_ms(20);
     }
     status = mia_app_picker_select_entry(&result, selected, selection);

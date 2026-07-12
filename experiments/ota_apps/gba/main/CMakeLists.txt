@@ -27,6 +27,10 @@ idf_component_register(
         ${MIA_GBSP_C_SOURCES}
         "../../common_host/host_platform.cpp"
         "../../common_host/display_host.cpp"
+        "../../common_host/droid_gbk_renderer.cpp"
+        "../../../../src/fonts/droid_gbk_12.c"
+        "../../../../src/gbk_unicode_map.cpp"
+        "../../../../src/droid_gbk_index.cpp"
     INCLUDE_DIRS
         "."
         "../../common_host"
@@ -49,10 +53,17 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_SAVE_ROOT="/saves/gba"
     MIA_EMULATOR_WIDTH=240
     MIA_EMULATOR_HEIGHT=160
-    MIA_EMULATOR_SAMPLE_RATE=32768
+    MIA_EMULATOR_SAMPLE_RATE=22050
+    GBA_SOUND_FREQUENCY=22050
     MIA_EMULATOR_GBA=1
     RETRO_GO=1
-    ROM_BUFFER_SIZE=2
+    ROM_BUFFER_SIZE=4
     OVERCLOCK_60FPS=1
+    MIA_DISPLAY_DROID_GBK=1
+    MIA_DISPLAY_INDEXED_BUFFER_PSRAM=1
+    MIA_DISPLAY_NO_DELAY_YIELD=1
+    MIA_HC165_ACTIVE_HIGH=1
+    MIA_AUDIO_DMA_BUF_COUNT=10
+    MIA_PICKER_COVERS=1
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -fomit-frame-pointer -ffast-math -Wno-unused-variable -Wno-implicit-fallthrough -Wno-missing-field-initializers -Wno-unused-label -Wno-narrowing)

@@ -27,6 +27,8 @@ struct OtaAppFlashResult {
   size_t bytesWritten;
 };
 
+using OtaAppFlashProgress = void (*)(size_t completed, size_t total, void *context);
+
 enum class OtaAppExportStatus : uint8_t {
   Ok,
   SdUnavailable,
@@ -68,7 +70,9 @@ struct OtaAppSyncResult {
 const esp_partition_t *miaFindOtaPartition();
 const esp_partition_t *miaFindAppSlot();
 esp_err_t miaForceOtaBoot(const esp_partition_t *target);
-OtaAppFlashResult miaFlashAppToSlot(const char *sdPath, bool sdReady);
+OtaAppFlashResult miaFlashAppToSlot(const char *sdPath, bool sdReady,
+                                    OtaAppFlashProgress progress = nullptr,
+                                    void *context = nullptr);
 const char *miaOtaAppFlashStatusText(OtaAppFlashStatus status);
 OtaAppExportResult miaExportAppSlotToSd(const char *sdPath, bool sdReady);
 const char *miaOtaAppExportStatusText(OtaAppExportStatus status);

@@ -21,6 +21,7 @@ MiaLanguage miaLanguage(void);
 const char* miaLanguageName(MiaLanguage lang);
 void miaCycleLanguage(void);
 const char* miaTr(const char* key);
+const char* miaAppDisplayName(const char* category, const char* name);
 
 /* When enabled, skip NVS read and stay on default (English). */
 void miaI18nSkipPersisted(void);

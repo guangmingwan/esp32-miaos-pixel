@@ -12,9 +12,12 @@ idf_component_register(
         "../../emulator_common/storage/src/mia_storage_paths.c" "../../emulator_common/storage/src/mia_storage_picker.c"
         "../../emulator_common/storage/src/mia_storage_save.c" "../../emulator_common/storage/src/mia_storage_status.c"
         ${PCE_GO_SOURCES} "../../common_host/host_platform.cpp" "../../common_host/display_host.cpp"
+        "../../common_host/droid_gbk_renderer.cpp" "../../../../src/fonts/droid_gbk_12.c"
+        "../../../../src/gbk_unicode_map.cpp" "../../../../src/droid_gbk_index.cpp"
     INCLUDE_DIRS "." "../vendor/pce-go" "../../common_host" "../../emulator_common/app/include"
         "../../emulator_common/core/include" "../../emulator_common/hardware/include" "../../emulator_common/runtime/include"
         "../../emulator_common/storage/include" "../../emulator_common/storage/src" "../../../../include")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="pce" MIA_EMULATOR_EXTENSION="pce"
     MIA_APP_NAME="pce" MIA_EMULATOR_ROM_ROOT="/roms/pce" MIA_EMULATOR_SAVE_ROOT="/saves/pce"
-    MIA_EMULATOR_WIDTH=256 MIA_EMULATOR_HEIGHT=224 MIA_EMULATOR_SAMPLE_RATE=22050 MIA_EMULATOR_GNUBOY=1)
+    MIA_EMULATOR_WIDTH=256 MIA_EMULATOR_HEIGHT=224 MIA_EMULATOR_SAMPLE_RATE=22050 MIA_EMULATOR_GNUBOY=1
+    MIA_DISPLAY_DROID_GBK=1 MIA_DISPLAY_INDEXED_BUFFER_PSRAM=1 MIA_PICKER_COVERS=1)

@@ -22,9 +22,13 @@ struct SdAppLoaderResult {
   int errorCode;
 };
 
+using SdAppLoadProgress = void (*)(size_t completed, size_t total, void *context);
+
 SdAppLoaderResult scanSdApps(SdAppManifestSummary *apps, uint8_t capacity,
                               bool sdReady);
-SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady);
+SdAppLoaderResult runSdAppByPath(const char *path, bool sdReady,
+                                 SdAppLoadProgress progress = nullptr,
+                                 void *context = nullptr);
 SdAppLoaderResult exportSdAppByPath(const char *path, bool sdReady);
 const char *sdAppLoaderStatusText(SdAppLoaderStatus status);
 

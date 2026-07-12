@@ -27,6 +27,7 @@
 #include "apps/serial_transfer_app.h"
 #include "int_wdt_guard.h"
 #include "launcher_log.h"
+#include "launcher_return_context.h"
 #include "ota_app_flash.h"
 #include "lcd_ili9342.h"
 #include "lava_text.h"
@@ -226,7 +227,7 @@ struct OtaSyncUiState {
 };
 
 static void drawOtaSyncProgress(const char *stage, const char *appName, size_t completed,
-                                size_t total, void *context) {
+                                 size_t total, void *context) {
   OtaSyncUiState *state = static_cast<OtaSyncUiState *>(context);
   const uint8_t percent = total == 0 ? 0 : min<size_t>(100, completed * 100 / total);
   if (state && strcmp(state->lastStage, stage) == 0 && percent < 100 &&
@@ -258,6 +259,50 @@ static void drawOtaSyncProgress(const char *stage, const char *appName, size_t c
     lavaDrawText(18, 174, progressLine, LAVA_YELLOW, LAVA_BLACK);
   }
   lavaPresent();
+}
+
+struct SdFlashUiState {
+  const char *appName;
+  uint8_t lastPercent;
+};
+
+static void drawSdFlashProgress(size_t completed, size_t total, void *context) {
+  SdFlashUiState *state = static_cast<SdFlashUiState *>(context);
+  const uint8_t percent = total == 0 ? 0 : min<size_t>(100, completed * 100 / total);
+  if (state && state->lastPercent == percent) {
+    return;
+  }
+  if (state) {
+    state->lastPercent = percent;
+  }
+
+  constexpr int16_t boxX = 28;
+  constexpr int16_t boxY = 68;
+  constexpr int16_t boxW = 264;
+  constexpr int16_t boxH = 112;
+  lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
+  lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
+  lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 20, LAVA_YELLOW);
+  lavaDrawText(boxX + 8, boxY + 4, miaTr("Loading"), LAVA_BLACK, LAVA_YELLOW);
+  if (state && state->appName) {
+    char appLine[48];
+    snprintf(appLine, sizeof(appLine), "%s: %.31s", miaTr("App"), state->appName);
+    lavaDrawText(boxX + 12, boxY + 34, appLine, LAVA_BLACK, LAVA_LIGHT_GRAY);
+  }
+  lavaFillRect(boxX + 12, boxY + 60, boxW - 24, 18, LAVA_BLACK);
+  lavaDrawRect(boxX + 12, boxY + 60, boxW - 24, 18, LAVA_DARK_BLUE);
+  lavaFillRect(boxX + 14, boxY + 62,
+               static_cast<int16_t>((boxW - 28) * percent / 100), 14, LAVA_GREEN);
+  char percentLine[8];
+  snprintf(percentLine, sizeof(percentLine), "%u%%", percent);
+  lavaDrawText(boxX + boxW - 48, boxY + 86, percentLine, LAVA_DARK_BLUE,
+               LAVA_LIGHT_GRAY);
+  lavaPresent();
+}
+
+static SdAppLoaderResult runSdAppWithProgress(const SdAppManifestSummary &app) {
+  SdFlashUiState state = {miaAppDisplayName(app.category, app.name), UINT8_MAX};
+  return runSdAppByPath(app.path, g_context.sdReady, drawSdFlashProgress, &state);
 }
 
 static String macAddress() {
@@ -582,6 +627,56 @@ static void clampLauncherSelection() {
   }
 }
 
+static bool restoreLauncherReturnContext() {
+  LauncherReturnContext context = {};
+  if (!miaLauncherReturnContextLoad(&context)) {
+    return false;
+  }
+
+  for (uint8_t appIndex = 0;
+       appIndex < g_sdScan.appCount && appIndex < sizeof(g_sdApps) / sizeof(g_sdApps[0]);
+       ++appIndex) {
+    const SdAppManifestSummary &app = g_sdApps[appIndex];
+    if (!sameSdCategory(app.category, context.category) || strcmp(app.name, context.name) != 0) {
+      continue;
+    }
+
+    uint8_t itemIndex = 0;
+    if (isSystemCategory(app.category)) {
+      g_selectedTab = SYSTEM_TAB_INDEX;
+      itemIndex = SYSTEM_ITEM_COUNT;
+      for (uint8_t previous = 0; previous < appIndex; ++previous) {
+        if (isSystemCategory(g_sdApps[previous].category)) ++itemIndex;
+      }
+    } else {
+      bool tabFound = false;
+      for (uint8_t tabIndex = 1; tabIndex < launcherTabCount(); ++tabIndex) {
+        const char *tabName = launcherTabName(tabIndex);
+        if (tabName != nullptr && sameSdCategory(tabName, app.category)) {
+          g_selectedTab = tabIndex;
+          tabFound = true;
+          break;
+        }
+      }
+      if (!tabFound) return false;
+
+      for (uint8_t previous = 0; previous < appIndex; ++previous) {
+        if (sameSdCategory(g_sdApps[previous].category, app.category)) ++itemIndex;
+      }
+    }
+
+    g_selectedApp = itemIndex;
+    clampLauncherSelection();
+    miaLauncherReturnContextClear();
+    launcherTracef("[return-context] restored tab=%u item=%u", g_selectedTab, g_selectedApp);
+    return true;
+  }
+
+  launcherTracef("[return-context] app not found category='%s' name='%s'; keeping marker",
+                 context.category, context.name);
+  return false;
+}
+
 static void switchLauncherTab(int8_t delta) {
   const uint8_t tabCount = launcherTabCount();
   if (tabCount <= 1) {
@@ -699,6 +794,8 @@ static void drawLauncher() {
   }
   launcherRenderYield();
 
+  const int16_t appFontHeight = lavaFontHeight();
+  const int16_t appRowHeight = max<int16_t>(16, appFontHeight + 2);
   const uint8_t maxVisibleApps = 9;
   uint8_t firstApp = 0;
   const uint8_t itemCount = totalLauncherItems();
@@ -707,7 +804,7 @@ static void drawLauncher() {
   }
   const uint8_t visibleEnd = min<uint8_t>(itemCount, firstApp + maxVisibleApps);
   for (uint8_t i = firstApp; i < visibleEnd; ++i) {
-    const int16_t y = 58 + (i - firstApp) * 16;
+    const int16_t y = 58 + (i - firstApp) * appRowHeight;
     const bool selected = i == g_selectedApp;
     const bool isSystemSdItem = g_selectedTab == SYSTEM_TAB_INDEX && i >= SYSTEM_ITEM_COUNT;
     const bool sdApp = isSystemSdItem || g_selectedTab != SYSTEM_TAB_INDEX;
@@ -732,7 +829,7 @@ static void drawLauncher() {
       name = miaTr("Export OTA to SD");
     } else if (sdApp) {
       const SdAppManifestSummary *app = selectedSdApp(i);
-      name = app == nullptr ? miaTr("<missing>") : miaTr(app->name);
+      name = app == nullptr ? miaTr("<missing>") : miaAppDisplayName(app->category, app->name);
     } else {
       name = miaTr(BUILTIN_APPS[i]->name);
     }
@@ -740,7 +837,7 @@ static void drawLauncher() {
     const uint8_t itemText = selected ? LAVA_BLACK : LAVA_WHITE;
     const uint8_t itemTag = selected ? LAVA_BLACK : LAVA_GREEN;
     const uint8_t itemCursor = selected ? LAVA_YELLOW : LAVA_YELLOW;
-    lavaFillRect(6, y - 2, 308, 16, itemBg);
+    lavaFillRect(6, y, 308, appRowHeight, itemBg);
     lavaDrawText(12, y, selected ? ">" : " ", itemCursor, itemBg);
     char sdLine[128];
     const char *displayText = name;
@@ -794,7 +891,8 @@ static void drawLauncher() {
     lavaFillRect(26, 52, 268, 136, LAVA_GRAY);
     lavaFillRect(28, 54, 264, 132, LAVA_LIGHT_GRAY);
     lavaFillRect(28, 54, 264, 20, LAVA_YELLOW);
-    lavaDrawText(34, 56, app == nullptr ? miaTr("SD App") : miaTr(app->name), LAVA_BLACK,
+      lavaDrawText(34, 56,
+                   app == nullptr ? miaTr("SD App") : miaAppDisplayName(app->category, app->name), LAVA_BLACK,
                  LAVA_YELLOW);
     for (uint8_t i = 0; i < 2; ++i) {
       const bool selected = i == g_sdActionMenuSelection;
@@ -863,7 +961,9 @@ static void runSelectedSdAction() {
   }
 
   if (g_sdActionMenuSelection == static_cast<uint8_t>(SdAppAction::DownloadAndRun)) {
-    g_lastSdRun = runSdAppByPath(app->path, g_context.sdReady);
+    miaLauncherReturnContextSave(app->category, app->name);
+    g_lastSdRun = runSdAppWithProgress(*app);
+    miaLauncherReturnContextClear();
     launcherLogRecordSdRun(*app, g_lastSdRun);
     return;
   }
@@ -934,11 +1034,14 @@ static void enterSelectedApp() {
     // If the SD firmware manifest matches ota_1, skip flash and just boot
     if (sdManifestMatchesOta(app->path)) {
       launcherTracef("[sd-run] manifest matches ota_1, skipping flash for %s", app->path);
+      miaLauncherReturnContextSave(app->category, app->name);
       miaBootAppSlot();
       return;  // miaBootAppSlot reboots, never returns
     }
 
-    g_lastSdRun = runSdAppByPath(app->path, g_context.sdReady);
+    miaLauncherReturnContextSave(app->category, app->name);
+    g_lastSdRun = runSdAppWithProgress(*app);
+    miaLauncherReturnContextClear();
     launcherLogRecordSdRun(*app, g_lastSdRun);
     drawLauncher();
     return;
@@ -1109,6 +1212,7 @@ void setup() {
   (void)persistedFont;
   initSdCard();
   launcherTrace("[setup] initSdCard done");
+  restoreLauncherReturnContext();
 
   drawSdAppLoadingMessage();
   launcherTrace("[setup] drawSdAppLoadingMessage done");
