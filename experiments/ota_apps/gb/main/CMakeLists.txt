@@ -24,6 +24,10 @@ idf_component_register(
         ${MIA_GNUBOY_SOURCES}
         "../../common_host/host_platform.cpp"
         "../../common_host/display_host.cpp"
+        "../../common_host/droid_gbk_renderer.cpp"
+        "../../../../src/fonts/droid_gbk_12.c"
+        "../../../../src/gbk_unicode_map.cpp"
+        "../../../../src/droid_gbk_index.cpp"
     INCLUDE_DIRS
         "."
         "../../common_host"
@@ -47,5 +51,9 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_WIDTH=160
     MIA_EMULATOR_HEIGHT=144
     MIA_EMULATOR_SAMPLE_RATE=32000
+    MIA_EMULATOR_SCALE_MODE=MIA_DISPLAY_SCALE_STRETCH
+    MIA_EMULATOR_DUAL_CORE_AUDIO=1
+    MIA_DISPLAY_DROID_GBK=1
+    MIA_DISPLAY_PRESENT_ROWS=40
     MIA_EMULATOR_GNUBOY=1
 )

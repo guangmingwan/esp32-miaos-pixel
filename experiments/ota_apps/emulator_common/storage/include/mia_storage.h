@@ -81,6 +81,10 @@ typedef struct {
     size_t count;
 } MiaStoragePickerResult;
 
+MiaStorageStatus mia_storage_rom_root_path(const MiaStorageContext *context,
+                                           const MiaStorageTarget *target,
+                                           char *out_path, size_t out_size);
+
 typedef struct {
     MiaStorageFaultKind kind;
 } MiaStorageFault;

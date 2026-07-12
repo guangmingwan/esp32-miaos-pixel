@@ -18,6 +18,9 @@ void display_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg, 
 void display_host_present(void);
 int32_t display_host_present_rgb565(const uint16_t *pixels, uint32_t width,
                                     uint32_t height, uint32_t pitch_bytes);
+int32_t display_host_present_rgb565_region(const uint16_t *pixels, int32_t x, int32_t y,
+                                           uint32_t width, uint32_t height,
+                                           uint32_t pitch_bytes);
 void display_host_backlight_set(uint8_t enabled);
 
 #ifdef MIA_DISPLAY_HOST_NATIVE_TEST

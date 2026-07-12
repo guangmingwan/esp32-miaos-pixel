@@ -403,4 +403,36 @@ extern "C" int32_t display_host_present_rgb565(const uint16_t *pixels, uint32_t 
       pixels, width, height, pitch_bytes, g_ready && g_lcd != nullptr ? 1 : 0, g_chunk,
       PRESENT_ROWS, write_rgb565_chunk, nullptr);
 }
+
+extern "C" int32_t display_host_present_rgb565_region(const uint16_t *pixels, int32_t x,
+                                                         int32_t y, uint32_t width,
+                                                         uint32_t height,
+                                                         uint32_t pitch_bytes) {
+  if (!g_ready || g_lcd == nullptr) return MIA_HOST_RESULT_NOT_READY;
+  if (pixels == nullptr || (reinterpret_cast<uintptr_t>(pixels) & 1u) != 0u || x < 0 ||
+      y < 0 || width == 0 || height == 0 || x + width > SCREEN_W || y + height > SCREEN_H ||
+      (pitch_bytes & 1u) != 0u || pitch_bytes < width * sizeof(uint16_t)) {
+    return MIA_HOST_RESULT_INVALID_ARGUMENT;
+  }
+  const uint8_t *source = reinterpret_cast<const uint8_t *>(pixels);
+  for (uint32_t row_start = 0; row_start < height; row_start += PRESENT_ROWS) {
+    const uint32_t rows =
+        (height - row_start) < PRESENT_ROWS ? height - row_start : PRESENT_ROWS;
+    for (uint32_t row = 0; row < rows; ++row) {
+      const uint16_t *source_row = reinterpret_cast<const uint16_t *>(
+          source + (row_start + row) * pitch_bytes);
+      for (uint32_t column = 0; column < width; ++column) {
+        g_chunk[row * width + column] = __builtin_bswap16(source_row[column]);
+      }
+    }
+    if (lcd_set_window((uint16_t)x, (uint16_t)(y + row_start),
+                       (uint16_t)(x + width - 1),
+                       (uint16_t)(y + row_start + rows - 1)) != ESP_OK ||
+        tx_bytes(1, g_chunk, (size_t)rows * width * sizeof(uint16_t)) != ESP_OK) {
+      return MIA_HOST_RESULT_IO;
+    }
+    yield_once();
+  }
+  return MIA_HOST_RESULT_OK;
+}
 #endif

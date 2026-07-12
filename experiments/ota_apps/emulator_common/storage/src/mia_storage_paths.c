@@ -75,6 +75,22 @@ MiaStorageStatus mia_storage_resolve_virtual(const MiaStorageContext *context, c
     return mia_storage_ok();
 }
 
+MiaStorageStatus mia_storage_rom_root_path(const MiaStorageContext *context,
+                                           const MiaStorageTarget *target,
+                                           char *out_path, size_t out_size) {
+    if (target == NULL || out_path == NULL || out_size == 0) {
+        return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target and output path are required");
+    }
+    MiaStoragePath root;
+    MiaStorageStatus status = mia_storage_resolve_virtual(context, target->rom_root, &root);
+    if (status.code != MIA_STORAGE_OK) return status;
+    const int written = snprintf(out_path, out_size, "%s", root.path);
+    if (written < 0 || (size_t)written >= out_size) {
+        return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "ROM root path is too long");
+    }
+    return mia_storage_ok();
+}
+
 MiaStorageStatus mia_storage_resolve_child(const MiaStorageContext *context, const char *virtual_root, const char *relative_name, MiaStoragePath *out_path) {
     if (has_traversal(relative_name)) {
         return mia_storage_error(MIA_STORAGE_ERR_PATH_TRAVERSAL, "relative path must stay inside target root");
