@@ -57,55 +57,57 @@ MiaStorageStatus mia_storage_picker_list(const MiaStorageContext *context, const
         return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target and result are required");
     }
     *out_result = (MiaStoragePickerResult){0};
-    MiaStoragePath root;
-    MiaStorageStatus status = mia_storage_resolve_virtual(context, target->rom_root, &root);
-    if (status.code != MIA_STORAGE_OK) {
-        return status;
-    }
-    DIR *dir = opendir(root.path);
-    if (dir == NULL) {
-        return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "ROM root is missing");
-    }
     size_t capacity = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || mia_storage_is_zip(entry->d_name)) {
-            continue;
-        }
-        MiaStoragePath child;
-        const int written = snprintf(child.path, sizeof(child.path), "%s/%s", root.path, entry->d_name);
-        if (written < 0 || (size_t)written >= sizeof(child.path)) {
-            continue;
-        }
+    size_t roots_found = 0;
+    for (size_t root_index = 0; root_index < mia_storage_rom_root_count(target); ++root_index) {
+        MiaStoragePath root;
+        MiaStorageStatus status = mia_storage_resolve_virtual(
+            context, mia_storage_rom_root_at(target, root_index), &root);
+        if (status.code != MIA_STORAGE_OK) continue;
+        DIR *dir = opendir(root.path);
+        if (dir == NULL) continue;
+        roots_found++;
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || mia_storage_is_zip(entry->d_name)) {
+                continue;
+            }
+            MiaStoragePath child;
+            const int written = snprintf(child.path, sizeof(child.path), "%s/%s", root.path, entry->d_name);
+            if (written < 0 || (size_t)written >= sizeof(child.path)) {
+                continue;
+            }
 #ifdef ESP_PLATFORM
-        if (entry->d_type == DT_DIR) {
-            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
-        } else if (entry->d_type == DT_REG && mia_storage_extension_matches(entry->d_name, target)) {
-            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, 0);
-        } else {
-            continue;
-        }
+            if (entry->d_type == DT_DIR) {
+                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
+            } else if (entry->d_type == DT_REG && mia_storage_extension_matches(entry->d_name, target)) {
+                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, 0);
+            } else {
+                continue;
+            }
 #else
-        struct stat info;
-        if (path_is_symlink(child.path) || stat(child.path, &info) != 0) {
-            continue;
-        }
-        if (S_ISDIR(info.st_mode)) {
-            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
-        } else if (S_ISREG(info.st_mode) && mia_storage_extension_matches(entry->d_name, target)) {
-            status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
-        } else {
-            continue;
-        }
+            struct stat info;
+            if (path_is_symlink(child.path) || stat(child.path, &info) != 0) {
+                continue;
+            }
+            if (S_ISDIR(info.st_mode)) {
+                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
+            } else if (S_ISREG(info.st_mode) && mia_storage_extension_matches(entry->d_name, target)) {
+                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+            } else {
+                continue;
+            }
 #endif
-        if (status.code != MIA_STORAGE_OK) {
-            closedir(dir);
-            mia_storage_picker_free(out_result);
-            return status;
+            if (status.code != MIA_STORAGE_OK) {
+                closedir(dir);
+                mia_storage_picker_free(out_result);
+                return status;
+            }
         }
+        closedir(dir);
     }
-    closedir(dir);
-    return mia_storage_ok();
+    return roots_found > 0u ? mia_storage_ok() :
+        mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "ROM root is missing");
 }
 
 MiaStorageStatus mia_storage_picker_select(const MiaStorageContext *context, const MiaStorageTarget *target, const char *relative_name, MiaStoragePickerResult *out_result) {
@@ -119,17 +121,20 @@ MiaStorageStatus mia_storage_picker_select(const MiaStorageContext *context, con
     if (!mia_storage_extension_matches(relative_name, target)) {
         return mia_storage_error(MIA_STORAGE_ERR_UNSUPPORTED_FILE, "file extension does not match target");
     }
-    MiaStoragePath path;
-    MiaStorageStatus status = mia_storage_resolve_child(context, target->rom_root, relative_name, &path);
-    if (status.code != MIA_STORAGE_OK) {
-        return status;
+    for (size_t root_index = 0; root_index < mia_storage_rom_root_count(target); ++root_index) {
+        MiaStoragePath path;
+        MiaStorageStatus status = mia_storage_resolve_child(
+            context, mia_storage_rom_root_at(target, root_index), relative_name, &path);
+        if (status.code != MIA_STORAGE_OK) return status;
+        struct stat info;
+        if (path_is_symlink(path.path) || stat(path.path, &info) != 0 || !S_ISREG(info.st_mode)) {
+            continue;
+        }
+        size_t capacity = 0;
+        return append_entry(out_result, &capacity, relative_name, path.path,
+                            MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
     }
-    struct stat info;
-    if (path_is_symlink(path.path) || stat(path.path, &info) != 0 || !S_ISREG(info.st_mode)) {
-        return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "selected ROM is missing");
-    }
-    size_t capacity = 0;
-    return append_entry(out_result, &capacity, relative_name, path.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+    return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "selected ROM is missing");
 }
 
 static bool wildcard_wad_exists(const char *directory) {

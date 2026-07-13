@@ -42,6 +42,19 @@ static void convert_leaf_case(char *path, int (*convert)(int)) {
     }
 }
 
+size_t mia_storage_rom_root_count(const MiaStorageTarget *target) {
+    return target == NULL ? 0u : 1u + target->alternate_rom_root_count;
+}
+
+const char *mia_storage_rom_root_at(const MiaStorageTarget *target, size_t index) {
+    if (target == NULL) return NULL;
+    if (index == 0u) return target->rom_root;
+    const size_t alternate_index = index - 1u;
+    if (target->alternate_rom_roots == NULL ||
+        alternate_index >= target->alternate_rom_root_count) return NULL;
+    return target->alternate_rom_roots[alternate_index];
+}
+
 MiaStorageStatus mia_storage_resolve_virtual(const MiaStorageContext *context, const char *virtual_path, MiaStoragePath *out_path) {
     if (context == NULL || context->storage_root == NULL || virtual_path == NULL || virtual_path[0] != '/' || out_path == NULL) {
         return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "storage root and absolute virtual path are required");
@@ -81,14 +94,18 @@ MiaStorageStatus mia_storage_rom_root_path(const MiaStorageContext *context,
     if (target == NULL || out_path == NULL || out_size == 0) {
         return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target and output path are required");
     }
-    MiaStoragePath root;
-    MiaStorageStatus status = mia_storage_resolve_virtual(context, target->rom_root, &root);
-    if (status.code != MIA_STORAGE_OK) return status;
-    const int written = snprintf(out_path, out_size, "%s", root.path);
-    if (written < 0 || (size_t)written >= out_size) {
-        return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "ROM root path is too long");
+    for (size_t index = 0; index < mia_storage_rom_root_count(target); ++index) {
+        const char *virtual_root = mia_storage_rom_root_at(target, index);
+        MiaStoragePath root;
+        MiaStorageStatus status = mia_storage_resolve_virtual(context, virtual_root, &root);
+        if (status.code != MIA_STORAGE_OK || !is_directory(root.path)) continue;
+        const int written = snprintf(out_path, out_size, "%s", root.path);
+        if (written < 0 || (size_t)written >= out_size) {
+            return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "ROM root path is too long");
+        }
+        return mia_storage_ok();
     }
-    return mia_storage_ok();
+    return mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "ROM root is missing");
 }
 
 MiaStorageStatus mia_storage_resolve_child(const MiaStorageContext *context, const char *virtual_root, const char *relative_name, MiaStoragePath *out_path) {

@@ -10,7 +10,7 @@ int main() {
 
     require_status(mia_runtime_target_find(&mia_runtime_generated_targets, "col", &target), MIA_RUNTIME_OK);
     require_true(std::string(target->name) == "coleco", "target lookup should resolve aliases");
-    require_true(std::string(target->rom_root) == "/roms/coleco", "target lookup should preserve rom root");
+    require_true(std::string(target->rom_root) == "/roms/col", "target lookup should preserve rom root");
 
     require_status(mia_runtime_target_find(&mia_runtime_generated_targets, "../../doom", &target), MIA_RUNTIME_ERR_INVALID_ARGUMENT);
     require_status(mia_runtime_target_find(&mia_runtime_generated_targets, "not-real", &target), MIA_RUNTIME_ERR_TARGET_NOT_FOUND);

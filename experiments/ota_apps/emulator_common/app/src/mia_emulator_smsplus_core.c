@@ -2,6 +2,7 @@
 #include "mia_emulator_smsplus.h"
 #include "mia_host_abi.h"
 #include "mbedtls/sha1.h"
+#include "mbedtls/version.h"
 #include "smsplus.h"
 
 #undef input
@@ -105,7 +106,11 @@ static MiaSmsPlusBiosStatus read_coleco_bios(void *context, MiaSmsPlusBiosReadRe
 
 static int hash_coleco_bios(void *context, MiaSmsPlusBiosHashRequest *request) {
     (void)context;
+#if MBEDTLS_VERSION_MAJOR >= 3
     return mbedtls_sha1(request->buffer, request->size, request->digest);
+#else
+    return mbedtls_sha1_ret(request->buffer, request->size, request->digest);
+#endif
 }
 
 static void accept_coleco_bios(void *context, uint8_t *buffer) {

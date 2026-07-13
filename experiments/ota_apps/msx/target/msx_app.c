@@ -16,7 +16,8 @@ static bool file_exists(const char *path) {
 int mia_msx_main(void) {
     static const char *const extensions[] = {"rom", "mx1", "mx2", "dsk"};
     MiaStorageContext storage = {"/sd"};
-    MiaStorageTarget target = {"msx", "/roms/msx", "/saves/msx", extensions, 4, NULL, 0};
+    MiaStorageTarget target = {"msx", "/roms/msx", "/saves/msx", extensions, 4,
+                               NULL, 0, NULL, 0};
     MiaAppPickerSelection selection = {0};
     char missing[256];
     const size_t count = mia_msx_missing_bios("/sd/bios/msx", file_exists, missing, sizeof(missing));

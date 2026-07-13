@@ -43,7 +43,7 @@ int main() {
     require_true(!has_entry(entries, "outside.nes", MIA_STORAGE_ENTRY_ROM), "symlinks outside roots should not be followed");
     mia_storage_picker_free(&result);
 
-    const MiaStorageTarget missing_root{"missing", "/roms/missing", "/saves/missing", target->extensions, target->extension_count, nullptr, 0};
+    const MiaStorageTarget missing_root{"missing", "/roms/missing", "/saves/missing", target->extensions, target->extension_count, nullptr, 0, nullptr, 0};
     const MiaStorageStatus missing_root_status = mia_storage_picker_list(&context, &missing_root, &result);
     require_status(missing_root_status, MIA_STORAGE_ERR_MISSING_ROOT);
     require_true(missing_root_status.message != nullptr, "missing root should include a status message");
@@ -57,7 +57,7 @@ int main() {
     const std::string mounted_root = (root / "sd").string();
     const MiaStorageContext mounted_context{mounted_root.c_str()};
     const char *gbc_extensions[] = {"gbc"};
-    const MiaStorageTarget uppercase_root{"gbc", "/roms/gbc", "/saves/gbc", gbc_extensions, 1, nullptr, 0};
+    const MiaStorageTarget uppercase_root{"gbc", "/roms/gbc", "/saves/gbc", gbc_extensions, 1, nullptr, 0, nullptr, 0};
     require_status(mia_storage_picker_list(&mounted_context, &uppercase_root, &result), MIA_STORAGE_OK);
     entries = picker_entries(result);
     require_true(has_entry(entries, "demo.gbc", MIA_STORAGE_ENTRY_ROM),
@@ -68,8 +68,24 @@ int main() {
                  "selected ROM should preserve the existing uppercase directory path");
     mia_storage_picker_free(&result);
 
+    fs::create_directories(root / "sd" / "roms" / "FC");
+    std::ofstream(root / "sd" / "roms" / "FC" / "famicom.fc").put('f');
+    const char *nes_alternate_roots[] = {"/roms/FC"};
+    const MiaStorageTarget multi_root_nes{
+        "nes", "/roms/nes", "/saves/nes", target->extensions, target->extension_count,
+        nullptr, 0, nes_alternate_roots, 1};
+    require_status(mia_storage_picker_list(&mounted_context, &multi_root_nes, &result), MIA_STORAGE_OK);
+    entries = picker_entries(result);
+    require_true(has_entry(entries, "famicom.fc", MIA_STORAGE_ENTRY_ROM),
+                 "alternate ROM roots should be merged into the picker");
+    mia_storage_picker_free(&result);
+    require_status(mia_storage_picker_select(&mounted_context, &multi_root_nes, "famicom.fc", &result), MIA_STORAGE_OK);
+    require_true(result.count == 1 && std::string_view(result.entries[0].path).find("/sd/roms/FC/famicom.fc") != std::string_view::npos,
+                 "selection should preserve an alternate root path");
+    mia_storage_picker_free(&result);
+
     fs::create_directories(root / "roms" / "empty");
-    const MiaStorageTarget empty_root{"empty", "/roms/empty", "/saves/empty", target->extensions, target->extension_count, nullptr, 0};
+    const MiaStorageTarget empty_root{"empty", "/roms/empty", "/saves/empty", target->extensions, target->extension_count, nullptr, 0, nullptr, 0};
     require_status(mia_storage_picker_list(&context, &empty_root, &result), MIA_STORAGE_OK);
     require_true(result.count == 0, "empty roots should return an empty picker result");
     mia_storage_picker_free(&result);

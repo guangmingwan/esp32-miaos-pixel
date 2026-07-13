@@ -1,9 +1,9 @@
 #include "megadrive_policy.h"
 #include "mia_emulator_runtime.h"
 #include "mia_host_abi.h"
-#include "gwenesis.h"
 
 #include <esp_heap_caps.h>
+#include "gwenesis.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

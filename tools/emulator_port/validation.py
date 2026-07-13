@@ -83,8 +83,13 @@ def validate_target(upstream_root: Path, target: Target, license_ids: set[Licens
     expected_category = ManifestCategory.GAMES if target.app_name == AppName("doom") else ManifestCategory.EMULATORS
     if target.manifest_category != expected_category:
         issues.append(ValidationIssue("invalid-category", f"{target.app_name} must use {expected_category.value}"))
-    for path in (target.rom_root, target.save_root):
-        if not is_safe_sd_root(path, str(target.app_name)):
+    app_name = str(target.app_name)
+    paths = (
+        (target.rom_root, {app_name, *target.aliases}),
+        (target.save_root, {app_name}),
+    )
+    for path, allowed_names in paths:
+        if not is_safe_sd_root(path, allowed_names):
             issues.append(ValidationIssue("invalid-path", f"{target.app_name} has unsafe path {path}"))
     if "zip" in target.rom_extensions:
         issues.append(ValidationIssue("archive-extension", f"{target.app_name} includes forbidden zip support"))
@@ -106,8 +111,8 @@ def source_root_exists(upstream_root: Path, target: Target, source_path: str) ->
     return (upstream_root / source_path).exists()
 
 
-def is_safe_sd_root(path: PurePosixPath, app_name: str) -> bool:
-    return path.is_absolute() and ".." not in path.parts and path.name == app_name and len(path.parts) == 3
+def is_safe_sd_root(path: PurePosixPath, allowed_names: set[str]) -> bool:
+    return path.is_absolute() and ".." not in path.parts and path.name in allowed_names and len(path.parts) == 3
 
 
 def validate_licenses(source_root: Path, vendor_root: Path, licenses: tuple[LicenseRecord, ...]) -> list[ValidationIssue]:

@@ -48,7 +48,7 @@ int main() {
 
     fs::create_directories(root / "saves" / "readonly");
     chmod((root / "saves" / "readonly").c_str(), 0555);
-    const MiaStorageTarget readonly{"readonly", "/roms/gb", "/saves/readonly", target->extensions, target->extension_count, nullptr, 0};
+    const MiaStorageTarget readonly{"readonly", "/roms/gb", "/saves/readonly", target->extensions, target->extension_count, nullptr, 0, nullptr, 0};
     MiaStorageSaveRequest unwritable{&readonly, "blocked.sav", MIA_STORAGE_FLUSH_CORE_REQUEST, nullptr};
     require_status(mia_storage_save_write(&context, &unwritable, second.data(), second.size()), MIA_STORAGE_ERR_IO);
     chmod((root / "saves" / "readonly").c_str(), 0755);

@@ -75,7 +75,7 @@ def render_hardware_target(index: int) -> str:
 
 def render_storage_target(index: int) -> str:
     target = TARGETS[index]
-    return f'    {{{c_string(str(target.app_name))}, {c_string(str(target.rom_root))}, {c_string(str(target.save_root))}, target_{index}_extensions, {len(target.rom_extensions)}, target_{index}_requirements, {len(target.requirements)}}},'
+    return f'    {{{c_string(str(target.app_name))}, {c_string(str(target.rom_root))}, {c_string(str(target.save_root))}, target_{index}_extensions, {len(target.rom_extensions)}, target_{index}_requirements, {len(target.requirements)}, NULL, 0}},'
 
 
 def c_string(value: str) -> str:

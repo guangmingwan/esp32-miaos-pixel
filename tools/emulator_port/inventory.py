@@ -37,8 +37,9 @@ def req(kind: str, path: str, required: bool, note: str) -> Requirement:
     return Requirement(kind=kind, path=path, required=required, note=note)
 
 
-def target(name: str, category: ManifestCategory, namespace: str, aliases: tuple[str, ...], family: str, extensions: tuple[str, ...], geometry: Geometry, sample_rate: int, requirements: tuple[Requirement, ...], source_roots: tuple[str, ...], license_ids: tuple[LicenseId, ...], controls: tuple[str, ...] = ("A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")) -> Target:
-    return Target(AppName(name), category, namespace, aliases, CoreFamily(family), extensions, PurePosixPath(f"/roms/{name}"), PurePosixPath(f"/saves/{name}"), requirements, geometry, sample_rate, controls, tuple(SourcePath(root) for root in source_roots), license_ids)
+def target(name: str, category: ManifestCategory, namespace: str, aliases: tuple[str, ...], family: str, extensions: tuple[str, ...], geometry: Geometry, sample_rate: int, requirements: tuple[Requirement, ...], source_roots: tuple[str, ...], license_ids: tuple[LicenseId, ...], controls: tuple[str, ...] = ("A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT"), rom_directory: str | None = None) -> Target:
+    rom_root = PurePosixPath(f"/roms/{rom_directory or name}")
+    return Target(AppName(name), category, namespace, aliases, CoreFamily(family), extensions, rom_root, PurePosixPath(f"/saves/{name}"), requirements, geometry, sample_rate, controls, tuple(SourcePath(root) for root in source_roots), license_ids)
 
 
 TARGETS: Final[tuple[Target, ...]] = (
@@ -49,11 +50,11 @@ TARGETS: Final[tuple[Target, ...]] = (
     target("gw", ManifestCategory.EMULATORS, "gw", (), "retro-core/gw-emulator", ("gw",), Geometry(320, 240), 32000, (), ("retro-core/main/main_gw.c", "retro-core/components/gw-emulator"), (BASE, GW)),
     target("sms", ManifestCategory.EMULATORS, "sms", (), "retro-core/smsplus", ("sms", "sg"), Geometry(256, 192), 32000, (), ("retro-core/main/main_sms.c", "retro-core/components/smsplus"), (BASE, BSD_SMS)),
     target("gg", ManifestCategory.EMULATORS, "gg", (), "retro-core/smsplus", ("gg",), Geometry(160, 144), 32000, (), ("retro-core/main/main_sms.c", "retro-core/components/smsplus"), (BASE, BSD_SMS)),
-    target("coleco", ManifestCategory.EMULATORS, "col", ("col",), "retro-core/smsplus", ("col", "rom"), Geometry(256, 192), 32000, (req("bios", "/bios/coleco.rom", True, "ColecoVision BIOS is required and not bundled."),), ("retro-core/main/main_sms.c", "retro-core/components/smsplus"), (BASE, BSD_SMS)),
+    target("coleco", ManifestCategory.EMULATORS, "col", ("col",), "retro-core/smsplus", ("col", "rom"), Geometry(256, 192), 32000, (req("bios", "/bios/coleco.rom", True, "ColecoVision BIOS is required and not bundled."),), ("retro-core/main/main_sms.c", "retro-core/components/smsplus"), (BASE, BSD_SMS), rom_directory="col"),
     target("pce", ManifestCategory.EMULATORS, "pce", (), "retro-core/pce-go", ("pce",), Geometry(256, 224), 22050, (), ("retro-core/main/main_pce.c", "retro-core/components/pce-go"), (BASE, BSD_PCE)),
-    target("lynx", ManifestCategory.EMULATORS, "lnx", ("lnx",), "retro-core/handy", ("lnx",), Geometry(160, 102), 32000, (req("bios", "/bios/lynxboot.img", True, "Atari Lynx boot ROM is required and not bundled."),), ("retro-core/main/main_lynx.cpp", "retro-core/components/handy"), (BASE,)),
+    target("lynx", ManifestCategory.EMULATORS, "lnx", ("lnx",), "retro-core/handy", ("lnx",), Geometry(160, 102), 32000, (req("bios", "/bios/lynxboot.img", True, "Atari Lynx boot ROM is required and not bundled."),), ("retro-core/main/main_lynx.cpp", "retro-core/components/handy"), (BASE,), rom_directory="lnx"),
     target("gba", ManifestCategory.EMULATORS, "gba", (), "gbsp", ("gba",), Geometry(240, 160), 32000, (req("bios", "/bios/gba/gba_bios.bin", True, "GBA BIOS is required and not bundled."),), ("gbsp",), (BASE,)),
-    target("megadrive", ManifestCategory.EMULATORS, "gwenesis", ("md", "genesis"), "gwenesis", ("md", "gen", "bin"), Geometry(320, 224), 26633, (), ("gwenesis/main/main.c", "gwenesis/components/gwenesis"), (BASE, GWENESIS)),
+    target("megadrive", ManifestCategory.EMULATORS, "gwenesis", ("md", "genesis"), "gwenesis", ("md", "gen", "bin"), Geometry(320, 224), 26633, (), ("gwenesis/main/main.c", "gwenesis/components/gwenesis"), (BASE, GWENESIS), rom_directory="md"),
     target("msx", ManifestCategory.EMULATORS, "msx", (), "fmsx", ("rom", "mx1", "mx2", "dsk"), Geometry(272, 228), 32000, (req("bios", "/bios/msx", True, "MSX BIOS directory is required and not bundled."),), ("fmsx/main/main.c", "fmsx/components/fmsx"), (BASE, FMSX), ("A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT", "KEYBOARD")),
     target("doom", ManifestCategory.GAMES, "doom", (), "prboom-go", ("wad",), Geometry(320, 200), 22050, (req("iwad", "/roms/doom/*.wad", True, "A legal IWAD is required and not bundled."),), ("prboom-go/main", "prboom-go/components/prboom"), (BASE, PRBOOM), ("FIRE", "USE", "STRAFE", "RUN", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")),
 )

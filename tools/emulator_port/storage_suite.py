@@ -143,7 +143,7 @@ def render_requirement(requirement: Requirement) -> str:
 
 def render_target(index: int, target: Target) -> str:
     requirements = f"target_{index}_requirements" if len(target.requirements) > 0 else "NULL"
-    return f"    {{{c_string(str(target.app_name))}, {c_string(str(target.rom_root))}, {c_string(str(target.save_root))}, target_{index}_extensions, {len(target.rom_extensions)}, {requirements}, {len(target.requirements)}}},"
+    return f"    {{{c_string(str(target.app_name))}, {c_string(str(target.rom_root))}, {c_string(str(target.save_root))}, target_{index}_extensions, {len(target.rom_extensions)}, {requirements}, {len(target.requirements)}, NULL, 0}},"
 
 
 def c_string(value: str) -> str:

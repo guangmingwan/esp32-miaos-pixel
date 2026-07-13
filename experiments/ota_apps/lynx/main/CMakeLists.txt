@@ -16,7 +16,8 @@ idf_component_register(
         "../../emulator_common/core/include" "../../emulator_common/hardware/include" "../../emulator_common/runtime/include"
         "../../emulator_common/storage/include" "../../emulator_common/storage/src" "../../../../include")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="lynx" MIA_EMULATOR_EXTENSION="lnx"
-    MIA_APP_NAME="lynx" MIA_EMULATOR_ROM_ROOT="/roms/lynx" MIA_EMULATOR_SAVE_ROOT="/saves/lynx"
+    MIA_APP_NAME="lynx" MIA_EMULATOR_ROM_ROOT="/roms/lnx" MIA_EMULATOR_SECOND_ROM_ROOT="/roms/lynx"
+    MIA_EMULATOR_SAVE_ROOT="/saves/lynx"
     MIA_EMULATOR_WIDTH=160 MIA_EMULATOR_HEIGHT=102 MIA_EMULATOR_SAMPLE_RATE=32000 MIA_EMULATOR_GNUBOY=1
     MIA_DISPLAY_DROID_GBK=1 MIA_PICKER_COVERS=1)
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=format -Wno-error=unused-value)

@@ -23,11 +23,31 @@ static const char *const extensions[] = {
 #ifdef MIA_EMULATOR_SECOND_EXTENSION
     MIA_EMULATOR_SECOND_EXTENSION,
 #endif
+#ifdef MIA_EMULATOR_THIRD_EXTENSION
+    MIA_EMULATOR_THIRD_EXTENSION,
+#endif
+#ifdef MIA_EMULATOR_FOURTH_EXTENSION
+    MIA_EMULATOR_FOURTH_EXTENSION,
+#endif
 #endif
 #ifdef MIA_EMULATOR_GBA
     "gba",
 #endif
 };
+
+#ifdef MIA_EMULATOR_SECOND_ROM_ROOT
+static const char *const alternate_rom_roots[] = {
+    MIA_EMULATOR_SECOND_ROM_ROOT,
+#ifdef MIA_EMULATOR_THIRD_ROM_ROOT
+    MIA_EMULATOR_THIRD_ROM_ROOT,
+#endif
+};
+#define MIA_ALTERNATE_ROM_ROOTS alternate_rom_roots
+#define MIA_ALTERNATE_ROM_ROOT_COUNT (sizeof(alternate_rom_roots) / sizeof(alternate_rom_roots[0]))
+#else
+#define MIA_ALTERNATE_ROM_ROOTS NULL
+#define MIA_ALTERNATE_ROM_ROOT_COUNT 0u
+#endif
 
 MiaEmulatorRuntime mia_emulator_runtime;
 
@@ -43,7 +63,10 @@ int mia_emulator_main_impl(int argc, char *argv[]) {
     (void)argv;
     MiaEmulatorRuntime *runtime = &mia_emulator_runtime;
     runtime->storage = (MiaStorageContext){"/sd"};
-    runtime->storage_target = (MiaStorageTarget){MIA_EMULATOR_TARGET, MIA_EMULATOR_ROM_ROOT, MIA_EMULATOR_SAVE_ROOT, extensions, sizeof(extensions) / sizeof(extensions[0]), NULL, 0};
+    runtime->storage_target = (MiaStorageTarget){
+        MIA_EMULATOR_TARGET, MIA_EMULATOR_ROM_ROOT, MIA_EMULATOR_SAVE_ROOT,
+        extensions, sizeof(extensions) / sizeof(extensions[0]), NULL, 0,
+        MIA_ALTERNATE_ROM_ROOTS, MIA_ALTERNATE_ROM_ROOT_COUNT};
     runtime->hardware_target = (MiaHardwareTarget){MIA_EMULATOR_TARGET, {MIA_EMULATOR_WIDTH, MIA_EMULATOR_HEIGHT}, MIA_EMULATOR_SAMPLE_RATE, NULL, 0};
     if (!allocate_runtime(runtime)) {
         mia_host_log("emulator buffers allocation failed");

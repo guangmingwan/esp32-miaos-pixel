@@ -1,6 +1,10 @@
 file(GLOB_RECURSE MIA_SMSPLUS_SOURCES
     "../../emulator_common/vendor/retro-core/components/smsplus/*.c")
 
+if(NOT DEFINED MIA_ROM_DIRECTORY)
+    set(MIA_ROM_DIRECTORY ${MIA_TARGET})
+endif()
+
 idf_component_register(
     SRCS
         "app_main.c"
@@ -47,7 +51,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_TARGET="${MIA_TARGET}"
     MIA_EMULATOR_EXTENSION="${MIA_EXTENSION}"
     MIA_APP_NAME="${MIA_TARGET}"
-    MIA_EMULATOR_ROM_ROOT="/roms/${MIA_TARGET}"
+    MIA_EMULATOR_ROM_ROOT="/roms/${MIA_ROM_DIRECTORY}"
     MIA_EMULATOR_SAVE_ROOT="/saves/${MIA_TARGET}"
     MIA_EMULATOR_WIDTH=${MIA_WIDTH}
     MIA_EMULATOR_HEIGHT=${MIA_HEIGHT}
@@ -62,4 +66,9 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 if(DEFINED MIA_SECOND_EXTENSION)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
         MIA_EMULATOR_SECOND_EXTENSION="${MIA_SECOND_EXTENSION}")
+endif()
+
+if(DEFINED MIA_SECOND_ROM_DIRECTORY)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        MIA_EMULATOR_SECOND_ROM_ROOT="/roms/${MIA_SECOND_ROM_DIRECTORY}")
 endif()

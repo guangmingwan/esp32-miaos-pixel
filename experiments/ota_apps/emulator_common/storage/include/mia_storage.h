@@ -58,6 +58,8 @@ typedef struct {
     size_t extension_count;
     const MiaStorageRequirement *requirements;
     size_t requirement_count;
+    const char *const *alternate_rom_roots;
+    size_t alternate_rom_root_count;
 } MiaStorageTarget;
 
 typedef struct {
