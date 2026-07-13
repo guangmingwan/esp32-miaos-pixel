@@ -67,24 +67,6 @@ int decode_utf8(const char **cursor) {
   return codepoint;
 }
 
-bool unicode_to_gbk(uint16_t unicode, uint16_t *gbk) {
-  size_t low = 0;
-  size_t high = GBK_UNICODE_PAIR_COUNT;
-  while (low < high) {
-    const size_t middle = low + (high - low) / 2;
-    if (GBK_UNICODE_PAIRS[middle].unicode == unicode) {
-      *gbk = GBK_UNICODE_PAIRS[middle].gbk;
-      return true;
-    }
-    if (GBK_UNICODE_PAIRS[middle].unicode < unicode) {
-      low = middle + 1;
-    } else {
-      high = middle;
-    }
-  }
-  return false;
-}
-
 const uint8_t *find_glyph(int codepoint) {
   if (codepoint >= 0x20 && codepoint <= 0x7E) {
     return fontDroidGbk12.data + ASCII_OFFSETS[codepoint - 0x20];
@@ -93,7 +75,7 @@ const uint8_t *find_glyph(int codepoint) {
     return nullptr;
   }
   uint16_t gbk = 0;
-  if (!unicode_to_gbk(static_cast<uint16_t>(codepoint), &gbk)) {
+  if (!gbkUnicodeToCode(static_cast<uint16_t>(codepoint), &gbk)) {
     return nullptr;
   }
   const uint32_t offset = DROID_GBK12_GLYPH_OFFSETS[gbk];

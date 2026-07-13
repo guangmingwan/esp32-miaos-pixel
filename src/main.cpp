@@ -743,6 +743,7 @@ static void drawLauncher() {
   if (g_launcherNeedsInitialRender) {
     lavaPresent();
     launcherRenderYield();
+    g_lastLauncherRenderMs = millis();
     return;
   }
 
@@ -951,6 +952,7 @@ static void drawLauncher() {
   launcherRenderYield();
   lavaPresent();
   launcherRenderYield();
+  g_lastLauncherRenderMs = millis();
 }
 
 static void runSelectedSdAction() {
@@ -1156,7 +1158,6 @@ static void tickLauncher(uint32_t nowMs) {
   }
 
   if (nowMs - g_lastLauncherRenderMs >= 1000) {
-    g_lastLauncherRenderMs = nowMs;
     drawLauncher();
   }
 }

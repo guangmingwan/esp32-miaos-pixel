@@ -238,25 +238,6 @@ static constexpr uint32_t DROID_ASCII_OFFSETS[] = {
     0x00000469u, 0x00000476u, 0x00000485u, 0x00000491u, 0x0000049Eu, 0x000004A7u, 0x000004B4u,
 };
 
-static bool unicodeToGbkCode(uint16_t unicode, uint16_t &gbk) {
-  size_t low = 0;
-  size_t high = GBK_UNICODE_PAIR_COUNT;
-  while (low < high) {
-    const size_t mid = low + ((high - low) / 2);
-    const uint16_t midUnicode = GBK_UNICODE_PAIRS[mid].unicode;
-    if (midUnicode == unicode) {
-      gbk = GBK_UNICODE_PAIRS[mid].gbk;
-      return true;
-    }
-    if (midUnicode < unicode) {
-      low = mid + 1;
-    } else {
-      high = mid;
-    }
-  }
-  return false;
-}
-
 static const uint8_t *droidGlyphByGbkCode(int codepoint) {
   if (codepoint < 0 || codepoint > 0xFFFF) {
     return nullptr;
@@ -270,7 +251,7 @@ static const uint8_t *droidGlyphByGbkCode(int codepoint) {
   }
 
   uint16_t gbk = 0;
-  if (!unicodeToGbkCode(static_cast<uint16_t>(codepoint), gbk)) {
+  if (!gbkUnicodeToCode(static_cast<uint16_t>(codepoint), &gbk)) {
     return nullptr;
   }
 
