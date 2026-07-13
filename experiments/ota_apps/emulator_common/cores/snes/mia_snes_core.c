@@ -5,6 +5,7 @@
 #include "snes9x.h"
 
 #include <esp_heap_caps.h>
+#include <esp_rom_sys.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -12,9 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SNES_AUDIO_BLOCK_COUNT 12u
-#define SNES_AUDIO_PREBUFFER_BLOCKS 4u
+#define SNES_AUDIO_BLOCK_COUNT 6u
+#define SNES_AUDIO_PREBUFFER_BLOCKS 2u
 #define SNES_AUDIO_MAX_FRAMES 640u
+#define SNES_VIDEO_BUFFER_COUNT 2u
+#define SNES_INITIAL_FRAMESKIP 3u
+#define SNES_VIDEO_DIRTY_GAP_ROWS 2u
 
 typedef struct {
     uint16_t frame_count;
@@ -31,6 +35,145 @@ static QueueHandle_t audio_ready_blocks;
 static TaskHandle_t audio_task_handle;
 static volatile bool audio_running;
 static volatile bool audio_failed;
+static uint32_t audio_dropped_blocks;
+static uint8_t *video_buffers[SNES_VIDEO_BUFFER_COUNT];
+static QueueHandle_t video_free_buffers;
+static QueueHandle_t video_ready_buffers;
+static TaskHandle_t video_task_handle;
+static volatile bool video_running;
+static volatile bool video_failed;
+static uint32_t video_row_hashes[SNES_HEIGHT];
+static uint32_t video_next_row_hashes[SNES_HEIGHT];
+static bool video_hashes_valid;
+
+static uint32_t hash_video_row(const uint16_t *pixels) {
+    uint32_t hash = 2166136261u;
+    for (uint32_t column = 0; column < SNES_WIDTH; column += 2u) {
+        uint32_t pair;
+        memcpy(&pair, pixels + column, sizeof(pair));
+        hash ^= pair;
+        hash = (hash << 5) | (hash >> 27);
+    }
+    return hash;
+}
+
+static int32_t present_video_frame(const uint16_t *pixels) {
+    const uint8_t *source = (const uint8_t *)pixels;
+    for (uint32_t row = 0; row < SNES_HEIGHT; ++row) {
+        video_next_row_hashes[row] = hash_video_row(
+            (const uint16_t *)(source + row * (uint32_t)GFX.Pitch));
+    }
+
+    uint32_t row = 0;
+    while (row < SNES_HEIGHT) {
+        while (row < SNES_HEIGHT && video_hashes_valid &&
+               video_next_row_hashes[row] == video_row_hashes[row]) {
+            ++row;
+        }
+        if (row == SNES_HEIGHT) break;
+
+        const uint32_t first_row = row;
+        uint32_t last_changed = row;
+        uint32_t unchanged = 0;
+        for (++row; row < SNES_HEIGHT; ++row) {
+            const bool changed = !video_hashes_valid ||
+                video_next_row_hashes[row] != video_row_hashes[row];
+            if (changed) {
+                last_changed = row;
+                unchanged = 0;
+            } else if (++unchanged > SNES_VIDEO_DIRTY_GAP_ROWS) {
+                break;
+            }
+        }
+
+        const uint32_t rows = last_changed - first_row + 1u;
+        const int32_t result = display_host_present_rgb565_region(
+            (const uint16_t *)(source + first_row * (uint32_t)GFX.Pitch),
+            (320 - SNES_WIDTH) / 2, (240 - SNES_HEIGHT) / 2 + (int32_t)first_row,
+            SNES_WIDTH, rows, GFX.Pitch);
+        if (result != MIA_HOST_RESULT_OK) return result;
+    }
+
+    memcpy(video_row_hashes, video_next_row_hashes, sizeof(video_row_hashes));
+    video_hashes_valid = true;
+    return MIA_HOST_RESULT_OK;
+}
+
+static void video_task(void *argument) {
+    MiaEmulatorRuntime *runtime = argument;
+    while (video_running) {
+        uint8_t index = 0;
+        if (xQueueReceive(video_ready_buffers, &index, pdMS_TO_TICKS(20)) != pdTRUE) {
+            continue;
+        }
+        const int32_t result = present_video_frame((const uint16_t *)video_buffers[index]);
+        (void)xQueueSend(video_free_buffers, &index, 0);
+        if (result != MIA_HOST_RESULT_OK) {
+            video_failed = true;
+            video_running = false;
+        } else {
+            runtime->adapter.frames_submitted++;
+        }
+    }
+    video_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+static bool start_video_task(MiaEmulatorRuntime *runtime) {
+    video_free_buffers = xQueueCreate(SNES_VIDEO_BUFFER_COUNT, sizeof(uint8_t));
+    video_ready_buffers = xQueueCreate(1, sizeof(uint8_t));
+    if (video_free_buffers == NULL || video_ready_buffers == NULL) return false;
+    for (uint8_t index = 0; index < SNES_VIDEO_BUFFER_COUNT; ++index) {
+        (void)xQueueSend(video_free_buffers, &index, 0);
+    }
+    video_hashes_valid = false;
+    video_failed = false;
+    video_running = true;
+    if (xTaskCreatePinnedToCore(video_task, "snes_video", 4096, runtime, 5,
+                                &video_task_handle, 0) != pdPASS) {
+        video_running = false;
+        return false;
+    }
+    return true;
+}
+
+static void stop_video_task(void) {
+    video_running = false;
+    for (unsigned wait = 0; video_task_handle != NULL && wait < 40u; ++wait) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (video_task_handle != NULL) {
+        vTaskDelete(video_task_handle);
+        video_task_handle = NULL;
+    }
+    if (video_free_buffers != NULL) vQueueDelete(video_free_buffers);
+    if (video_ready_buffers != NULL) vQueueDelete(video_ready_buffers);
+    video_free_buffers = NULL;
+    video_ready_buffers = NULL;
+}
+
+static bool begin_video_frame(uint8_t *index) {
+    if (video_failed || !video_running || index == NULL) return false;
+    if (xQueueReceive(video_free_buffers, index, 0) != pdTRUE) return false;
+    GFX.Screen = video_buffers[*index];
+    return true;
+}
+
+static bool submit_video_frame(uint8_t index) {
+    if (xQueueSend(video_ready_buffers, &index, 0) == pdTRUE) return true;
+    (void)xQueueSend(video_free_buffers, &index, 0);
+    return false;
+}
+
+static void wait_until(int64_t deadline_us) {
+    int64_t remaining = deadline_us - esp_timer_get_time();
+    if (remaining > 1500) {
+        const TickType_t ticks = pdMS_TO_TICKS((uint32_t)(remaining - 500) / 1000u);
+        if (ticks > 0) vTaskDelay(ticks);
+    }
+    remaining = deadline_us - esp_timer_get_time();
+    if (remaining > 0) esp_rom_delay_us((uint32_t)remaining);
+}
 
 static void audio_task(void *argument) {
     MiaEmulatorRuntime *runtime = argument;
@@ -72,6 +215,7 @@ static bool start_audio_task(MiaEmulatorRuntime *runtime) {
         (void)xQueueSend(audio_free_blocks, &index, 0);
     }
     audio_failed = false;
+    audio_dropped_blocks = 0;
     audio_running = true;
     if (xTaskCreatePinnedToCore(audio_task, "snes_audio", 4096, runtime, 6,
                                 &audio_task_handle, 0) != pdPASS) {
@@ -104,15 +248,19 @@ static MiaCoreStatus queue_audio(const int16_t *samples, uint32_t frame_count) {
         return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES audio task failed");
     }
     uint8_t index = 0;
-    if (xQueueReceive(audio_free_blocks, &index, pdMS_TO_TICKS(20)) != pdTRUE) {
-        return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES audio queue stalled");
+    if (xQueueReceive(audio_free_blocks, &index, 0) != pdTRUE) {
+        if (xQueueReceive(audio_ready_blocks, &index, 0) != pdTRUE) {
+            audio_dropped_blocks++;
+            return mia_core_ok();
+        }
+        audio_dropped_blocks++;
     }
     SnesAudioBlock *block = &audio_blocks[index];
     block->frame_count = (uint16_t)frame_count;
     memcpy(block->samples, samples, (size_t)frame_count * 2u * sizeof(int16_t));
-    if (xQueueSend(audio_ready_blocks, &index, pdMS_TO_TICKS(20)) != pdTRUE) {
+    if (xQueueSend(audio_ready_blocks, &index, 0) != pdTRUE) {
         (void)xQueueSend(audio_free_blocks, &index, 0);
-        return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES audio queue stalled");
+        audio_dropped_blocks++;
     }
     return mia_core_ok();
 }
@@ -137,18 +285,32 @@ static uint32_t snes_pad(uint32_t value) {
 bool S9xInitDisplay(void) {
     GFX.Pitch = SNES_WIDTH * 2;
     GFX.ZPitch = SNES_WIDTH;
-    GFX.Screen = heap_caps_malloc((size_t)GFX.Pitch * SNES_HEIGHT_EXTENDED, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    for (uint8_t index = 0; index < SNES_VIDEO_BUFFER_COUNT; ++index) {
+        video_buffers[index] = heap_caps_malloc((size_t)GFX.Pitch * SNES_HEIGHT_EXTENDED,
+                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    GFX.Screen = video_buffers[0];
     GFX.SubScreen = heap_caps_malloc((size_t)GFX.Pitch * SNES_HEIGHT_EXTENDED, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     GFX.ZBuffer = heap_caps_malloc((size_t)GFX.ZPitch * SNES_HEIGHT_EXTENDED, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     GFX.SubZBuffer = heap_caps_malloc((size_t)GFX.ZPitch * SNES_HEIGHT_EXTENDED, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    return GFX.Screen != NULL && GFX.SubScreen != NULL && GFX.ZBuffer != NULL && GFX.SubZBuffer != NULL;
+    if (GFX.Screen != NULL && video_buffers[1] != NULL && GFX.SubScreen != NULL &&
+        GFX.ZBuffer != NULL && GFX.SubZBuffer != NULL) return true;
+    S9xDeinitDisplay();
+    return false;
 }
 
 void S9xDeinitDisplay(void) {
-    free(GFX.Screen);
+    for (uint8_t index = 0; index < SNES_VIDEO_BUFFER_COUNT; ++index) {
+        free(video_buffers[index]);
+        video_buffers[index] = NULL;
+    }
+    GFX.Screen = NULL;
     free(GFX.SubScreen);
     free(GFX.ZBuffer);
     free(GFX.SubZBuffer);
+    GFX.SubScreen = NULL;
+    GFX.ZBuffer = NULL;
+    GFX.SubZBuffer = NULL;
 }
 
 uint32_t S9xReadJoypad(int32_t port) {
@@ -200,7 +362,11 @@ MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
     Settings.SoundInputRate = MIA_EMULATOR_SAMPLE_RATE;
     Settings.DisableSoundEcho = false;
     Settings.InterpolatedSound = true;
-    mix_buffer = heap_caps_malloc(2048u * 2u * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t mix_buffer_bytes = SNES_AUDIO_MAX_FRAMES * 2u * sizeof(int16_t);
+    mix_buffer = heap_caps_malloc(mix_buffer_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mix_buffer == NULL) {
+        mix_buffer = heap_caps_malloc(mix_buffer_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
     if (mix_buffer == NULL || !S9xInitDisplay() || !S9xInitMemory() || !S9xInitAPU() || !S9xInitSound(0, 0) || !S9xInitGFX()) return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES core init failed");
     if (!LoadROM(runtime->selection.rom_path)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES ROM load failed");
     S9xSetPlaybackRate(Settings.SoundPlaybackRate);
@@ -216,54 +382,90 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
 }
 
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
-    if (!start_audio_task(runtime)) {
+    if (!start_audio_task(runtime) || !start_video_task(runtime)) {
+        stop_video_task();
         stop_audio_task();
-        return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES audio task start failed");
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES worker task start failed");
     }
     unsigned save_counter = 0;
-    unsigned frames = 0;
     uint32_t audio_remainder = 0;
+    uint8_t frameskip = SNES_INITIAL_FRAMESKIP;
+    uint8_t skip_frames = 0;
+    uint32_t window_frames = 0;
+    uint32_t window_late_frames = 0;
+    uint32_t window_display_busy_frames = 0;
+    const uint32_t frame_rate = Memory.ROMFramesPerSecond > 0 ?
+        (uint32_t)Memory.ROMFramesPerSecond : 60u;
+    const uint32_t budget = frame_rate > 55u ? 16667u : 20000u;
+    int64_t next_deadline = esp_timer_get_time() + budget;
+    int64_t window_started = esp_timer_get_time();
+    memset(&pacing, 0, sizeof(pacing));
     for (;;) {
-        const uint32_t started = (uint32_t)esp_timer_get_time();
+        const int64_t started = esp_timer_get_time();
         const uint32_t host = mia_emulator_host_buttons();
         current_host_buttons = host;
         if (mia_app_input_exit_requested(&runtime->input, host, mia_host_millis())) {
+            stop_video_task();
             stop_audio_task();
             return mia_core_ok();
         }
-        const bool render_frame = (frames++ & 1u) == 0u;
+        if (video_failed || audio_failed) {
+            stop_video_task();
+            stop_audio_task();
+            return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES worker task failed");
+        }
+
+        uint8_t video_index = 0;
+        const bool wants_render = skip_frames == 0u;
+        const bool render_frame = wants_render && begin_video_frame(&video_index);
+        if (wants_render && !render_frame) window_display_busy_frames++;
         IPPU.RenderThisFrame = render_frame;
         S9xMainLoop();
         MiaCoreStatus status = mia_core_ok();
-        if (render_frame) {
-            const int32_t present_result = display_host_present_rgb565_region(
-                (const uint16_t *)GFX.Screen, (320 - SNES_WIDTH) / 2,
-                (240 - SNES_HEIGHT) / 2, SNES_WIDTH, SNES_HEIGHT, GFX.Pitch);
-            if (present_result != MIA_HOST_RESULT_OK) {
-                stop_audio_task();
-                return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES video presentation failed");
-            }
+        if (render_frame && !submit_video_frame(video_index)) {
+            window_display_busy_frames++;
         }
-        const uint32_t frame_rate = Memory.ROMFramesPerSecond > 0 ? (uint32_t)Memory.ROMFramesPerSecond : 60u;
+        if (skip_frames == 0u) skip_frames = frameskip;
+        else skip_frames--;
+
         audio_remainder += MIA_EMULATOR_SAMPLE_RATE;
         const uint32_t audio_frames = audio_remainder / frame_rate;
         audio_remainder %= frame_rate;
         S9xMixSamples(mix_buffer, audio_frames * 2u);
         status = queue_audio(mix_buffer, audio_frames);
         if (status.code != MIA_CORE_OK) {
+            stop_video_task();
             stop_audio_task();
             return status;
         }
-        const uint32_t budget = Memory.ROMFramesPerSecond > 55 ? 16667u : 20000u;
-        const uint32_t elapsed = (uint32_t)esp_timer_get_time() - started;
-        mia_snes_pacing_record(&pacing, elapsed, budget, 1);
+        const uint32_t elapsed = (uint32_t)(esp_timer_get_time() - started);
+        mia_snes_pacing_record(&pacing, elapsed, budget, render_frame);
+        window_frames++;
+        if (elapsed > budget) window_late_frames++;
         if (++save_counter % 60u == 0u) {
             status = mia_emulator_core_flush(runtime, MIA_STORAGE_FLUSH_CORE_REQUEST, false);
             if (status.code != MIA_CORE_OK) {
+                stop_video_task();
                 stop_audio_task();
                 return status;
             }
         }
-        if (elapsed < budget) mia_host_delay_ms((budget - elapsed) / 1000u);
+
+        const int64_t now = esp_timer_get_time();
+        if (now - window_started >= 1000000) {
+            frameskip = mia_snes_adjust_frameskip(frameskip, window_frames, frame_rate,
+                                                  window_late_frames,
+                                                  window_display_busy_frames);
+            window_frames = 0;
+            window_late_frames = 0;
+            window_display_busy_frames = 0;
+            window_started = now;
+        }
+
+        wait_until(next_deadline);
+        next_deadline += budget;
+        if (esp_timer_get_time() - next_deadline > (int64_t)budget * 4) {
+            next_deadline = esp_timer_get_time() + budget;
+        }
     }
 }

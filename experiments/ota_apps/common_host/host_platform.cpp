@@ -2,6 +2,7 @@
 #include "mia_host_abi.h"
 
 #pragma GCC diagnostic ignored "-Wformat-truncation"
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
 
 #include <dirent.h>
 #include <driver/gpio.h>
@@ -799,9 +800,13 @@ extern "C" uint8_t mia_host_get_system_info(MiaHostSystemInfo *info) {
     case CHIP_ESP32:    strncpy(info->chip_model, "ESP32",    sizeof(info->chip_model) - 1); break;
     case CHIP_ESP32S2:  strncpy(info->chip_model, "ESP32-S2", sizeof(info->chip_model) - 1); break;
     case CHIP_ESP32S3:  strncpy(info->chip_model, "ESP32-S3", sizeof(info->chip_model) - 1); break;
+#ifdef CONFIG_IDF_TARGET_ESP32C2
     case CHIP_ESP32C2:  strncpy(info->chip_model, "ESP32-C2", sizeof(info->chip_model) - 1); break;
+#endif
     case CHIP_ESP32C3:  strncpy(info->chip_model, "ESP32-C3", sizeof(info->chip_model) - 1); break;
+#ifdef CONFIG_IDF_TARGET_ESP32C6
     case CHIP_ESP32C6:  strncpy(info->chip_model, "ESP32-C6", sizeof(info->chip_model) - 1); break;
+#endif
     case CHIP_ESP32H2:  strncpy(info->chip_model, "ESP32-H2", sizeof(info->chip_model) - 1); break;
     default:            strncpy(info->chip_model, "ESP32",    sizeof(info->chip_model) - 1); break;
   }
