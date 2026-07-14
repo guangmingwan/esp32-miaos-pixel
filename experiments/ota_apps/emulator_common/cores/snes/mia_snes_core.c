@@ -1,4 +1,5 @@
 #include "mia_emulator_runtime.h"
+#include "mia_app_zip.h"
 #include "mia_snes_contract.h"
 #include "mia_host_abi.h"
 #include "display_host.h"
@@ -349,7 +350,9 @@ static MiaCoreStatus load_sram(MiaEmulatorRuntime *runtime) {
 }
 
 MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
-    if (!mia_snes_extension_supported(runtime->selection.rom_path)) return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "unsupported SNES file");
+    const char *dot = strrchr(runtime->selection.rom_path, '.');
+    const bool zipped = dot != NULL && strcasecmp(dot + 1, "zip") == 0;
+    if (!zipped && !mia_snes_extension_supported(runtime->selection.rom_path)) return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "unsupported SNES file");
     display_host_fill_screen_rgb565(0);
     active_runtime = runtime;
     Settings.CyclesPercentage = 100;
@@ -368,7 +371,22 @@ MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
         mix_buffer = heap_caps_malloc(mix_buffer_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
     if (mix_buffer == NULL || !S9xInitDisplay() || !S9xInitMemory() || !S9xInitAPU() || !S9xInitSound(0, 0) || !S9xInitGFX()) return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES core init failed");
-    if (!LoadROM(runtime->selection.rom_path)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES ROM load failed");
+    bool loaded = false;
+    if (zipped) {
+        static const char *const extensions[] = {"sfc", "smc"};
+        const size_t capacity = Memory.ROM_AllocSize;
+        size_t size = 0;
+        MiaCoreStatus status = mia_app_zip_extract_into(runtime->selection.rom_path,
+            extensions, 2u, Memory.ROM, capacity, &size, NULL, 0u);
+        if (status.code == MIA_CORE_OK) {
+            Memory.ROM_AllocSize = size;
+            loaded = LoadROM(NULL);
+            Memory.ROM_AllocSize = capacity;
+        }
+    } else {
+        loaded = LoadROM(runtime->selection.rom_path);
+    }
+    if (!loaded) return mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES ROM load failed");
     S9xSetPlaybackRate(Settings.SoundPlaybackRate);
     return load_sram(runtime);
 }

@@ -10,6 +10,7 @@
 #include <freertos/queue.h>
 #include <freertos/task.h>
 #include <mbedtls/md5.h>
+#include <mbedtls/version.h>
 #include <sys/stat.h>
 
 #include <stdio.h>
@@ -24,6 +25,16 @@
 #define VIDEO_FRAME_DIVISOR 2u
 #define GBA_DISPLAY_X 40
 #define GBA_DISPLAY_Y 40
+
+#if MBEDTLS_VERSION_MAJOR >= 3
+#define MIA_MD5_STARTS mbedtls_md5_starts
+#define MIA_MD5_UPDATE mbedtls_md5_update
+#define MIA_MD5_FINISH mbedtls_md5_finish
+#else
+#define MIA_MD5_STARTS mbedtls_md5_starts_ret
+#define MIA_MD5_UPDATE mbedtls_md5_update_ret
+#define MIA_MD5_FINISH mbedtls_md5_finish_ret
+#endif
 
 typedef struct {
     u32 frame_count;
@@ -49,8 +60,8 @@ static volatile bool audio_running;
 static volatile bool audio_failed;
 
 void netpacket_poll_receive(void) {}
-void netpacket_send(uint16_t, const void *, size_t) {}
-void set_fastforward_override(bool) {}
+void netpacket_send(uint16_t port, const void *data, size_t size) {}
+void set_fastforward_override(bool enabled) {}
 
 static void audio_task(void *argument) {
     MiaEmulatorRuntime *runtime = argument;
@@ -152,7 +163,7 @@ static MiaCoreStatus submit_video(MiaEmulatorRuntime *runtime) {
     return mia_core_ok();
 }
 
-static int16_t input_callback(unsigned, unsigned, unsigned, unsigned id) {
+static int16_t input_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
     const uint32_t bits = mia_emulator_host_buttons();
     uint16_t mask = 0;
     static const struct { uint8_t host; uint8_t retro; } buttons[] = {
@@ -173,16 +184,16 @@ static bool validate_bios(void) {
     if (file == NULL) return false;
     mbedtls_md5_context context;
     mbedtls_md5_init(&context);
-    mbedtls_md5_starts(&context);
+    (void)MIA_MD5_STARTS(&context);
     uint8_t chunk[512];
     size_t size = 0;
     for (size_t count = fread(chunk, 1, sizeof(chunk), file); count != 0; count = fread(chunk, 1, sizeof(chunk), file)) {
-        mbedtls_md5_update(&context, chunk, count);
+        (void)MIA_MD5_UPDATE(&context, chunk, count);
         size += count;
     }
     fclose(file);
     uint8_t digest[16];
-    mbedtls_md5_finish(&context, digest);
+    (void)MIA_MD5_FINISH(&context, digest);
     mbedtls_md5_free(&context);
     return mia_gba_bios_metadata_valid(size, digest);
 }

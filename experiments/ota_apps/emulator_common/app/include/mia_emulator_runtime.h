@@ -26,5 +26,6 @@ uint32_t mia_emulator_host_buttons(void);
 MiaCoreHost mia_emulator_make_host(MiaEmulatorRuntime *runtime);
 MiaStorageStatus mia_emulator_picker_run(const MiaStorageContext *context, const MiaStorageTarget *target, MiaAppPickerSelection *selection);
 MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime);
+void mia_emulator_wait_input_release(MiaEmulatorRuntime *runtime);
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime);
 MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlushReason reason, bool force);

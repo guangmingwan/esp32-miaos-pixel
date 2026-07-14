@@ -1,5 +1,14 @@
 file(GLOB MIA_GBSP_C_SOURCES "../../emulator_common/vendor/gbsp/components/gbsp-libretro/*.c")
 
+if(IDF_VERSION_MAJOR GREATER_EQUAL 5)
+    set(MIA_PLATFORM_REQUIRES app_update esp_partition mbedtls driver esp_driver_gpio
+        esp_driver_spi esp_driver_i2s esp_driver_i2c fatfs sdmmc nvs_flash esp_timer
+        esp_event esp_netif esp_wifi esp_http_server esp_adc)
+else()
+    set(MIA_PLATFORM_REQUIRES app_update spi_flash mbedtls driver fatfs sdmmc nvs_flash
+        esp_timer esp_event esp_netif esp_wifi esp_http_server)
+endif()
+
 idf_component_register(
     SRCS
         "app_main.c"
@@ -43,7 +52,7 @@ idf_component_register(
         "../../emulator_common/vendor/gbsp/components/gbsp-libretro"
         "../../emulator_common/vendor/gbsp/components/gbsp-libretro/libretro/libretro-common/include"
         "../../../../include"
-    REQUIRES app_update esp_partition mbedtls driver esp_driver_gpio esp_driver_spi esp_driver_i2s esp_driver_i2c fatfs sdmmc nvs_flash esp_timer esp_event esp_netif esp_wifi esp_http_server esp_adc
+    REQUIRES ${MIA_PLATFORM_REQUIRES}
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

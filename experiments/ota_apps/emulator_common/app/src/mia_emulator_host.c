@@ -10,6 +10,18 @@ uint32_t mia_emulator_host_buttons(void) {
     return bits;
 }
 
+void mia_emulator_wait_input_release(MiaEmulatorRuntime *runtime) {
+    (void)runtime;
+    /* The picker launches a ROM on a button press (edge). If that button is
+       still held when the emulation loop starts, the first polled frame sees
+       it as a stuck press. Wait until every host button is released (bounded
+       so a genuinely stuck line cannot hang the app). */
+    for (unsigned guard = 0; guard < 500u; ++guard) {
+        if (mia_emulator_host_buttons() == 0u) return;
+        mia_host_delay_ms(10);
+    }
+}
+
 static uint32_t read_input(void *context) {
     MiaEmulatorRuntime *runtime = context;
     return mia_app_input_core_mask(&runtime->hardware_target, mia_emulator_host_buttons());

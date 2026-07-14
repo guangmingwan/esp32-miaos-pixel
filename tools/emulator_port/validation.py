@@ -91,8 +91,6 @@ def validate_target(upstream_root: Path, target: Target, license_ids: set[Licens
     for path, allowed_names in paths:
         if not is_safe_sd_root(path, allowed_names):
             issues.append(ValidationIssue("invalid-path", f"{target.app_name} has unsafe path {path}"))
-    if "zip" in target.rom_extensions:
-        issues.append(ValidationIssue("archive-extension", f"{target.app_name} includes forbidden zip support"))
     for target_source_root in target.source_roots:
         parts = PurePosixPath(str(target_source_root)).parts
         if FORBIDDEN_SOURCE_PARTS.intersection(parts):

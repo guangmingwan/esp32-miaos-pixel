@@ -1,8 +1,10 @@
 #include "mia_emulator_runtime.h"
+#include "mia_app_zip.h"
 #include "mia_nes_contract.h"
 #include "mia_host_abi.h"
 #include "display_host.h"
 #include "nofrendo.h"
+#include "nes/rom.h"
 
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
@@ -10,14 +12,22 @@
 #include <freertos/task.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 
 #define NES_FRAME_PIXELS (256u * 240u)
+#define NES_ROM_MAX_SIZE 0x200000u
 
 static nes_t *core;
 static uint16_t palette[256];
 static uint16_t *video_frames[2];
 static QueueHandle_t free_video_frames;
 static QueueHandle_t ready_video_frames;
+
+static bool has_extension(const char *path, const char *extension) {
+    const char *dot = strrchr(path, '.');
+    return dot != NULL && strcasecmp(dot + 1, extension) == 0;
+}
 
 static void display_task(void *argument) {
     (void)argument;
@@ -65,6 +75,19 @@ static void blit(uint8_t *pixels) {
     }
 }
 
+static MiaCoreStatus validate_header(const uint8_t *header, size_t size) {
+    FILE *bios = fopen("/sd/bios/fds_bios.bin", "rb");
+    int bios_valid = 0;
+    if (bios != NULL) {
+        bios_valid = fseek(bios, 0, SEEK_END) == 0 && ftell(bios) == 8192;
+        fclose(bios);
+    }
+    const MiaNesResult result = mia_nes_validate_image(header, size, bios_valid);
+    if (result == MIA_NES_UNSUPPORTED_MAPPER) return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "unsupported NES mapper");
+    if (result == MIA_NES_FDS_BIOS_REQUIRED) return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "valid 8192-byte FDS BIOS required");
+    return result == MIA_NES_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "invalid NES header");
+}
+
 static MiaCoreStatus preflight(const char *path) {
     if (mia_nes_validate_extension(path) != MIA_NES_OK) return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "unsupported NES file");
     FILE *file = fopen(path, "rb");
@@ -72,16 +95,7 @@ static MiaCoreStatus preflight(const char *path) {
     uint8_t header[16];
     const size_t read = fread(header, 1, sizeof(header), file);
     fclose(file);
-    FILE *bios = fopen("/sd/bios/fds_bios.bin", "rb");
-    int bios_valid = 0;
-    if (bios != NULL) {
-        bios_valid = fseek(bios, 0, SEEK_END) == 0 && ftell(bios) == 8192;
-        fclose(bios);
-    }
-    const MiaNesResult result = mia_nes_validate_image(header, read, bios_valid);
-    if (result == MIA_NES_UNSUPPORTED_MAPPER) return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "unsupported NES mapper");
-    if (result == MIA_NES_FDS_BIOS_REQUIRED) return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "valid 8192-byte FDS BIOS required");
-    return result == MIA_NES_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "invalid NES header");
+    return validate_header(header, read);
 }
 
 static MiaCoreStatus load_sram(MiaEmulatorRuntime *runtime) {
@@ -94,11 +108,40 @@ static MiaCoreStatus load_sram(MiaEmulatorRuntime *runtime) {
 }
 
 MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
-    MiaCoreStatus status = preflight(runtime->selection.rom_path);
-    if (status.code != MIA_CORE_OK) return status;
+    const bool zipped = has_extension(runtime->selection.rom_path, "zip");
+    uint8_t *zip_data = NULL;
+    size_t zip_size = 0;
+    MiaCoreStatus status;
+    if (zipped) {
+        static const char *const extensions[] = {"nes", "fc", "fds", "nsf"};
+        status = mia_app_zip_extract(runtime->selection.rom_path, extensions, 4u,
+                                     NES_ROM_MAX_SIZE, &zip_data, &zip_size, NULL, 0u);
+        if (status.code == MIA_CORE_OK) status = validate_header(zip_data, zip_size);
+    } else {
+        status = preflight(runtime->selection.rom_path);
+    }
+    if (status.code != MIA_CORE_OK) {
+        free(zip_data);
+        return status;
+    }
     core = nes_init(SYS_DETECT, MIA_EMULATOR_SAMPLE_RATE, true, "/sd/bios/fds_bios.bin");
-    if (core == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "Nofrendo init failed");
-    const int loaded = nes_loadfile(runtime->selection.rom_path);
+    if (core == NULL) {
+        free(zip_data);
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "Nofrendo init failed");
+    }
+    int loaded;
+    if (zipped) {
+        rom_t *cart = rom_loadmem(zip_data, zip_size);
+        if (cart != NULL) {
+            cart->free_data_ptr = true;
+            cart->filename = strdup(runtime->selection.rom_path);
+            zip_data = NULL;
+        }
+        loaded = nes_insertcart(cart);
+    } else {
+        loaded = nes_loadfile(runtime->selection.rom_path);
+    }
+    free(zip_data);
     if (loaded != 0) return mia_core_error(MIA_CORE_ERR_CALLBACK, loaded == -2 ? "unsupported NES mapper" : "Nofrendo ROM load failed");
     uint16_t *built = nofrendo_buildpalette(NES_PALETTE_PVM, 16);
     if (built == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "NES palette allocation failed");

@@ -23,6 +23,7 @@ int main() {
     std::ofstream(root / "roms" / "nes" / "mario.nes").put('n');
     std::ofstream(root / "roms" / "nes" / "famicom.fc").put('f');
     std::ofstream(root / "roms" / "nes" / "music.nsf").put('s');
+    std::ofstream(root / "roms" / "nes" / "subdir" / "nested.nes").put('n');
     std::ofstream(root / "roms" / "nes" / "archive.zip").put('z');
     const std::string long_name(251, 'a');
     std::ofstream(root / "roms" / "nes" / (long_name + ".nes")).put('l');
@@ -33,14 +34,40 @@ int main() {
     MiaStoragePickerResult result{};
     require_status(mia_storage_picker_list(&context, target, &result), MIA_STORAGE_OK);
     auto entries = picker_entries(result);
-    require_true(has_entry(entries, "subdir", MIA_STORAGE_ENTRY_DIRECTORY), "directories should be visible");
+    require_true(!has_entry(entries, "subdir", MIA_STORAGE_ENTRY_DIRECTORY), "recursive scan should flatten directories");
+    require_true(has_entry(entries, "nested.nes", MIA_STORAGE_ENTRY_ROM), "ROMs in subdirectories should be visible");
     require_true(has_entry(entries, "mario.nes", MIA_STORAGE_ENTRY_ROM), "nes extension should match target data");
     require_true(has_entry(entries, "famicom.fc", MIA_STORAGE_ENTRY_ROM), "fc extension should match target data");
     require_true(has_entry(entries, "music.nsf", MIA_STORAGE_ENTRY_ROM), "nsf extension should match target data");
     require_true(has_entry(entries, "マリオ.nes", MIA_STORAGE_ENTRY_ROM), "UTF-8 names should be preserved");
     require_true(has_entry(entries, long_name + ".nes", MIA_STORAGE_ENTRY_ROM), "255-byte names should be preserved");
-    require_true(!has_entry(entries, "archive.zip", MIA_STORAGE_ENTRY_ROM), "ZIP archives should be rejected");
+    require_true(has_entry(entries, "archive.zip", MIA_STORAGE_ENTRY_ROM), "NES ZIP archives should be visible");
     require_true(!has_entry(entries, "outside.nes", MIA_STORAGE_ENTRY_ROM), "symlinks outside roots should not be followed");
+    mia_storage_picker_free(&result);
+
+    const MiaStorageTarget *gba_target = nullptr;
+    require_status(mia_storage_target_find(&mia_storage_generated_targets, "gba", &gba_target), MIA_STORAGE_OK);
+    fs::create_directories(root / "roms" / "gba");
+    std::ofstream(root / "roms" / "gba" / "game.gba").put('g');
+    std::ofstream(root / "roms" / "gba" / "game.zip").put('z');
+    require_status(mia_storage_picker_list(&context, gba_target, &result), MIA_STORAGE_OK);
+    entries = picker_entries(result);
+    require_true(has_entry(entries, "game.gba", MIA_STORAGE_ENTRY_ROM), "GBA images should be visible");
+    require_true(!has_entry(entries, "game.zip", MIA_STORAGE_ENTRY_ROM), "GBA ZIP archives should remain unsupported");
+    mia_storage_picker_free(&result);
+
+    const MiaStorageTarget *pce_target = nullptr;
+    require_status(mia_storage_target_find(&mia_storage_generated_targets, "pce", &pce_target), MIA_STORAGE_OK);
+    fs::create_directories(root / "roms" / "pce");
+    std::ofstream(root / "roms" / "pce" / "game.pce").put('p');
+    std::ofstream(root / "roms" / "pce" / "game.zip").put('z');
+    require_status(mia_storage_picker_list(&context, pce_target, &result), MIA_STORAGE_OK);
+    entries = picker_entries(result);
+    require_true(has_entry(entries, "game.pce", MIA_STORAGE_ENTRY_ROM), "PCE images should be visible");
+    require_true(has_entry(entries, "game.zip", MIA_STORAGE_ENTRY_ROM), "PCE ZIP archives should be visible");
+    mia_storage_picker_free(&result);
+    require_status(mia_storage_picker_select(&context, pce_target, "game.zip", &result), MIA_STORAGE_OK);
+    require_true(result.count == 1, "PCE ZIP archives should be selectable");
     mia_storage_picker_free(&result);
 
     const MiaStorageTarget missing_root{"missing", "/roms/missing", "/saves/missing", target->extensions, target->extension_count, nullptr, 0, nullptr, 0};

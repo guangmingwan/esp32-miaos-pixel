@@ -1,17 +1,16 @@
 extern "C" {
 #include "mia_emulator_runtime.h"
+#include "mia_app_zip.h"
 #include "mia_host_abi.h"
-#include <esp_rom_crc.h>
 }
 #include <cstring>
 #include "handy.h"
 
 #include <cstdio>
 #include <new>
+#include <strings.h>
 
-enum MiaLynxError { MIA_LYNX_ERR_BIOS_MISSING, MIA_LYNX_ERR_BIOS_CORRUPT, MIA_LYNX_ERR_HEADER_CORRUPT, MIA_LYNX_ERR_SAVE_CORRUPT };
-static constexpr size_t LYNX_BOOT_SIZE = 512;
-static constexpr uint32_t LYNX_BOOT_CRC32 = 0x0d973c9d;
+enum MiaLynxError { MIA_LYNX_ERR_HEADER_CORRUPT, MIA_LYNX_ERR_SAVE_CORRUPT };
 static CSystem *system_instance;
 static uint16_t framebuffer[160 * 160];
 static SWORD audio_buffer[HANDY_AUDIO_BUFFER_LENGTH * 2];
@@ -19,35 +18,10 @@ static int rotation;
 
 static MiaCoreStatus lynx_error(MiaLynxError code) {
     switch (code) {
-        case MIA_LYNX_ERR_BIOS_MISSING: return mia_core_error(MIA_CORE_ERR_CALLBACK, "Lynx BIOS missing: /bios/lynxboot.img");
-        case MIA_LYNX_ERR_BIOS_CORRUPT: return mia_core_error(MIA_CORE_ERR_CALLBACK, "Lynx BIOS corrupt: expected canonical 512-byte lynxboot.img");
         case MIA_LYNX_ERR_HEADER_CORRUPT: return mia_core_error(MIA_CORE_ERR_CALLBACK, "Lynx LNX header corrupt");
         case MIA_LYNX_ERR_SAVE_CORRUPT: return mia_core_error(MIA_CORE_ERR_CALLBACK, "Lynx EEPROM save corrupt");
     }
     return mia_core_error(MIA_CORE_ERR_CALLBACK, "Lynx unknown error");
-}
-
-static MiaCoreStatus load_bios(uint8_t (&bios)[LYNX_BOOT_SIZE]) {
-    FILE *file = fopen("/bios/lynxboot.img", "rb");
-    if (file == nullptr) return lynx_error(MIA_LYNX_ERR_BIOS_MISSING);
-    const size_t count = fread(bios, 1, sizeof(bios), file);
-    const int extra = fgetc(file);
-    fclose(file);
-    const uint32_t crc = esp_rom_crc32_le(UINT32_MAX, bios, sizeof(bios)) ^ UINT32_MAX;
-    return count == sizeof(bios) && extra == EOF && crc == LYNX_BOOT_CRC32 ? mia_core_ok() : lynx_error(MIA_LYNX_ERR_BIOS_CORRUPT);
-}
-
-static MiaCoreStatus validate_header(const char *path) {
-    uint8_t header[64];
-    FILE *file = fopen(path, "rb");
-    if (file == nullptr) return lynx_error(MIA_LYNX_ERR_HEADER_CORRUPT);
-    const size_t count = fread(header, 1, sizeof(header), file);
-    fclose(file);
-    const bool magic = count == sizeof(header) && memcmp(header, "LYNX", 4) == 0;
-    const uint16_t page0 = static_cast<uint16_t>(header[4] | header[5] << 8);
-    const uint16_t page1 = static_cast<uint16_t>(header[6] | header[7] << 8);
-    const uint16_t version = static_cast<uint16_t>(header[8] | header[9] << 8);
-    return magic && page0 > 0 && page1 > 0 && version == 1 ? mia_core_ok() : lynx_error(MIA_LYNX_ERR_HEADER_CORRUPT);
 }
 
 static void configure_rotation() {
@@ -75,14 +49,21 @@ static ULONG map_input(uint32_t input) {
 }
 
 extern "C" MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
-    MiaCoreStatus status = validate_header(runtime->selection.rom_path);
-    uint8_t bios[LYNX_BOOT_SIZE];
-    if (status.code == MIA_CORE_OK) status = load_bios(bios);
-    if (status.code != MIA_CORE_OK) return status;
-    system_instance = new (std::nothrow) CSystem(runtime->selection.rom_path, MIKIE_PIXEL_FORMAT_16BPP_565, 32000);
-    if (system_instance == nullptr || system_instance->mFileType != HANDY_FILETYPE_LNX) return lynx_error(MIA_LYNX_ERR_HEADER_CORRUPT);
-    memcpy(system_instance->mBiosRom, bios, sizeof(bios));
-    system_instance->Reset();
+    const char *dot = std::strrchr(runtime->selection.rom_path, '.');
+    const bool zipped = dot != nullptr && strcasecmp(dot + 1, "zip") == 0;
+    if (zipped) {
+        static const char *const extensions[] = {"lnx"};
+        uint8_t *data = nullptr;
+        size_t size = 0;
+        MiaCoreStatus status = mia_app_zip_extract(runtime->selection.rom_path,
+            extensions, 1u, 8u * 1024u * 1024u, &data, &size, nullptr, 0u);
+        if (status.code != MIA_CORE_OK) return status;
+        system_instance = new (std::nothrow) CSystem(data, static_cast<ULONG>(size), MIKIE_PIXEL_FORMAT_16BPP_565, 32000);
+        free(data);
+    } else {
+        system_instance = new (std::nothrow) CSystem(runtime->selection.rom_path, MIKIE_PIXEL_FORMAT_16BPP_565, 32000);
+    }
+    if (system_instance == nullptr || system_instance->mFileType == HANDY_FILETYPE_ILLEGAL) return lynx_error(MIA_LYNX_ERR_HEADER_CORRUPT);
     configure_rotation();
     gPrimaryFrameBuffer = reinterpret_cast<UBYTE *>(framebuffer);
     gAudioBuffer = audio_buffer;

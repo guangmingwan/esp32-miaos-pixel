@@ -2,6 +2,7 @@ file(GLOB HANDY_SOURCES "../vendor/handy/*.cpp")
 idf_component_register(
     SRCS "app_main.c" "lynx_adapter.cpp" ${HANDY_SOURCES}
         "../../emulator_common/app/mia_emulator_app.c" "../../emulator_common/app/src/mia_app_audio.c"
+        "../../emulator_common/app/src/mia_app_zip.c"
         "../../emulator_common/app/src/mia_app_input.c" "../../emulator_common/app/src/mia_app_save.c"
         "../../emulator_common/app/src/mia_app_video.c" "../../emulator_common/app/src/mia_emulator_host.c"
         "../../emulator_common/app/src/mia_emulator_picker.c" "../../emulator_common/core/src/mia_emulator_core.c"
@@ -16,6 +17,7 @@ idf_component_register(
         "../../emulator_common/core/include" "../../emulator_common/hardware/include" "../../emulator_common/runtime/include"
         "../../emulator_common/storage/include" "../../emulator_common/storage/src" "../../../../include")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="lynx" MIA_EMULATOR_EXTENSION="lnx"
+    MIA_EMULATOR_SECOND_EXTENSION="zip"
     MIA_APP_NAME="lynx" MIA_EMULATOR_ROM_ROOT="/roms/lnx" MIA_EMULATOR_SECOND_ROM_ROOT="/roms/lynx"
     MIA_EMULATOR_SAVE_ROOT="/saves/lynx"
     MIA_EMULATOR_WIDTH=160 MIA_EMULATOR_HEIGHT=102 MIA_EMULATOR_SAMPLE_RATE=32000 MIA_EMULATOR_GNUBOY=1

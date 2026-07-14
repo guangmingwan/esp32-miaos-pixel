@@ -4,13 +4,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_lynx_bios_and_header_contract() -> None:
+def test_lynx_uses_hle_bios_and_core_file_detection() -> None:
     source = (ROOT / "main" / "lynx_adapter.cpp").read_text()
-    assert '"/bios/lynxboot.img"' in source
-    assert "MIA_LYNX_ERR_BIOS_MISSING" in source
-    assert "MIA_LYNX_ERR_BIOS_CORRUPT" in source
+    assert '"/bios/lynxboot.img"' not in source
+    assert "HANDY_FILETYPE_ILLEGAL" in source
+    assert "mFileType != HANDY_FILETYPE_LNX" not in source
     assert "MIA_LYNX_ERR_HEADER_CORRUPT" in source
-    assert "LYNX_BOOT_SIZE" in source and "LYNX_BOOT_CRC32" in source
 
 
 def test_lynx_video_controls_and_atomic_eeprom_contract() -> None:

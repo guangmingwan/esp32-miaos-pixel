@@ -17,6 +17,8 @@ static bool path_is_symlink(const char *path) {
 #endif
 }
 
+#define MIA_STORAGE_SCAN_MAX_DEPTH 16u
+
 static MiaStorageStatus append_entry(MiaStoragePickerResult *result, size_t *capacity, const char *name, const char *path, MiaStorageEntryKind kind, uint64_t size) {
     if (result->count == *capacity) {
         const size_t next_capacity = *capacity == 0 ? 32u : *capacity * 2u;
@@ -52,6 +54,36 @@ void mia_storage_picker_free(MiaStoragePickerResult *result) {
     result->count = 0;
 }
 
+static MiaStorageStatus scan_directory(const MiaStorageTarget *target, const char *directory,
+                                       unsigned depth, MiaStoragePickerResult *result,
+                                       size_t *capacity) {
+    if (depth > MIA_STORAGE_SCAN_MAX_DEPTH) return mia_storage_ok();
+    DIR *dir = opendir(directory);
+    if (dir == NULL) return mia_storage_ok();
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        MiaStoragePath child;
+        const int written = snprintf(child.path, sizeof(child.path), "%s/%s", directory, entry->d_name);
+        if (written < 0 || (size_t)written >= sizeof(child.path) || path_is_symlink(child.path)) continue;
+        struct stat info;
+        if (stat(child.path, &info) != 0) continue;
+        MiaStorageStatus status = mia_storage_ok();
+        if (S_ISDIR(info.st_mode)) {
+            status = scan_directory(target, child.path, depth + 1u, result, capacity);
+        } else if (S_ISREG(info.st_mode) && mia_storage_extension_matches(entry->d_name, target)) {
+            status = append_entry(result, capacity, entry->d_name, child.path,
+                                  MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
+        }
+        if (status.code != MIA_STORAGE_OK) {
+            closedir(dir);
+            return status;
+        }
+    }
+    closedir(dir);
+    return mia_storage_ok();
+}
+
 MiaStorageStatus mia_storage_picker_list(const MiaStorageContext *context, const MiaStorageTarget *target, MiaStoragePickerResult *out_result) {
     if (target == NULL || out_result == NULL) {
         return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target and result are required");
@@ -66,45 +98,13 @@ MiaStorageStatus mia_storage_picker_list(const MiaStorageContext *context, const
         if (status.code != MIA_STORAGE_OK) continue;
         DIR *dir = opendir(root.path);
         if (dir == NULL) continue;
-        roots_found++;
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || mia_storage_is_zip(entry->d_name)) {
-                continue;
-            }
-            MiaStoragePath child;
-            const int written = snprintf(child.path, sizeof(child.path), "%s/%s", root.path, entry->d_name);
-            if (written < 0 || (size_t)written >= sizeof(child.path)) {
-                continue;
-            }
-#ifdef ESP_PLATFORM
-            if (entry->d_type == DT_DIR) {
-                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
-            } else if (entry->d_type == DT_REG && mia_storage_extension_matches(entry->d_name, target)) {
-                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, 0);
-            } else {
-                continue;
-            }
-#else
-            struct stat info;
-            if (path_is_symlink(child.path) || stat(child.path, &info) != 0) {
-                continue;
-            }
-            if (S_ISDIR(info.st_mode)) {
-                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_DIRECTORY, 0);
-            } else if (S_ISREG(info.st_mode) && mia_storage_extension_matches(entry->d_name, target)) {
-                status = append_entry(out_result, &capacity, entry->d_name, child.path, MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
-            } else {
-                continue;
-            }
-#endif
-            if (status.code != MIA_STORAGE_OK) {
-                closedir(dir);
-                mia_storage_picker_free(out_result);
-                return status;
-            }
-        }
         closedir(dir);
+        roots_found++;
+        status = scan_directory(target, root.path, 0u, out_result, &capacity);
+        if (status.code != MIA_STORAGE_OK) {
+            mia_storage_picker_free(out_result);
+            return status;
+        }
     }
     return roots_found > 0u ? mia_storage_ok() :
         mia_storage_error(MIA_STORAGE_ERR_MISSING_ROOT, "ROM root is missing");
@@ -115,10 +115,11 @@ MiaStorageStatus mia_storage_picker_select(const MiaStorageContext *context, con
         return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "target, name, and result are required");
     }
     *out_result = (MiaStoragePickerResult){0};
-    if (mia_storage_is_zip(relative_name)) {
-        return mia_storage_error(MIA_STORAGE_ERR_UNSUPPORTED_ARCHIVE, "ZIP archives are not supported");
+    const bool extension_matches = mia_storage_extension_matches(relative_name, target);
+    if (mia_storage_is_zip(relative_name) && !extension_matches) {
+        return mia_storage_error(MIA_STORAGE_ERR_UNSUPPORTED_ARCHIVE, "ZIP archives are not supported by this target");
     }
-    if (!mia_storage_extension_matches(relative_name, target)) {
+    if (!extension_matches) {
         return mia_storage_error(MIA_STORAGE_ERR_UNSUPPORTED_FILE, "file extension does not match target");
     }
     for (size_t root_index = 0; root_index < mia_storage_rom_root_count(target); ++root_index) {

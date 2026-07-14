@@ -11,6 +11,7 @@ idf_component_register(
         "../../emulator_common/app/mia_emulator_app.c"
         "../../emulator_common/app/src/mia_app_audio.c"
         "../../emulator_common/app/src/mia_app_input.c"
+        "../../emulator_common/app/src/mia_app_zip.c"
         "../../emulator_common/app/src/mia_app_save.c"
         "../../emulator_common/app/src/mia_app_video.c"
         "../../emulator_common/app/src/mia_emulator_host.c"
@@ -50,6 +51,7 @@ idf_component_register(
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_TARGET="${MIA_TARGET}"
     MIA_EMULATOR_EXTENSION="${MIA_EXTENSION}"
+    MIA_EMULATOR_THIRD_EXTENSION="zip"
     MIA_APP_NAME="${MIA_TARGET}"
     MIA_EMULATOR_ROM_ROOT="/roms/${MIA_ROM_DIRECTORY}"
     MIA_EMULATOR_SAVE_ROOT="/saves/${MIA_TARGET}"
@@ -59,6 +61,9 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_DUAL_CORE_AUDIO=1
     MIA_DISPLAY_DROID_GBK=1
     MIA_DISPLAY_PRESENT_ROWS=40
+    MIA_DISPLAY_NO_DELAY_YIELD=1
+    MIA_DISPLAY_RGB565_WIRE_ORDER=1
+    MIA_HC165_ACTIVE_HIGH=1
     MIA_EMULATOR_SMSPLUS=1
     MIA_SMSPLUS_MODE=${MIA_SMSPLUS_MODE_VALUE}
     ${MIA_PICKER_EXTRA_DEFINITIONS})
@@ -71,4 +76,9 @@ endif()
 if(DEFINED MIA_SECOND_ROM_DIRECTORY)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
         MIA_EMULATOR_SECOND_ROM_ROOT="/roms/${MIA_SECOND_ROM_DIRECTORY}")
+endif()
+
+if(DEFINED MIA_SMSPLUS_SAVE_INTERVAL_FRAMES)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        MIA_SMSPLUS_SAVE_INTERVAL_FRAMES=${MIA_SMSPLUS_SAVE_INTERVAL_FRAMES})
 endif()

@@ -6,6 +6,7 @@ idf_component_register(
         "../../emulator_common/app/mia_emulator_app.c"
         "../../emulator_common/app/src/mia_app_audio.c"
         "../../emulator_common/app/src/mia_app_input.c"
+        "../../emulator_common/app/src/mia_app_zip.c"
         "../../emulator_common/app/src/mia_app_save.c"
         "../../emulator_common/app/src/mia_app_video.c"
         "../../emulator_common/app/src/mia_emulator_host.c"
@@ -41,9 +42,13 @@ idf_component_register(
         "../../../../include"
 )
 
+set_source_files_properties(${MIA_GNUBOY_SOURCES} PROPERTIES COMPILE_OPTIONS "-O3")
+
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_TARGET="gb"
     MIA_EMULATOR_EXTENSION="gb"
+    MIA_EMULATOR_SECOND_EXTENSION="gbc"
+    MIA_EMULATOR_THIRD_EXTENSION="zip"
     MIA_APP_NAME="gb"
     MIA_EMULATOR_CATEGORY="Emulators"
     MIA_EMULATOR_ROM_ROOT="/roms/gb"
@@ -54,7 +59,13 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_SCALE_MODE=MIA_DISPLAY_SCALE_STRETCH
     MIA_EMULATOR_DUAL_CORE_AUDIO=1
     MIA_DISPLAY_DROID_GBK=1
+    MIA_DISPLAY_NO_DELAY_YIELD=1
     MIA_DISPLAY_PRESENT_ROWS=40
+    MIA_DISPLAY_ASYNC_REGION=1
+    MIA_DISPLAY_RGB565_WIRE_ORDER=1
+    MIA_EMULATOR_GNUBOY_ASPECT_REGION=1
+    MIA_EMULATOR_GNUBOY_DISPLAY_TASK=1
+    MIA_EMULATOR_DEFAULT_PALETTE=GB_PALETTE_DMG
     MIA_EMULATOR_GNUBOY=1
     MIA_PICKER_COVERS=1
 )

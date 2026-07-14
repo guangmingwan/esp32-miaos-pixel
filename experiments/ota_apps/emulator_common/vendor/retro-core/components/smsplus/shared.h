@@ -23,9 +23,16 @@ typedef signed long int int32;
 #define LOG_PRINTF(level, x...) rg_system_log(RG_LOG_PRINTF, NULL, x)
 #define crc32_le(a, b, c) rg_crc32(a, b, c)
 #else
+#ifdef ESP_PLATFORM
+#include <esp_rom_crc.h>
+#endif
 #define LOG_PRINTF(level, x...) printf(x)
 #define IRAM_ATTR
+#ifdef ESP_PLATFORM
+#define crc32_le(a, b, c) esp_rom_crc32_le(a, b, c)
+#else
 #define crc32_le(a, b, c) (0)
+#endif
 #endif
 
 #define MESSAGE_ERROR(x, ...) LOG_PRINTF(1, "!! %s: " x, __func__, ## __VA_ARGS__)

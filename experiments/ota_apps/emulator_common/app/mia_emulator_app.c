@@ -14,6 +14,18 @@
 static const char *const extensions[] = {
 #ifdef MIA_EMULATOR_GNUBOY
     MIA_EMULATOR_EXTENSION,
+#ifdef MIA_EMULATOR_SECOND_EXTENSION
+    MIA_EMULATOR_SECOND_EXTENSION,
+#endif
+#ifdef MIA_EMULATOR_THIRD_EXTENSION
+    MIA_EMULATOR_THIRD_EXTENSION,
+#endif
+#ifdef MIA_EMULATOR_FOURTH_EXTENSION
+    MIA_EMULATOR_FOURTH_EXTENSION,
+#endif
+#ifdef MIA_EMULATOR_FIFTH_EXTENSION
+    MIA_EMULATOR_FIFTH_EXTENSION,
+#endif
 #endif
 #ifdef MIA_EMULATOR_GW
     "gw",
@@ -82,6 +94,7 @@ int mia_emulator_main_impl(int argc, char *argv[]) {
     if (status.code == MIA_CORE_OK) status = mia_core_adapter_select_rom(&runtime->adapter, runtime->selection.rom_path, runtime->selection.save_name);
     if (status.code == MIA_CORE_OK && !mia_host_audio_open(MIA_EMULATOR_SAMPLE_RATE, 2, 16)) status = mia_core_error(MIA_CORE_ERR_CALLBACK, "audio open failed");
     if (status.code == MIA_CORE_OK) status = mia_emulator_core_boot(runtime);
+    if (status.code == MIA_CORE_OK) mia_emulator_wait_input_release(runtime);
     if (status.code == MIA_CORE_OK) status = mia_emulator_core_run(runtime);
     if (status.code == MIA_CORE_OK) status = mia_core_adapter_request_exit(&runtime->adapter);
     if (status.code != MIA_CORE_OK) mia_host_log(status.message);

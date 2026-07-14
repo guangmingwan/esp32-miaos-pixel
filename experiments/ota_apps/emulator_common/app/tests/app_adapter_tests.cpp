@@ -172,50 +172,28 @@ static void test_smsplus_maps_target_specific_controls() {
 }
 
 static void test_smsplus_converts_complete_palette_frame_to_rgb565() {
-    std::array<uint8_t, 4> indexed{0, 1, 2, 3};
-    std::array<uint16_t, 4> palette{0x0000, 0xf800, 0x07e0, 0x001f};
+    std::array<uint8_t, 4> indexed{0, 1, 31, 255};
+    std::array<uint16_t, 256> palette{};
+    palette[0] = 0x0000;
+    palette[1] = 0xf800;
+    palette[31] = 0x07e0;
+    palette[255] = 0x001f;
     std::array<uint16_t, 4> output{};
     require_true(mia_smsplus_convert_frame(indexed.data(), indexed.size(), palette.data(),
                                            palette.size(), output.data(), output.size()),
-                 "SMS Plus indexed frame converts");
-    require_true(output == palette, "every indexed pixel resolves through the RGB565 palette");
+                  "SMS Plus indexed frame converts");
+    require_true(output == std::array<uint16_t, 4>{0x0000, 0xf800, 0x07e0, 0x001f},
+                 "every 8-bit indexed pixel resolves through the RGB565 palette");
 }
 
-static void test_coleco_bios_digest_allowlist_accepts_only_canonical_ntsc() {
-    const std::array<uint8_t, MIA_SMSPLUS_SHA1_SIZE> canonical{
-        0x45, 0xbe, 0xdc, 0x4c, 0xbd, 0xea, 0xc6, 0x6c, 0x7d, 0xf5,
-        0x9e, 0x9e, 0x59, 0x91, 0x95, 0xc7, 0x78, 0xd8, 0x6a, 0x92};
-    const std::array<uint8_t, MIA_SMSPLUS_SHA1_SIZE> pal{
-        0x16, 0x00, 0x77, 0xaf, 0xb1, 0x39, 0x94, 0x37, 0x25, 0xc6,
-        0x34, 0xd6, 0x53, 0x98, 0x98, 0xdb, 0x59, 0xf3, 0x36, 0x57};
-    auto mutation = canonical;
-    mutation[19] ^= 0x01u;
-    const std::array<std::array<uint8_t, MIA_SMSPLUS_SHA1_SIZE>, 4> garbage{{
-        {},
-        {0x11, 0xf6, 0xad, 0x8e, 0xc5, 0x2a, 0x29, 0x84, 0xab, 0xaa,
-         0xfd, 0x7c, 0x3b, 0x51, 0x65, 0x03, 0x78, 0x5c, 0x20, 0x72},
-        {0x35, 0xb6, 0x79, 0x5c, 0xa2, 0x0d, 0x6d, 0xc0, 0xaf, 0xf8,
-         0xc7, 0xc1, 0x10, 0xc9, 0x6c, 0xd1, 0x07, 0x0b, 0x8c, 0x38},
-        {0x5e, 0x2b, 0x96, 0xc1, 0x9c, 0x4f, 0x5c, 0x63, 0xa5, 0xaf,
-         0xa2, 0xde, 0x50, 0x4d, 0x29, 0xfe, 0x64, 0xa4, 0xc9, 0x08},
-    }};
-
-    require_true(mia_smsplus_validate_coleco_bios_digest(canonical.data(), MIA_SMSPLUS_COLECO_BIOS_SIZE) == MIA_SMSPLUS_BIOS_OK,
-                 "canonical NTSC Coleco BIOS digest is accepted");
-    require_true(mia_smsplus_validate_coleco_bios_digest(nullptr, MIA_SMSPLUS_COLECO_BIOS_SIZE) == MIA_SMSPLUS_BIOS_MISSING,
-                 "missing Coleco BIOS digest is rejected");
-    require_true(mia_smsplus_validate_coleco_bios_digest(canonical.data(), MIA_SMSPLUS_COLECO_BIOS_SIZE - 1u) == MIA_SMSPLUS_BIOS_SIZE_INVALID,
-                 "short Coleco BIOS is rejected");
-    require_true(mia_smsplus_validate_coleco_bios_digest(canonical.data(), MIA_SMSPLUS_COLECO_BIOS_SIZE + 1u) == MIA_SMSPLUS_BIOS_SIZE_INVALID,
-                 "oversize Coleco BIOS is rejected");
-    require_true(mia_smsplus_validate_coleco_bios_digest(pal.data(), MIA_SMSPLUS_COLECO_BIOS_SIZE) == MIA_SMSPLUS_BIOS_CHECKSUM_INVALID,
-                 "PAL Coleco BIOS is rejected");
-    require_true(mia_smsplus_validate_coleco_bios_digest(mutation.data(), MIA_SMSPLUS_COLECO_BIOS_SIZE) == MIA_SMSPLUS_BIOS_CHECKSUM_INVALID,
-                 "one-bit canonical digest mutation is rejected");
-    for (const auto &digest : garbage) {
-        require_true(mia_smsplus_validate_coleco_bios_digest(digest.data(), MIA_SMSPLUS_COLECO_BIOS_SIZE) == MIA_SMSPLUS_BIOS_CHECKSUM_INVALID,
-                     "single-byte, ASCII, blank, or mostly-FF content digest is rejected");
+static void test_coleco_keypad_layout_matches_original() {
+    const std::array<uint8_t, 12> expected{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 11};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        require_true(mia_smsplus_coleco_keypad_code(index) == expected[index],
+                     "Coleco keypad index maps to original key code");
     }
+    require_true(mia_smsplus_coleco_keypad_code(expected.size()) == 0xffu,
+                 "Coleco keypad rejects out-of-range index");
 }
 
 static void test_picker_requires_explicit_entry_and_atomic_save_uses_selected_rom_name() {
@@ -258,7 +236,7 @@ int main() {
     test_input_maps_host_buttons_and_debounces_exit();
     test_smsplus_maps_target_specific_controls();
     test_smsplus_converts_complete_palette_frame_to_rgb565();
-    test_coleco_bios_digest_allowlist_accepts_only_canonical_ntsc();
+    test_coleco_keypad_layout_matches_original();
     test_picker_requires_explicit_entry_and_atomic_save_uses_selected_rom_name();
     return 0;
 }

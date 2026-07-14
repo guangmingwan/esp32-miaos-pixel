@@ -35,8 +35,3 @@ add_executable(app_adapter_tests tests/app_adapter_tests.cpp)
 target_include_directories(app_adapter_tests PRIVATE include)
 target_link_libraries(app_adapter_tests PRIVATE app_deps)
 add_test(NAME app_adapter_tests COMMAND app_adapter_tests)
-
-add_executable(smsplus_bios_pipeline_tests tests/smsplus_bios_pipeline_tests.cpp)
-target_include_directories(smsplus_bios_pipeline_tests PRIVATE include)
-target_link_libraries(smsplus_bios_pipeline_tests PRIVATE app_deps)
-add_test(NAME smsplus_bios_pipeline_tests COMMAND smsplus_bios_pipeline_tests)

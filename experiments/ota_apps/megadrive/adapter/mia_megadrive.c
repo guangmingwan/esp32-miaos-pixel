@@ -1,4 +1,5 @@
 #include "megadrive_policy.h"
+#include "mia_app_zip.h"
 #include "mia_emulator_runtime.h"
 #include "mia_host_abi.h"
 
@@ -7,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #define MAX_AUDIO_SAMPLES 1056u
 #define MAX_FRAME_PIXELS (320u * 240u)
@@ -65,20 +67,35 @@ static MiaCoreStatus load_save(MiaEmulatorRuntime *runtime) {
 }
 
 MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
-    FILE *file = fopen(runtime->selection.rom_path, "rb");
-    if (file == NULL || fseek(file, 0, SEEK_END) != 0) return failure("Megadrive ROM open failed");
-    const long length = ftell(file);
-    if (length < 0x200 || length > MAX_ROM_SIZE || fseek(file, 0, SEEK_SET) != 0) { fclose(file); return failure("Megadrive ROM size invalid"); }
-    rom_data = heap_caps_malloc((size_t)length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const char *dot = strrchr(runtime->selection.rom_path, '.');
+    const bool zipped = dot != NULL && strcasecmp(dot + 1, "zip") == 0;
+    size_t length = 0;
+    FILE *file = NULL;
+    if (zipped) {
+        static const char *const extensions[] = {"md", "gen", "bin", "smd"};
+        MiaCoreStatus status = mia_app_zip_extract(runtime->selection.rom_path,
+            extensions, 4u, MAX_ROM_SIZE, &rom_data, &length, NULL, 0u);
+        if (status.code != MIA_CORE_OK) return failure("Megadrive ZIP load failed");
+    } else {
+        file = fopen(runtime->selection.rom_path, "rb");
+        if (file == NULL || fseek(file, 0, SEEK_END) != 0) return failure("Megadrive ROM open failed");
+        const long file_length = ftell(file);
+        if (file_length < 0x200 || file_length > MAX_ROM_SIZE || fseek(file, 0, SEEK_SET) != 0) { fclose(file); return failure("Megadrive ROM size invalid"); }
+        length = (size_t)file_length;
+        rom_data = heap_caps_malloc(length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (length < 0x200u) { if (file != NULL) fclose(file); free(rom_data); return failure("Megadrive ROM size invalid"); }
     VRAM = heap_caps_malloc(VRAM_MAX_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     indexed_frame = heap_caps_calloc(MAX_FRAME_PIXELS, sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     rgb_frame = heap_caps_malloc(MAX_FRAME_PIXELS * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (rom_data == NULL || VRAM == NULL || indexed_frame == NULL || rgb_frame == NULL) { fclose(file); return failure("Megadrive memory allocation failed"); }
-    if (fread(rom_data, 1, (size_t)length, file) != (size_t)length) { fclose(file); return failure("Megadrive ROM read failed"); }
-    fclose(file);
-    const MiaMegadriveSram sram = mia_megadrive_sram_parse(rom_data, (size_t)length);
+    if (rom_data == NULL || VRAM == NULL || indexed_frame == NULL || rgb_frame == NULL) { if (file != NULL) fclose(file); return failure("Megadrive memory allocation failed"); }
+    if (file != NULL) {
+        if (fread(rom_data, 1, length, file) != length) { fclose(file); return failure("Megadrive ROM read failed"); }
+        fclose(file);
+    }
+    const MiaMegadriveSram sram = mia_megadrive_sram_parse(rom_data, length);
     gwenesis_bus_configure_sram(sram.start, sram.present ? sram.size : 0u);
-    load_cartridge(rom_data, (size_t)length); power_on(); reset_emulation();
+    load_cartridge(rom_data, length); power_on(); reset_emulation();
     return load_save(runtime);
 }
 

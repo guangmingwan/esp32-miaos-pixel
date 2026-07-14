@@ -3,6 +3,7 @@ file(GLOB MIA_NOFRENDO_SOURCES "../components/nofrendo/*.c" "../components/nofre
 idf_component_register(
     SRCS "app_main.c" "../../emulator_common/app/mia_emulator_app.c"
         "../../emulator_common/app/src/mia_app_audio.c" "../../emulator_common/app/src/mia_app_input.c"
+        "../../emulator_common/app/src/mia_app_zip.c"
         "../../emulator_common/app/src/mia_app_save.c" "../../emulator_common/app/src/mia_app_video.c"
         "../../emulator_common/app/src/mia_emulator_host.c" "../../emulator_common/app/src/mia_emulator_picker.c"
         "../../emulator_common/core/src/mia_emulator_core.c" "../../emulator_common/cores/nes/mia_nes_contract.c"
@@ -19,7 +20,8 @@ idf_component_register(
         "../../emulator_common/storage/include" "../../emulator_common/storage/src" "../components/nofrendo" "../../../../include")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="nes" MIA_EMULATOR_EXTENSION="nes"
     MIA_EMULATOR_SECOND_EXTENSION="fds" MIA_EMULATOR_THIRD_EXTENSION="fc"
-    MIA_EMULATOR_FOURTH_EXTENSION="nsf" MIA_APP_NAME="nes" MIA_EMULATOR_CATEGORY="Emulators"
+    MIA_EMULATOR_FOURTH_EXTENSION="nsf" MIA_EMULATOR_FIFTH_EXTENSION="zip"
+    MIA_APP_NAME="nes" MIA_EMULATOR_CATEGORY="Emulators"
     MIA_EMULATOR_ROM_ROOT="/roms/nes" MIA_EMULATOR_SECOND_ROM_ROOT="/roms/FC"
     MIA_EMULATOR_SAVE_ROOT="/saves/nes" MIA_EMULATOR_WIDTH=256
     MIA_EMULATOR_HEIGHT=240 MIA_EMULATOR_SAMPLE_RATE=32000 MIA_EMULATOR_SMSPLUS=1

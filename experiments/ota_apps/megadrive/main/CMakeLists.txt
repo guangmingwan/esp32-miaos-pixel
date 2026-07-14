@@ -6,6 +6,7 @@ file(GLOB GWENESIS_SOURCES
 idf_component_register(SRCS "app_main.c" "../adapter/megadrive_policy.c" "../adapter/mia_megadrive.c"
     "../../emulator_common/app/mia_emulator_app.c"
     "../../emulator_common/app/src/mia_app_audio.c" "../../emulator_common/app/src/mia_app_input.c"
+    "../../emulator_common/app/src/mia_app_zip.c"
     "../../emulator_common/app/src/mia_app_save.c" "../../emulator_common/app/src/mia_app_video.c"
     "../../emulator_common/app/src/mia_emulator_host.c" "../../emulator_common/app/src/mia_emulator_picker.c"
     "../../emulator_common/core/src/mia_emulator_core.c"
@@ -24,7 +25,8 @@ idf_component_register(SRCS "app_main.c" "../adapter/megadrive_policy.c" "../ada
     "../../emulator_common/storage/include" "../../emulator_common/storage/src" "../../../../include")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_EMULATOR_TARGET="megadrive"
     MIA_EMULATOR_EXTENSION="bin" MIA_EMULATOR_SECOND_EXTENSION="smd"
-    MIA_EMULATOR_THIRD_EXTENSION="md" MIA_EMULATOR_FOURTH_EXTENSION="gen" MIA_EMULATOR_SMSPLUS=1
+    MIA_EMULATOR_THIRD_EXTENSION="md" MIA_EMULATOR_FOURTH_EXTENSION="gen"
+    MIA_EMULATOR_FIFTH_EXTENSION="zip" MIA_EMULATOR_SMSPLUS=1
     MIA_APP_NAME="megadrive"
     MIA_EMULATOR_ROM_ROOT="/roms/md" MIA_EMULATOR_SECOND_ROM_ROOT="/roms/megadrive"
     MIA_EMULATOR_SAVE_ROOT="/saves/megadrive"

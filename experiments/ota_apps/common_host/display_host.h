@@ -21,6 +21,12 @@ int32_t display_host_present_rgb565(const uint16_t *pixels, uint32_t width,
 int32_t display_host_present_rgb565_region(const uint16_t *pixels, int32_t x, int32_t y,
                                            uint32_t width, uint32_t height,
                                            uint32_t pitch_bytes);
+int32_t display_host_present_rgb565_scaled_region(const uint16_t *pixels,
+                                                  uint32_t source_width,
+                                                  uint32_t source_height,
+                                                  uint32_t source_pitch_bytes,
+                                                  int32_t x, int32_t y,
+                                                  uint32_t width, uint32_t height);
 void display_host_backlight_set(uint8_t enabled);
 
 #ifdef MIA_DISPLAY_HOST_NATIVE_TEST

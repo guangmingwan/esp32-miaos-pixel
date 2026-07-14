@@ -21,8 +21,7 @@
  ******************************************************************************/
 
 #include "shared.h"
-
-extern uint8 *mia_smsplus_coleco_bios;
+#include "coleco_bios.h"
 
 
 #define GAME_DATABASE_CNT 93
@@ -345,7 +344,7 @@ void set_rom_config(void)
   {
     sms.console = CONSOLE_COLECO;
     cart.mapper = MAPPER_NONE;
-    coleco.rom = mia_smsplus_coleco_bios;
+    coleco.rom = (uint8*)ColecoVision_BIOS;
   }
 
   if (option.country == 1) /* USA */

@@ -2,6 +2,15 @@ file(GLOB FMSX_EMULIB "../vendor/fmsx/src/EMULib/*.c")
 file(GLOB FMSX_CORE "../vendor/fmsx/src/fMSX/*.c")
 file(GLOB FMSX_Z80 "../vendor/fmsx/src/Z80/*.c")
 
+if(IDF_VERSION_MAJOR GREATER_EQUAL 5)
+    set(MIA_PLATFORM_REQUIRES app_update esp_partition driver esp_driver_gpio esp_driver_spi
+        esp_driver_i2s esp_driver_i2c fatfs sdmmc nvs_flash esp_timer esp_event esp_netif
+        esp_wifi esp_http_server esp_adc)
+else()
+    set(MIA_PLATFORM_REQUIRES app_update spi_flash driver fatfs sdmmc nvs_flash esp_timer
+        esp_event esp_netif esp_wifi esp_http_server)
+endif()
+
 idf_component_register(
     SRCS "app_main.c" "../target/msx_app.c" "../target/msx_machine.c" "../target/msx_policy.c"
          "../target/msx_fs.c" ${FMSX_EMULIB} ${FMSX_CORE} ${FMSX_Z80}
@@ -19,9 +28,7 @@ idf_component_register(
          "../../emulator_common/storage/src" "../../emulator_common/core/include"
          "../../emulator_common/hardware/include" "../../emulator_common/runtime/include"
          "../../../../include"
-    REQUIRES app_update esp_partition driver esp_driver_gpio esp_driver_spi esp_driver_i2s
-             esp_driver_i2c fatfs sdmmc nvs_flash esp_timer esp_event esp_netif esp_wifi
-             esp_http_server esp_adc)
+    REQUIRES ${MIA_PLATFORM_REQUIRES})
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE BPS16 BPP16 UNIX LSB_FIRST NARROW
     GenericSetVideo=SetVideo MIA_DISPLAY_DROID_GBK=1 MIA_PICKER_COVERS=1)

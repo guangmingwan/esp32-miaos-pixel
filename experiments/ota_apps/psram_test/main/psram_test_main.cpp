@@ -1,4 +1,3 @@
-#include "int_wdt_guard.h"
 #include "mia_host_abi.h"
 
 #include <esp_heap_caps.h>
@@ -22,7 +21,8 @@ enum MiaPalette : uint8_t {
 constexpr size_t TEST_STEP = 4096;
 constexpr size_t INTERNAL_SCRATCH_SIZE = 4096;
 constexpr size_t MIN_TEST_SIZE = 64 * 1024;
-constexpr size_t SKIP_INTERVAL = 0x4000;
+constexpr size_t YIELD_INTERVAL = 64 * 1024;
+constexpr size_t PROGRESS_INTERVAL = 256 * 1024;
 
 char g_status[64] = "Press A to run max PSRAM test";
 bool g_running = false;
@@ -76,22 +76,20 @@ bool allocate_max_psram(uint8_t **buffer, size_t *size) {
   return false;
 }
 
-bool should_skip_offset(size_t offset) {
-  return offset != 0 && (offset % SKIP_INTERVAL) == 0;
-}
-
-void update_progress(const char *phase, size_t offset, size_t total) {
+void update_progress(const char *phase, size_t offset) {
+  if (offset != 0 && (offset % PROGRESS_INTERVAL) != 0) {
+    if ((offset % YIELD_INTERVAL) == 0) {
+      mia_host_delay_ms(1);
+    }
+    return;
+  }
   snprintf(g_status, sizeof(g_status), "%s 0x%08x", phase, static_cast<unsigned>(offset));
   draw_psram_test(g_status, static_cast<uint32_t>(offset / 1024), g_totalKb, false, false);
-  mia_host_delay_ms(1);
 }
 
 bool fill_and_verify(uint8_t *buffer, size_t size, uint8_t salt) {
   for (size_t offset = 0; offset < size; offset += TEST_STEP) {
-    if (should_skip_offset(offset)) {
-      continue;
-    }
-    update_progress("fill", offset, size);
+    update_progress("fill", offset);
     const size_t chunk = size - offset < TEST_STEP ? size - offset : TEST_STEP;
     for (size_t i = 0; i < chunk; ++i) {
       buffer[offset + i] = expected_pattern(offset + i, salt);
@@ -99,10 +97,7 @@ bool fill_and_verify(uint8_t *buffer, size_t size, uint8_t salt) {
   }
 
   for (size_t offset = 0; offset < size; offset += TEST_STEP) {
-    if (should_skip_offset(offset)) {
-      continue;
-    }
-    update_progress("verify", offset, size);
+    update_progress("verify", offset);
     const size_t chunk = size - offset < TEST_STEP ? size - offset : TEST_STEP;
     for (size_t i = 0; i < chunk; ++i) {
       const size_t index = offset + i;
@@ -122,10 +117,7 @@ bool copy_from_internal_and_verify(uint8_t *buffer, size_t size) {
   }
 
   for (size_t offset = 0; offset < size; offset += INTERNAL_SCRATCH_SIZE) {
-    if (should_skip_offset(offset)) {
-      continue;
-    }
-    update_progress("copy-int", offset, size);
+    update_progress("copy-int", offset);
     const size_t chunk = size - offset < INTERNAL_SCRATCH_SIZE ? size - offset : INTERNAL_SCRATCH_SIZE;
     for (size_t i = 0; i < chunk; ++i) {
       scratch[i] = expected_pattern(offset + i, 0x5a);
@@ -135,10 +127,7 @@ bool copy_from_internal_and_verify(uint8_t *buffer, size_t size) {
 
   heap_caps_free(scratch);
   for (size_t offset = 0; offset < size; offset += TEST_STEP) {
-    if (should_skip_offset(offset)) {
-      continue;
-    }
-    update_progress("verify-int", offset, size);
+    update_progress("verify-int", offset);
     const size_t chunk = size - offset < TEST_STEP ? size - offset : TEST_STEP;
     for (size_t i = 0; i < chunk; ++i) {
       const size_t index = offset + i;
@@ -157,18 +146,12 @@ bool copy_within_psram_and_verify(uint8_t *buffer, size_t size) {
   }
 
   for (size_t offset = 0; offset < half; offset += TEST_STEP) {
-    if (should_skip_offset(offset) || should_skip_offset(half + offset)) {
-      continue;
-    }
-    update_progress("copy-psram", offset, half);
+    update_progress("copy-psram", offset);
     memcpy(buffer + half + offset, buffer + offset, TEST_STEP);
   }
 
   for (size_t offset = 0; offset < half; offset += TEST_STEP) {
-    if (should_skip_offset(offset) || should_skip_offset(half + offset)) {
-      continue;
-    }
-    update_progress("verify-psram", offset, half);
+    update_progress("verify-psram", offset);
     if (memcmp(buffer + offset, buffer + half + offset, TEST_STEP) != 0) {
       return false;
     }
@@ -192,9 +175,8 @@ void run_psram_test() {
   }
 
   g_totalKb = static_cast<uint32_t>(size / 1024);
-  snprintf(g_status, sizeof(g_status), "Running serial-only test");
+  snprintf(g_status, sizeof(g_status), "Running full PSRAM test");
   draw_psram_test(g_status, 0, g_totalKb, false, false);
-  ScopedIntWdtPause wdtGuard;
   const bool ok = fill_and_verify(buffer, size, 0xa5) &&
                   copy_from_internal_and_verify(buffer, size) &&
                   fill_and_verify(buffer, size, 0x3c) &&

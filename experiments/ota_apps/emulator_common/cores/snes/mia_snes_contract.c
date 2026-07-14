@@ -2,10 +2,11 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include <strings.h>
 
 int mia_snes_extension_supported(const char *path) {
     const char *dot = path == NULL ? NULL : strrchr(path, '.');
-    return dot != NULL && (strcmp(dot + 1, "sfc") == 0 || strcmp(dot + 1, "smc") == 0);
+    return dot != NULL && (strcasecmp(dot + 1, "sfc") == 0 || strcasecmp(dot + 1, "smc") == 0);
 }
 
 void mia_snes_pacing_record(MiaSnesPacing *pacing, uint32_t elapsed_us, uint32_t budget_us, int rendered) {

@@ -48,9 +48,13 @@ static int32_t transport_rgb565(
     for (uint32_t row = 0; row < rows; ++row) {
       const uint16_t *source_row =
           reinterpret_cast<const uint16_t *>(source + (y + row) * pitch_bytes);
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+      memcpy(staging + row * width_pixels, source_row, width_pixels * sizeof(uint16_t));
+#else
       for (uint32_t x = 0; x < width_pixels; ++x) {
         staging[row * width_pixels + x] = __builtin_bswap16(source_row[x]);
       }
+#endif
     }
     if (writer(y, rows, staging, rows * width_pixels, context) != MIA_HOST_RESULT_OK) {
       return MIA_HOST_RESULT_IO;
@@ -88,6 +92,9 @@ static spi_device_handle_t g_lcd = nullptr;
 static bool g_ready = false;
 static uint8_t *g_pixels = nullptr;
 DMA_ATTR static uint16_t g_chunk[PRESENT_PIXELS];
+#ifdef MIA_DISPLAY_ASYNC_REGION
+DMA_ATTR static uint16_t g_async_chunk[PRESENT_PIXELS];
+#endif
 static Color g_palette[256];
 #ifdef MIA_DISPLAY_DROID_GBK
 static bool g_use_droid_gbk = false;
@@ -235,7 +242,12 @@ extern "C" int display_host_init(void) {
   dev.clock_speed_hz = 40000000;
   dev.mode = 0;
   dev.spics_io_num = -1;
-  dev.queue_size = 1;
+  dev.queue_size =
+#ifdef MIA_DISPLAY_ASYNC_REGION
+      2;
+#else
+      1;
+#endif
   ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev, &g_lcd));
 
   gpio_reset_pin(LCD_CS_PIN);
@@ -334,14 +346,13 @@ extern "C" void display_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t 
 }
 
 extern "C" void display_host_fill_screen_rgb565(uint16_t color) {
-  uint16_t fill[PRESENT_PIXELS];
   for (int i = 0; i < PRESENT_PIXELS; ++i) {
-    fill[i] = color;
+    g_chunk[i] = color;
   }
   for (int y = 0; y < SCREEN_H; y += PRESENT_ROWS) {
     int rows = (SCREEN_H - y) < PRESENT_ROWS ? (SCREEN_H - y) : PRESENT_ROWS;
     ESP_ERROR_CHECK(lcd_set_window(0, (uint16_t)y, (uint16_t)(SCREEN_W - 1), (uint16_t)(y + rows - 1)));
-    ESP_ERROR_CHECK(tx_bytes(1, fill, (size_t)(rows * SCREEN_W * 2)));
+    ESP_ERROR_CHECK(tx_bytes(1, g_chunk, (size_t)(rows * SCREEN_W * 2)));
     yield_once();
   }
 }
@@ -414,9 +425,9 @@ extern "C" int32_t display_host_present_rgb565(const uint16_t *pixels, uint32_t 
 }
 
 extern "C" int32_t display_host_present_rgb565_region(const uint16_t *pixels, int32_t x,
-                                                         int32_t y, uint32_t width,
-                                                         uint32_t height,
-                                                         uint32_t pitch_bytes) {
+                                                          int32_t y, uint32_t width,
+                                                          uint32_t height,
+                                                          uint32_t pitch_bytes) {
   if (!g_ready || g_lcd == nullptr) return MIA_HOST_RESULT_NOT_READY;
   if (pixels == nullptr || (reinterpret_cast<uintptr_t>(pixels) & 1u) != 0u || x < 0 ||
       y < 0 || width == 0 || height == 0 || x + width > SCREEN_W || y + height > SCREEN_H ||
@@ -424,24 +435,189 @@ extern "C" int32_t display_host_present_rgb565_region(const uint16_t *pixels, in
     return MIA_HOST_RESULT_INVALID_ARGUMENT;
   }
   const uint8_t *source = reinterpret_cast<const uint8_t *>(pixels);
+#ifdef MIA_DISPLAY_ASYNC_REGION
+  uint16_t *chunks[2] = {g_chunk, g_async_chunk};
+  spi_transaction_t transactions[2] = {};
+  size_t pending = 0;
+  size_t chunk_index = 0;
+  if (lcd_set_window((uint16_t)x, (uint16_t)y, (uint16_t)(x + width - 1),
+                     (uint16_t)(y + height - 1)) != ESP_OK) {
+    return MIA_HOST_RESULT_IO;
+  }
+  gpio_set_level(LCD_DC_PIN, 1);
+  gpio_set_level(LCD_CS_PIN, 0);
+#endif
   for (uint32_t row_start = 0; row_start < height; row_start += PRESENT_ROWS) {
     const uint32_t rows =
         (height - row_start) < PRESENT_ROWS ? height - row_start : PRESENT_ROWS;
+#ifdef MIA_DISPLAY_ASYNC_REGION
+    const size_t buffer_index = chunk_index & 1u;
+    if (pending == 2u) {
+      spi_transaction_t *completed = nullptr;
+      if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) {
+        gpio_set_level(LCD_CS_PIN, 1);
+        return MIA_HOST_RESULT_IO;
+      }
+      --pending;
+    }
+    uint16_t *chunk = chunks[buffer_index];
+#else
+    uint16_t *chunk = g_chunk;
+#endif
     for (uint32_t row = 0; row < rows; ++row) {
       const uint16_t *source_row = reinterpret_cast<const uint16_t *>(
           source + (row_start + row) * pitch_bytes);
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+      memcpy(chunk + row * width, source_row, width * sizeof(uint16_t));
+#else
       for (uint32_t column = 0; column < width; ++column) {
-        g_chunk[row * width + column] = __builtin_bswap16(source_row[column]);
+        chunk[row * width + column] = __builtin_bswap16(source_row[column]);
       }
+#endif
     }
+#ifdef MIA_DISPLAY_ASYNC_REGION
+    spi_transaction_t &transaction = transactions[buffer_index];
+    transaction = {};
+    transaction.length = (size_t)rows * width * sizeof(uint16_t) * 8u;
+    transaction.tx_buffer = chunk;
+    if (spi_device_queue_trans(g_lcd, &transaction, portMAX_DELAY) != ESP_OK) {
+      while (pending > 0u) {
+        spi_transaction_t *completed = nullptr;
+        if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) break;
+        --pending;
+      }
+      gpio_set_level(LCD_CS_PIN, 1);
+      return MIA_HOST_RESULT_IO;
+    }
+    ++pending;
+    ++chunk_index;
+#else
     if (lcd_set_window((uint16_t)x, (uint16_t)(y + row_start),
                        (uint16_t)(x + width - 1),
                        (uint16_t)(y + row_start + rows - 1)) != ESP_OK ||
-        tx_bytes(1, g_chunk, (size_t)rows * width * sizeof(uint16_t)) != ESP_OK) {
+        tx_bytes(1, chunk, (size_t)rows * width * sizeof(uint16_t)) != ESP_OK) {
       return MIA_HOST_RESULT_IO;
     }
     yield_once();
+#endif
   }
+#ifdef MIA_DISPLAY_ASYNC_REGION
+  while (pending > 0u) {
+    spi_transaction_t *completed = nullptr;
+    if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) {
+      gpio_set_level(LCD_CS_PIN, 1);
+      return MIA_HOST_RESULT_IO;
+    }
+    --pending;
+  }
+  gpio_set_level(LCD_CS_PIN, 1);
+  taskYIELD();
+#endif
+  return MIA_HOST_RESULT_OK;
+}
+
+extern "C" int32_t display_host_present_rgb565_scaled_region(
+    const uint16_t *pixels, uint32_t source_width, uint32_t source_height,
+    uint32_t source_pitch_bytes, int32_t x, int32_t y, uint32_t width,
+    uint32_t height) {
+  if (!g_ready || g_lcd == nullptr) return MIA_HOST_RESULT_NOT_READY;
+  if (pixels == nullptr || (reinterpret_cast<uintptr_t>(pixels) & 1u) != 0u ||
+      source_width == 0 || source_height == 0 ||
+      (source_pitch_bytes & 1u) != 0u ||
+      source_pitch_bytes < source_width * sizeof(uint16_t) || x < 0 || y < 0 ||
+      width == 0 || height == 0 || width > SCREEN_W || x + width > SCREEN_W ||
+      y + height > SCREEN_H) {
+    return MIA_HOST_RESULT_INVALID_ARGUMENT;
+  }
+
+  uint16_t source_x[SCREEN_W];
+  for (uint32_t dx = 0; dx < width; ++dx) {
+    source_x[dx] = static_cast<uint16_t>((dx * source_width) / width);
+  }
+  const uint8_t *source = reinterpret_cast<const uint8_t *>(pixels);
+#ifdef MIA_DISPLAY_ASYNC_REGION
+  uint16_t *chunks[2] = {g_chunk, g_async_chunk};
+  spi_transaction_t transactions[2] = {};
+  size_t pending = 0;
+  size_t chunk_index = 0;
+  if (lcd_set_window((uint16_t)x, (uint16_t)y, (uint16_t)(x + width - 1),
+                     (uint16_t)(y + height - 1)) != ESP_OK) {
+    return MIA_HOST_RESULT_IO;
+  }
+  gpio_set_level(LCD_DC_PIN, 1);
+  gpio_set_level(LCD_CS_PIN, 0);
+#endif
+
+  for (uint32_t row_start = 0; row_start < height; row_start += PRESENT_ROWS) {
+    const uint32_t rows =
+        (height - row_start) < PRESENT_ROWS ? height - row_start : PRESENT_ROWS;
+#ifdef MIA_DISPLAY_ASYNC_REGION
+    const size_t buffer_index = chunk_index & 1u;
+    if (pending == 2u) {
+      spi_transaction_t *completed = nullptr;
+      if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) {
+        gpio_set_level(LCD_CS_PIN, 1);
+        return MIA_HOST_RESULT_IO;
+      }
+      --pending;
+    }
+    uint16_t *chunk = chunks[buffer_index];
+#else
+    uint16_t *chunk = g_chunk;
+#endif
+    for (uint32_t row = 0; row < rows; ++row) {
+      const uint32_t output_y = row_start + row;
+      const uint32_t source_y = (output_y * source_height) / height;
+      const uint16_t *source_row = reinterpret_cast<const uint16_t *>(
+          source + source_y * source_pitch_bytes);
+      uint16_t *output_row = chunk + row * width;
+      for (uint32_t dx = 0; dx < width; ++dx) {
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+        output_row[dx] = source_row[source_x[dx]];
+#else
+        output_row[dx] = __builtin_bswap16(source_row[source_x[dx]]);
+#endif
+      }
+    }
+#ifdef MIA_DISPLAY_ASYNC_REGION
+    spi_transaction_t &transaction = transactions[buffer_index];
+    transaction = {};
+    transaction.length = (size_t)rows * width * sizeof(uint16_t) * 8u;
+    transaction.tx_buffer = chunk;
+    if (spi_device_queue_trans(g_lcd, &transaction, portMAX_DELAY) != ESP_OK) {
+      while (pending > 0u) {
+        spi_transaction_t *completed = nullptr;
+        if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) break;
+        --pending;
+      }
+      gpio_set_level(LCD_CS_PIN, 1);
+      return MIA_HOST_RESULT_IO;
+    }
+    ++pending;
+    ++chunk_index;
+#else
+    if (lcd_set_window((uint16_t)x, (uint16_t)(y + row_start),
+                       (uint16_t)(x + width - 1),
+                       (uint16_t)(y + row_start + rows - 1)) != ESP_OK ||
+        tx_bytes(1, chunk, (size_t)rows * width * sizeof(uint16_t)) != ESP_OK) {
+      return MIA_HOST_RESULT_IO;
+    }
+    yield_once();
+#endif
+  }
+
+#ifdef MIA_DISPLAY_ASYNC_REGION
+  while (pending > 0u) {
+    spi_transaction_t *completed = nullptr;
+    if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) {
+      gpio_set_level(LCD_CS_PIN, 1);
+      return MIA_HOST_RESULT_IO;
+    }
+    --pending;
+  }
+  gpio_set_level(LCD_CS_PIN, 1);
+  taskYIELD();
+#endif
   return MIA_HOST_RESULT_OK;
 }
 #endif

@@ -1,10 +1,11 @@
 #include "mia_nes_contract.h"
 
 #include <string.h>
+#include <strings.h>
 
 static int has_extension(const char *path, const char *extension) {
     const char *dot = path == NULL ? NULL : strrchr(path, '.');
-    return dot != NULL && strcmp(dot + 1, extension) == 0;
+    return dot != NULL && strcasecmp(dot + 1, extension) == 0;
 }
 
 static int mapper_supported(uint8_t mapper) {
@@ -16,11 +17,15 @@ static int mapper_supported(uint8_t mapper) {
 }
 
 MiaNesResult mia_nes_validate_extension(const char *path) {
-    return has_extension(path, "nes") || has_extension(path, "fds") ? MIA_NES_OK : MIA_NES_UNSUPPORTED_FILE;
+    return has_extension(path, "nes") || has_extension(path, "fc") ||
+           has_extension(path, "fds") || has_extension(path, "nsf") ||
+           has_extension(path, "zip")
+               ? MIA_NES_OK : MIA_NES_UNSUPPORTED_FILE;
 }
 
 MiaNesResult mia_nes_validate_image(const uint8_t *header, size_t size, int fds_bios_valid) {
     if (header == NULL || size < 16) return MIA_NES_INVALID_HEADER;
+    if (memcmp(header, "NESM\x1a", 5) == 0) return MIA_NES_OK;
     if (memcmp(header, "FDS\x1a", 4) == 0 || memcmp(header, "\x01*NINTENDO-HVC*", 15) == 0) {
         return fds_bios_valid ? MIA_NES_OK : MIA_NES_FDS_BIOS_REQUIRED;
     }
