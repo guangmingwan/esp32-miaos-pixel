@@ -66,6 +66,15 @@ static MiaStorageStatus scan_directory(const MiaStorageTarget *target, const cha
         MiaStoragePath child;
         const int written = snprintf(child.path, sizeof(child.path), "%s/%s", directory, entry->d_name);
         if (written < 0 || (size_t)written >= sizeof(child.path) || path_is_symlink(child.path)) continue;
+#ifdef ESP_PLATFORM
+        MiaStorageStatus status = mia_storage_ok();
+        if (entry->d_type == DT_DIR) {
+            status = scan_directory(target, child.path, depth + 1u, result, capacity);
+        } else if (entry->d_type == DT_REG && mia_storage_extension_matches(entry->d_name, target)) {
+            status = append_entry(result, capacity, entry->d_name, child.path,
+                                  MIA_STORAGE_ENTRY_ROM, 0u);
+        }
+#else
         struct stat info;
         if (stat(child.path, &info) != 0) continue;
         MiaStorageStatus status = mia_storage_ok();
@@ -75,6 +84,7 @@ static MiaStorageStatus scan_directory(const MiaStorageTarget *target, const cha
             status = append_entry(result, capacity, entry->d_name, child.path,
                                   MIA_STORAGE_ENTRY_ROM, (uint64_t)info.st_size);
         }
+#endif
         if (status.code != MIA_STORAGE_OK) {
             closedir(dir);
             return status;

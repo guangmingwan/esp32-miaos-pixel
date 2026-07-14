@@ -46,8 +46,13 @@ static UINT cover_jpeg_output(JDEC *decoder, void *bitmap, JRECT *rect) {
             const uint8_t r = *rgb++;
             const uint8_t g = *rgb++;
             const uint8_t b = *rgb++;
-            output[x] = (uint16_t)(((uint16_t)(r & 0xf8u) << 8) |
-                                   ((uint16_t)(g & 0xfcu) << 3) | (b >> 3));
+            const uint16_t pixel = (uint16_t)(((uint16_t)(r & 0xf8u) << 8) |
+                                              ((uint16_t)(g & 0xfcu) << 3) | (b >> 3));
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+            output[x] = __builtin_bswap16(pixel);
+#else
+            output[x] = pixel;
+#endif
         }
     }
     return 1;
