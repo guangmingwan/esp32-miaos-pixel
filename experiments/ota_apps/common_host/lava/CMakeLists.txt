@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "lava_rt.c"
+        "font.c"
+        "pinyin.c"
+        "py2gb.c"
+        "utf8gb.c"
+        "myctype.c"
+        "graph/vdc.c"
+    INCLUDE_DIRS
+        "."
+)

@@ -83,6 +83,7 @@ static const MiaTranslation TRANSLATIONS[] = {
     {"Media", "媒体"},
     {"Application", "应用"},
     {"calculator", "计算器"},
+    {"lava_pal", "仙剑奇侠传[lava兼容版]"},
     {"minesweeper", "扫雷"},
     {"rtc_set", "时间设置"},
     {"sd_browser", "SD 浏览器"},

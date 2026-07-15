@@ -1,0 +1,4 @@
+[mapping:lava_pal_psram]
+archive: libmain.a
+entries:
+    main_lava_native (extram_bss)
