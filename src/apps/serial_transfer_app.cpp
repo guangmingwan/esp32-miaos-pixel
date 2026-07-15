@@ -37,12 +37,12 @@ void drawSerialTransfer(AppContext &context) {
   lavaDrawText(8, 54, "Host: tools/serial_sd_client.py", LAVA_WHITE, LAVA_BLACK);
   lavaDrawText(8, 74, snapshot.status, LAVA_YELLOW, LAVA_BLACK);
   lavaDrawText(8, 94, snapshot.targetPath, LAVA_GRAY, LAVA_BLACK);
-  if (snapshot.uploadActive) {
-    snprintf(line, sizeof(line), "%lu / %lu bytes", static_cast<unsigned long>(snapshot.receivedBytes),
+  if (snapshot.uploadActive || snapshot.downloadActive) {
+    snprintf(line, sizeof(line), "%lu / %lu bytes", static_cast<unsigned long>(snapshot.transferredBytes),
              static_cast<unsigned long>(snapshot.totalBytes));
     lavaDrawText(8, 114, line, LAVA_GREEN, LAVA_BLACK);
   } else {
-    lavaDrawText(8, 114, "Commands: PING LIST MKDIR DELETE PUT", LAVA_GREEN, LAVA_BLACK);
+    lavaDrawText(8, 114, "Commands: PING LIST MKDIR DELETE PUT GET", LAVA_GREEN, LAVA_BLACK);
   }
   lavaDrawText(8, 222, "SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
@@ -57,7 +57,7 @@ void serialTransferBegin(AppContext &context) {
 void serialTransferTick(AppContext &context, uint32_t nowMs) {
   serialFileServiceTick();
   const SerialFileServiceSnapshot snapshot = serialFileServiceSnapshot();
-  const uint32_t refreshIntervalMs = snapshot.uploadActive ? 1000 : 200;
+  const uint32_t refreshIntervalMs = (snapshot.uploadActive || snapshot.downloadActive) ? 1000 : 200;
   if (nowMs - g_lastRenderMs >= refreshIntervalMs) {
     g_lastRenderMs = nowMs;
     drawSerialTransfer(context);

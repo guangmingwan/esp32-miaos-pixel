@@ -25,6 +25,7 @@
 #include <esp_private/esp_clk.h>
 #include <esp_vfs_fat.h>
 #include <esp_wifi.h>
+#include <ff.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lwip/netdb.h>
@@ -623,7 +624,15 @@ extern "C" int32_t sd_browser_host_capacity(uint64_t *free_bytes,
   if (!g_sd_ready || free_bytes == nullptr || total_bytes == nullptr) {
     return -1;
   }
-  return esp_vfs_fat_info(ROOT_DIR, total_bytes, free_bytes) == ESP_OK ? 0 : -1;
+  FATFS *fs = nullptr;
+  DWORD free_clusters = 0;
+  if (f_getfree("0:", &free_clusters, &fs) != FR_OK || fs == nullptr) {
+    return -1;
+  }
+  const uint64_t bytes_per_cluster = static_cast<uint64_t>(fs->csize) * fs->ssize;
+  *total_bytes = static_cast<uint64_t>(fs->n_fatent - 2) * bytes_per_cluster;
+  *free_bytes = static_cast<uint64_t>(free_clusters) * bytes_per_cluster;
+  return 0;
 }
 #endif
 

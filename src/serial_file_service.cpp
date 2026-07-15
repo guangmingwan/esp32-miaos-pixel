@@ -12,20 +12,34 @@
 namespace {
 
 constexpr uint16_t COMMAND_BUFFER_SIZE = 160;
+constexpr uint16_t CONTROL_BUFFER_SIZE = 32;
 constexpr size_t UPLOAD_CHUNK_SIZE = 1024;
+constexpr size_t DOWNLOAD_CHUNK_SIZE = 1024;
 constexpr uint32_t UPLOAD_TIMEOUT_MS = 15000;
+constexpr uint32_t DOWNLOAD_TIMEOUT_MS = 15000;
 
 char g_commandBuffer[COMMAND_BUFFER_SIZE];
 uint16_t g_commandLength = 0;
 bool g_commandOverflow = false;
+char g_controlBuffer[CONTROL_BUFFER_SIZE];
+uint16_t g_controlLength = 0;
+bool g_controlOverflow = false;
+bool g_enterRequested = false;
+bool g_exitRequested = false;
 char g_status[48] = "Idle";
 char g_targetPath[96] = "/";
 bool g_sdReady = false;
 bool g_uploadActive = false;
 uint32_t g_expectedBytes = 0;
 uint32_t g_receivedBytes = 0;
+uint32_t g_nextUploadAckBytes = 0;
 uint32_t g_lastUploadActivityMs = 0;
 File g_uploadFile;
+bool g_downloadActive = false;
+uint32_t g_downloadBytes = 0;
+uint32_t g_sentBytes = 0;
+uint32_t g_lastDownloadActivityMs = 0;
+File g_downloadFile;
 
 void copyText(char *dest, size_t destSize, const char *src) {
   if (destSize == 0) {
@@ -130,6 +144,7 @@ bool startUpload(const char *rawPath, const char *rawSize) {
   g_uploadFile.seek(0);
   g_expectedBytes = static_cast<uint32_t>(parsedSize);
   g_receivedBytes = 0;
+  g_nextUploadAckBytes = min<uint32_t>(UPLOAD_CHUNK_SIZE, g_expectedBytes);
   g_uploadActive = true;
   g_lastUploadActivityMs = millis();
   copyText(g_targetPath, sizeof(g_targetPath), normalizedPath.c_str());
@@ -137,6 +152,61 @@ bool startUpload(const char *rawPath, const char *rawSize) {
   launcherLogAppendf("serial put start path=%s size=%lu", normalizedPath.c_str(), parsedSize);
   sendLine("READY");
   return true;
+}
+
+void finishDownload(const char *status, const char *response, const char *logPrefix) {
+  if (g_downloadFile) {
+    g_downloadFile.close();
+  }
+  g_downloadActive = false;
+  setStatus(status);
+  if (response != nullptr) {
+    sendError(response);
+  }
+  launcherLogAppendf("serial get %s path=%s sent=%lu expected=%lu", logPrefix, g_targetPath,
+                     static_cast<unsigned long>(g_sentBytes),
+                     static_cast<unsigned long>(g_downloadBytes));
+}
+
+void startDownload(const char *rawPath) {
+  if (!ensureSdReady()) {
+    return;
+  }
+
+  String normalizedPath;
+  if (!parsePathArgument(rawPath, normalizedPath)) {
+    sendError("invalid path");
+    return;
+  }
+
+  g_downloadFile = SD.open(normalizedPath, FILE_READ);
+  if (!g_downloadFile || g_downloadFile.isDirectory()) {
+    if (g_downloadFile) {
+      g_downloadFile.close();
+    }
+    sendError("not file");
+    return;
+  }
+
+  const size_t fileSize = g_downloadFile.size();
+  if (fileSize > UINT32_MAX) {
+    g_downloadFile.close();
+    sendError("file too large");
+    return;
+  }
+
+  g_downloadBytes = static_cast<uint32_t>(fileSize);
+  g_sentBytes = 0;
+  g_downloadActive = true;
+  g_lastDownloadActivityMs = millis();
+  copyText(g_targetPath, sizeof(g_targetPath), normalizedPath.c_str());
+  setStatus("Sending file");
+  launcherLogAppendf("serial get start path=%s size=%lu", normalizedPath.c_str(),
+                     static_cast<unsigned long>(g_downloadBytes));
+
+  char line[32];
+  snprintf(line, sizeof(line), "DATA %lu", static_cast<unsigned long>(g_downloadBytes));
+  sendLine(line);
 }
 
 void handleList(const char *rawPath) {
@@ -236,6 +306,16 @@ void processCommand() {
     return;
   }
 
+  if (strcmp(g_commandBuffer, "SFS1 ENTER") == 0) {
+    sendLine("SFS1 READY");
+    return;
+  }
+  if (strcmp(g_commandBuffer, "SFS1 EXIT") == 0) {
+    g_exitRequested = true;
+    sendLine("SFS1 EXITING");
+    return;
+  }
+
   char *command = strtok(g_commandBuffer, " ");
   char *arg1 = strtok(nullptr, "");
   if (command == nullptr) {
@@ -248,7 +328,7 @@ void processCommand() {
     return;
   }
   if (strcmp(command, "HELP") == 0) {
-    sendLine("OK COMMANDS PING LIST MKDIR DELETE PUT HELP");
+    sendLine("OK COMMANDS PING LIST MKDIR DELETE PUT GET HELP; CONTROL SFS1 EXIT");
     setStatus("Help shown");
     return;
   }
@@ -279,12 +359,16 @@ void processCommand() {
     startUpload(arg1, rawSize);
     return;
   }
+  if (strcmp(command, "GET") == 0) {
+    startDownload(arg1);
+    return;
+  }
 
   sendError("unknown command");
 }
 
 void pollCommandLine() {
-  while (Serial.available() > 0 && !g_uploadActive) {
+  while (Serial.available() > 0 && !g_uploadActive && !g_downloadActive) {
     const int value = Serial.read();
     if (value < 0) {
       break;
@@ -343,6 +427,14 @@ void pollUpload() {
       finishUpload("Write failed", "write failed", "failed", true);
       return;
     }
+
+    if (g_receivedBytes < g_expectedBytes && g_receivedBytes >= g_nextUploadAckBytes) {
+      char line[32];
+      snprintf(line, sizeof(line), "ACK %lu", static_cast<unsigned long>(g_receivedBytes));
+      sendLine(line);
+      g_nextUploadAckBytes = min<uint32_t>(g_expectedBytes,
+                                           g_nextUploadAckBytes + UPLOAD_CHUNK_SIZE);
+    }
   }
 
   if (g_receivedBytes >= g_expectedBytes) {
@@ -367,6 +459,50 @@ void pollUpload() {
   }
 }
 
+void pollDownload() {
+  if (!g_downloadActive) {
+    return;
+  }
+
+  if (millis() - g_lastDownloadActivityMs > DOWNLOAD_TIMEOUT_MS) {
+    finishDownload("Download timeout", "download timeout", "timeout");
+    return;
+  }
+
+  if (g_sentBytes >= g_downloadBytes) {
+    g_downloadFile.close();
+    g_downloadActive = false;
+    setStatus("Download complete");
+    sendOk("sent");
+    launcherLogAppendf("serial get complete path=%s size=%lu", g_targetPath,
+                       static_cast<unsigned long>(g_downloadBytes));
+    return;
+  }
+
+  const int writable = Serial.availableForWrite();
+  if (writable <= 0) {
+    return;
+  }
+
+  uint8_t chunk[DOWNLOAD_CHUNK_SIZE];
+  const size_t want = min<size_t>(sizeof(chunk), g_downloadBytes - g_sentBytes);
+  const size_t toRead = min<size_t>(want, static_cast<size_t>(writable));
+  const size_t readCount = g_downloadFile.read(chunk, toRead);
+  if (readCount == 0) {
+    finishDownload("Read failed", "read failed", "failed");
+    return;
+  }
+
+  const size_t written = Serial.write(chunk, readCount);
+  g_sentBytes += static_cast<uint32_t>(written);
+  if (written != readCount) {
+    g_downloadFile.seek(g_sentBytes);
+  }
+  if (written > 0) {
+    g_lastDownloadActivityMs = millis();
+  }
+}
+
 }
 
 void serialFileServiceBegin(bool sdReady) {
@@ -376,7 +512,13 @@ void serialFileServiceBegin(bool sdReady) {
   g_uploadActive = false;
   g_expectedBytes = 0;
   g_receivedBytes = 0;
+  g_nextUploadAckBytes = 0;
   g_lastUploadActivityMs = 0;
+  g_downloadActive = false;
+  g_downloadBytes = 0;
+  g_sentBytes = 0;
+  g_lastDownloadActivityMs = 0;
+  g_exitRequested = false;
   copyText(g_targetPath, sizeof(g_targetPath), "/");
   setStatus(sdReady ? "Waiting for host" : "SD unavailable");
   sendLine("SFS1 READY");
@@ -384,6 +526,7 @@ void serialFileServiceBegin(bool sdReady) {
 }
 
 void serialFileServiceTick() {
+  pollDownload();
   pollUpload();
   pollCommandLine();
 }
@@ -392,7 +535,11 @@ void serialFileServiceEnd() {
   if (g_uploadActive) {
     finishUpload("Stopped", nullptr, "aborted", true);
   }
+  if (g_downloadActive) {
+    finishDownload("Stopped", nullptr, "aborted");
+  }
   g_uploadActive = false;
+  g_downloadActive = false;
   setStatus("Stopped");
   launcherLogAppend("serial service end");
 }
@@ -401,9 +548,52 @@ SerialFileServiceSnapshot serialFileServiceSnapshot() {
   SerialFileServiceSnapshot snapshot = {};
   snapshot.sdReady = g_sdReady;
   snapshot.uploadActive = g_uploadActive;
-  snapshot.receivedBytes = g_receivedBytes;
-  snapshot.totalBytes = g_expectedBytes;
+  snapshot.downloadActive = g_downloadActive;
+  snapshot.transferredBytes = g_downloadActive ? g_sentBytes : g_receivedBytes;
+  snapshot.totalBytes = g_downloadActive ? g_downloadBytes : g_expectedBytes;
   copyText(snapshot.status, sizeof(snapshot.status), g_status);
   copyText(snapshot.targetPath, sizeof(snapshot.targetPath), g_targetPath);
   return snapshot;
+}
+
+void serialFileServicePollLauncherControl() {
+  while (Serial.available() > 0) {
+    const int value = Serial.read();
+    if (value < 0) {
+      break;
+    }
+    const char ch = static_cast<char>(value);
+    if (ch == '\r') {
+      continue;
+    }
+    if (ch == '\n') {
+      if (!g_controlOverflow) {
+        g_controlBuffer[g_controlLength] = '\0';
+        if (strcmp(g_controlBuffer, "SFS1 ENTER") == 0) {
+          g_enterRequested = true;
+          sendLine("SFS1 ENTERING");
+        }
+      }
+      g_controlLength = 0;
+      g_controlOverflow = false;
+      continue;
+    }
+    if (g_controlLength + 1 < CONTROL_BUFFER_SIZE) {
+      g_controlBuffer[g_controlLength++] = ch;
+    } else {
+      g_controlOverflow = true;
+    }
+  }
+}
+
+bool serialFileServiceTakeEnterRequest() {
+  const bool requested = g_enterRequested;
+  g_enterRequested = false;
+  return requested;
+}
+
+bool serialFileServiceTakeExitRequest() {
+  const bool requested = g_exitRequested;
+  g_exitRequested = false;
+  return requested;
 }
