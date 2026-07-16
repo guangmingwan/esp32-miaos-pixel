@@ -11,6 +11,8 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/stream_buffer.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_system.h>
 
@@ -60,14 +62,30 @@ static volatile bool s_audio_running = false;
 static volatile bool s_audio_exit = false;
 static volatile TaskHandle_t s_audio_task_handle = NULL;
 
+/* ---- Ring buffer (PSRAM): decouples SD-card-bound decode from I2S output ----
+ * decode_task (priority 5) fills the ring; audio_task (priority 6) drains it
+ * into I2S. When the decoder stalls on a slow SD read (minimp3's 128 KB IO
+ * refill, FAT cluster lookups), the ring buffer keeps I2S fed for ~2 seconds. */
+static StreamBufferHandle_t s_audio_stream = NULL;
+static StaticStreamBuffer_t s_stream_obj;        /* metadata in internal RAM */
+static uint8_t *s_stream_storage = NULL;         /* data in PSRAM */
+static size_t s_stream_size = 0;
+static volatile bool s_decode_eof = false;       /* set by decode task on EOF/error */
+static TaskHandle_t s_decode_task_handle = NULL;
+static int s_playback_sample_rate = 0;
+static uint8_t s_playback_channels = 0;
+
 /* PCM double-buffer for FFT data (audio -> UI) */
 #define FFT_SHARED_SAMPLES 256
 static int16_t s_fft_shared[FFT_SHARED_SAMPLES];
 static volatile uint8_t s_fft_channels = 0;
 static portMUX_TYPE s_fft_mux = portMUX_INITIALIZER_UNLOCKED;
 
-/* ---- Static buffers for the audio task only (core 0), no conflict ---- */
-static int16_t g_pcm[PCM_SAMPLES_PER_CHUNK];
+/* ---- Static buffers ----
+ * Decode and feed run in separate tasks (both on core 0) so each needs its
+ * own PCM scratch buffer to avoid preemption races. */
+static int16_t g_decode_pcm[PCM_SAMPLES_PER_CHUNK];  /* decode_task writes */
+static int16_t g_feed_pcm[PCM_SAMPLES_PER_CHUNK];    /* audio_task reads for I2S */
 
 /* Per-format decoder state (only one active at a time). */
 static mp3dec_ex_t g_mp3;
@@ -504,97 +522,203 @@ static void draw_spectrum_bars(const int16_t *pcm, uint32_t frames,
   }
 }
 
-/* ---- Audio task: runs on core 0 (dedicated decode + I2S) ---- */
+/* ---- Decode task (core 0, priority 5): decoder -> ring buffer producer ---- */
+
+static void decode_task_func(void *arg) {
+  (void)arg;
+  const DecoderBackend *backend = &BACKENDS[s_audio_format];
+  uint32_t chunks = 0;
+
+  while (!s_audio_stop) {
+    int frames = backend->read_pcm16(g_decode_pcm, PCM_FRAMES_PER_CHUNK);
+    if (frames < 0) {
+      ESP_LOGE(TAG, "decode failed chunk=%lu", (unsigned long)chunks);
+      break;
+    }
+    if (frames == 0) {
+      ESP_LOGI(TAG, "decode ended chunks=%lu", (unsigned long)chunks);
+      break;
+    }
+
+    size_t bytes = (size_t)frames * s_playback_channels * sizeof(int16_t);
+    /* Block (up to 2 s) if ring is full — this throttles decode to roughly
+     * real-time once the ring is saturated, which is exactly what we want. */
+    size_t sent = xStreamBufferSend(s_audio_stream, g_decode_pcm, bytes,
+                                    pdMS_TO_TICKS(2000));
+    if (sent < bytes) {
+      ESP_LOGE(TAG, "ring send timeout chunk=%lu", (unsigned long)chunks);
+      break;
+    }
+    ++chunks;
+  }
+
+  s_decode_eof = true;
+  s_decode_task_handle = NULL;
+  vTaskDelete(NULL);
+}
+
+/* ---- Audio task (core 0, priority 6): ring buffer consumer -> I2S ----
+ * Opens the decoder, creates the PSRAM ring buffer, launches the decode task,
+ * waits for a pre-fill, then drains the ring into I2S. SD-card stalls during
+ * decode are absorbed by the ring buffer (up to ~2 s of buffered audio). */
 
 static void audio_task_func(void *arg) {
   (void)arg;
 
   const char *vfs_path = s_audio_path;
-  uint8_t audio_open = 0;
-  uint32_t decoded_chunks = 0;
-  int sample_rate = 0;
-  uint8_t channels = 0;
+  uint32_t feed_chunks = 0;
 
   const DecoderBackend *backend = &BACKENDS[s_audio_format];
 
   ESP_LOGI(TAG, "open fmt=%d path=%s", s_audio_format, vfs_path);
-  if (backend->open(vfs_path, &sample_rate, &channels) != 0) {
+  if (backend->open(vfs_path, &s_playback_sample_rate,
+                    &s_playback_channels) != 0) {
     s_audio_task_handle = NULL;
     vTaskDelete(NULL);
     return;
   }
 
-  if (channels == 0 || channels > 2 || sample_rate <= 0) {
-    ESP_LOGE(TAG, "invalid audio format hz=%d channels=%d", sample_rate, channels);
+  if (s_playback_channels == 0 || s_playback_channels > 2 ||
+      s_playback_sample_rate <= 0) {
+    ESP_LOGE(TAG, "invalid audio format hz=%d channels=%d",
+             s_playback_sample_rate, s_playback_channels);
     backend->close();
     s_audio_task_handle = NULL;
     vTaskDelete(NULL);
     return;
   }
 
-  ESP_LOGI(TAG, "open ok hz=%d channels=%d", sample_rate, channels);
-  s_audio_open_ok = true;   /* latch — never cleared, UI uses this to distinguish open-ok from playback-done */
-  portMEMORY_BARRIER();     /* ensure open_ok is globally visible before any subsequent stores */
+  ESP_LOGI(TAG, "open ok hz=%d channels=%d", s_playback_sample_rate,
+           s_playback_channels);
+  s_audio_open_ok = true;
+  portMEMORY_BARRIER();
   s_audio_running = true;
 
+  /* Allocate ring buffer: ~2 seconds of audio in PSRAM. */
+  s_stream_size = (size_t)s_playback_sample_rate * s_playback_channels *
+                  sizeof(int16_t) * 2;
+  if (s_stream_size < PCM_SAMPLES_PER_CHUNK * sizeof(int16_t) * 4) {
+    s_stream_size = PCM_SAMPLES_PER_CHUNK * sizeof(int16_t) * 4;
+  }
+  s_stream_storage = (uint8_t *)heap_caps_malloc(s_stream_size,
+                                                 MALLOC_CAP_SPIRAM);
+  if (s_stream_storage == NULL) {
+    ESP_LOGE(TAG, "PSRAM ring alloc failed size=%u", (unsigned)s_stream_size);
+    backend->close();
+    s_audio_running = false;
+    s_audio_task_handle = NULL;
+    vTaskDelete(NULL);
+    return;
+  }
+  s_audio_stream = xStreamBufferCreateStatic(s_stream_size, 1,
+                                             s_stream_storage, &s_stream_obj);
+  s_decode_eof = false;
+  s_decode_task_handle = NULL;
+
+  /* Start decode task (lower priority than us so we can preempt it for I2S). */
+  const BaseType_t dec_result = xTaskCreatePinnedToCore(
+      decode_task_func, "music_dec", 24576, NULL, 5,
+      (TaskHandle_t *)&s_decode_task_handle, 0);
+  if (dec_result != pdPASS) {
+    ESP_LOGE(TAG, "decode task create failed result=%ld", (long)dec_result);
+    vStreamBufferDelete(s_audio_stream);
+    s_audio_stream = NULL;
+    heap_caps_free(s_stream_storage);
+    s_stream_storage = NULL;
+    backend->close();
+    s_audio_running = false;
+    s_audio_task_handle = NULL;
+    vTaskDelete(NULL);
+    return;
+  }
+
+  /* Pre-fill: wait until ring has ~0.5 s of audio before opening I2S.
+   * This gives a head start so the first SD stall doesn't cause an
+   * immediate underrun. */
+  size_t prefill_target = s_stream_size / 4;
+  int prefill_wait = 0;
+  while (!s_audio_stop && !s_decode_eof &&
+         xStreamBufferBytesAvailable(s_audio_stream) < prefill_target &&
+         prefill_wait < 5000) {
+    mia_host_delay_ms(10);
+    prefill_wait += 10;
+  }
+  ESP_LOGI(TAG, "prefill ring=%u wait=%d eof=%d",
+           (unsigned)xStreamBufferBytesAvailable(s_audio_stream),
+           prefill_wait, s_decode_eof);
+
+  if (!mia_host_audio_open((uint32_t)s_playback_sample_rate,
+                           s_playback_channels, 16)) {
+    ESP_LOGE(TAG, "audio open failed hz=%d channels=%d",
+             s_playback_sample_rate, s_playback_channels);
+    s_audio_stop = true;
+  } else {
+    ESP_LOGI(TAG, "audio output opened");
+  }
+
+  /* Feed loop: drain ring buffer into I2S. */
+  size_t chunk_bytes = PCM_FRAMES_PER_CHUNK * s_playback_channels *
+                       sizeof(int16_t);
   while (!s_audio_stop) {
-    int frames = backend->read_pcm16(g_pcm, PCM_FRAMES_PER_CHUNK);
-    if (frames < 0) {
-      ESP_LOGE(TAG, "decode failed chunk=%lu", (unsigned long)decoded_chunks);
+    if (s_decode_eof && xStreamBufferBytesAvailable(s_audio_stream) == 0) {
+      break;  /* decoder finished and ring drained */
+    }
+    size_t got = xStreamBufferReceive(s_audio_stream, g_feed_pcm,
+                                      chunk_bytes, pdMS_TO_TICKS(500));
+    if (got == 0) {
+      continue;
+    }
+    uint32_t frames = (uint32_t)(got / (s_playback_channels * sizeof(int16_t)));
+    if (mia_host_audio_write_pcm16(g_feed_pcm, frames,
+                                   s_playback_channels) < 0) {
+      ESP_LOGE(TAG, "audio write failed chunk=%lu frames=%u",
+               (unsigned long)feed_chunks, (unsigned)frames);
       break;
     }
-    if (frames == 0) {
-      ESP_LOGI(TAG, "decode ended chunks=%lu", (unsigned long)decoded_chunks);
-      break;
-    }
+    ++feed_chunks;
 
-    if (decoded_chunks == 0) {
-      ESP_LOGI(TAG, "first pcm frames=%d", frames);
-    }
-
-    if (!audio_open) {
-      if (!mia_host_audio_open((uint32_t)sample_rate, channels, 16)) {
-        ESP_LOGE(TAG, "audio open failed hz=%d channels=%d", sample_rate, channels);
-        break;
-      }
-      audio_open = 1;
-      ESP_LOGI(TAG, "audio output opened");
-    }
-
-    if (mia_host_audio_write_pcm16(g_pcm, (uint32_t)frames, channels) < 0) {
-      ESP_LOGE(TAG, "audio write failed chunk=%lu frames=%d channels=%u",
-               (unsigned long)decoded_chunks, frames, (unsigned)channels);
-      break;
-    }
-    ++decoded_chunks;
-
-    /* Share PCM samples for UI spectrum (core 1 will read via critical section).
-     * Always store mono-mixed samples so the UI's 128-element fft_buf works
-     * regardless of the source channel count. */
-    uint32_t copy_count = (uint32_t)frames;
+    /* Update FFT shared buffer for UI spectrum. */
+    uint32_t copy_count = frames;
     if (copy_count > FFT_SHARED_SAMPLES) {
       copy_count = FFT_SHARED_SAMPLES;
     }
     portENTER_CRITICAL(&s_fft_mux);
-    if (channels >= 2) {
-      /* Stereo -> mono mix on the fly as we copy */
+    if (s_playback_channels >= 2) {
       for (uint32_t i = 0; i < copy_count; i++) {
-        int32_t l = g_pcm[i * 2];
-        int32_t r = g_pcm[i * 2 + 1];
+        int32_t l = g_feed_pcm[i * 2];
+        int32_t r = g_feed_pcm[i * 2 + 1];
         s_fft_shared[i] = (int16_t)((l + r) >> 1);
       }
     } else {
-      memcpy(s_fft_shared, g_pcm, copy_count * sizeof(int16_t));
+      memcpy(s_fft_shared, g_feed_pcm, copy_count * sizeof(int16_t));
     }
-    s_fft_channels = 1;  /* always report mono to the UI */
+    s_fft_channels = 1;
     portEXIT_CRITICAL(&s_fft_mux);
+  }
+
+  /* Signal decode task to stop and wait for it. */
+  s_audio_stop = true;
+  int stop_wait = 0;
+  while (s_decode_task_handle != NULL && stop_wait < 300) {
+    mia_host_delay_ms(10);
+    stop_wait += 10;
   }
 
   mia_host_audio_stop();
   mia_host_audio_close();
   backend->close();
-  ESP_LOGI(TAG, "audio task stopped chunks=%lu stop=%d exit=%d",
-           (unsigned long)decoded_chunks, s_audio_stop, s_audio_exit);
+
+  if (s_audio_stream) {
+    vStreamBufferDelete(s_audio_stream);
+    s_audio_stream = NULL;
+  }
+  if (s_stream_storage) {
+    heap_caps_free(s_stream_storage);
+    s_stream_storage = NULL;
+  }
+
+  ESP_LOGI(TAG, "audio task stopped feed_chunks=%lu stop=%d exit=%d",
+           (unsigned long)feed_chunks, s_audio_stop, s_audio_exit);
   s_audio_running = false;
   s_audio_task_handle = NULL;
   vTaskDelete(NULL);
