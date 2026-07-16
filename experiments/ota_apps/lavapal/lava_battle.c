@@ -7,6 +7,9 @@
 #define LAVA_ENEMY_FIELD_IDLE_FRAMES 0
 #define LAVA_ENEMY_FIELD_IDLE_ANIM_SPEED 3
 #define LAVA_BATTLE_SUMMON_HOLD_BUF_SIZE 65536L
+#define LAVA_BATTLE_SPRITE_CACHE_SLOTS 10
+#define LAVA_BATTLE_SPRITE_SOURCE_PLAYER 1
+#define LAVA_BATTLE_SPRITE_SOURCE_ENEMY 2
 
 static int g_lava_battle_background_ready;
 static int g_lava_battle_enemy_pos_x[LAVA_BATTLE_MAX_ENEMIES];
@@ -14,6 +17,8 @@ static int g_lava_battle_enemy_pos_y[LAVA_BATTLE_MAX_ENEMIES];
 static int g_lava_battle_enemy_idle_frame[LAVA_BATTLE_MAX_ENEMIES];
 static int g_lava_battle_enemy_idle_counter[LAVA_BATTLE_MAX_ENEMIES];
 static int g_lava_battle_enemy_idle_object_id[LAVA_BATTLE_MAX_ENEMIES];
+static int g_lava_battle_enemy_idle_frames[LAVA_BATTLE_MAX_ENEMIES];
+static int g_lava_battle_enemy_idle_speed[LAVA_BATTLE_MAX_ENEMIES];
 static int g_lava_battle_visual_draw_logged;
 static int g_lava_battle_enemy_draw_logged;
 static int g_lava_battle_player_draw_logged[3];
@@ -26,11 +31,16 @@ static int g_bde_frames;
 static int g_bde_frame_idx;
 static int g_bde_x;
 static int g_bde_y;
-static int g_bde_size;
-static long g_bde_ret;
-static long g_bde_read_ret;
 static LPCBITMAPRLE g_bde_frame;
 LAVA_BATTLE_STATE g_lava_battle_state;
+
+static FILE *g_lava_battle_fp_players;
+static FILE *g_lava_battle_fp_enemies;
+static char g_lava_battle_sprite_cache[LAVA_BATTLE_SPRITE_CACHE_SLOTS][65536];
+static int g_lava_battle_sprite_cache_source[LAVA_BATTLE_SPRITE_CACHE_SLOTS];
+static int g_lava_battle_sprite_cache_chunk[LAVA_BATTLE_SPRITE_CACHE_SLOTS];
+static DWORD g_lava_battle_sprite_cache_stamp[LAVA_BATTLE_SPRITE_CACHE_SLOTS];
+static DWORD g_lava_battle_sprite_cache_clock;
 
 static int g_lava_battle_keep_active;
 static int g_lava_battle_keep_x;
@@ -166,7 +176,7 @@ static int PAL_LavaBattleEnemyIdleFrameIndex(int slot, int object_id, int enemy_
       g_lava_battle_enemy_idle_object_id[slot] = object_id;
    }
 
-   idle_frames = PAL_LavaBattleReadEnemyField(enemy_id, LAVA_ENEMY_FIELD_IDLE_FRAMES);
+   idle_frames = g_lava_battle_enemy_idle_frames[slot];
    if (idle_frames <= 0)
    {
       idle_frames = 1;
@@ -176,7 +186,7 @@ static int PAL_LavaBattleEnemyIdleFrameIndex(int slot, int object_id, int enemy_
       idle_frames = frame_count;
    }
 
-   idle_speed = PAL_LavaBattleReadEnemyField(enemy_id, LAVA_ENEMY_FIELD_IDLE_ANIM_SPEED);
+   idle_speed = g_lava_battle_enemy_idle_speed[slot];
    if (idle_speed <= 0)
    {
       idle_speed = 4;
@@ -345,6 +355,104 @@ static int PAL_LavaBattleGetDecompressedSize(int chunk_num, FILE *fp)
       (PAL_U8(buf[7]) << 24);
 }
 
+static void PAL_LavaBattleOpenAssetFiles(void)
+{
+   if (g_lava_battle_fp_players == 0)
+   {
+      g_lava_battle_fp_players = UTIL_OpenRequiredFile("F.MKF");
+   }
+   if (g_lava_battle_fp_enemies == 0)
+   {
+      g_lava_battle_fp_enemies = UTIL_OpenRequiredFile("ABC.MKF");
+   }
+}
+
+addr PAL_LavaBattleGetPlayerAssetFile(void)
+{
+   PAL_LavaBattleOpenAssetFiles();
+   return (addr)g_lava_battle_fp_players;
+}
+
+static addr PAL_LavaBattleGetCachedSprite(int source, int chunk, FILE *fp)
+{
+   int i;
+   int slot;
+
+   if (chunk < 0)
+   {
+      return 0;
+   }
+
+   g_lava_battle_sprite_cache_clock++;
+   if (g_lava_battle_sprite_cache_clock == 0)
+   {
+      g_lava_battle_sprite_cache_clock = 1;
+   }
+
+   slot = -1;
+   for (i = 0; i < LAVA_BATTLE_SPRITE_CACHE_SLOTS; i++)
+   {
+      if (g_lava_battle_sprite_cache_source[i] == source &&
+          g_lava_battle_sprite_cache_chunk[i] == chunk)
+      {
+         g_lava_battle_sprite_cache_stamp[i] = g_lava_battle_sprite_cache_clock;
+         return (addr)g_lava_battle_sprite_cache[i];
+      }
+      if (slot < 0 || g_lava_battle_sprite_cache_source[i] == 0 ||
+          g_lava_battle_sprite_cache_stamp[i] < g_lava_battle_sprite_cache_stamp[slot])
+      {
+         slot = i;
+         if (g_lava_battle_sprite_cache_source[i] == 0)
+         {
+            break;
+         }
+      }
+   }
+
+   if (slot < 0 || fp == 0 ||
+       PAL_MKFDecompressChunk((addr)g_lava_battle_sprite_cache[slot],
+          sizeof(g_lava_battle_sprite_cache[slot]), chunk, fp) <= 0)
+   {
+      return 0;
+   }
+
+   g_lava_battle_sprite_cache_source[slot] = source;
+   g_lava_battle_sprite_cache_chunk[slot] = chunk;
+   g_lava_battle_sprite_cache_stamp[slot] = g_lava_battle_sprite_cache_clock;
+   return (addr)g_lava_battle_sprite_cache[slot];
+}
+
+static void PAL_LavaBattlePreloadSprites(LAVA_BATTLE_STATE *state)
+{
+   int i;
+   int role;
+   int sprite_num;
+
+   PAL_LavaBattleOpenAssetFiles();
+   for (i = 0; i < g_lava_party_count && i < 3; i++)
+   {
+      role = g_lava_party_role[i];
+      sprite_num = PAL_LavaBattleGetPlayerTransformSprite(role);
+      if (sprite_num <= 0)
+      {
+         sprite_num = PAL_LavaRoleWordByArray(1, role);
+      }
+      PAL_LavaBattleGetCachedSprite(LAVA_BATTLE_SPRITE_SOURCE_PLAYER,
+         sprite_num, g_lava_battle_fp_players);
+   }
+
+   if (state != 0)
+   {
+      for (i = 0; i < state->enemy_count && i < LAVA_BATTLE_MAX_ENEMIES; i++)
+      {
+         sprite_num = PAL_LavaReadObjectField(state->enemy_object_id[i], 0);
+         PAL_LavaBattleGetCachedSprite(LAVA_BATTLE_SPRITE_SOURCE_ENEMY,
+            sprite_num, g_lava_battle_fp_enemies);
+      }
+   }
+   PAL_LavaLoadUISprite();
+}
+
 static void PAL_LavaBattleLayoutEnemies(LAVA_BATTLE_STATE *state)
 {
    int enemy_count;
@@ -362,6 +470,8 @@ static void PAL_LavaBattleLayoutEnemies(LAVA_BATTLE_STATE *state)
       g_lava_battle_enemy_pos_x[i] = 0;
       g_lava_battle_enemy_pos_y[i] = 0;
       PAL_LavaBattleResetEnemyIdleState(i);
+      g_lava_battle_enemy_idle_frames[i] = 0;
+      g_lava_battle_enemy_idle_speed[i] = 0;
    }
 
    if (enemy_count <= 1)
@@ -441,6 +551,11 @@ static void PAL_LavaBattleLayoutEnemies(LAVA_BATTLE_STATE *state)
          if (enemy_id >= 0)
          {
             y_offset = PAL_LavaBattleReadEnemyField(enemy_id, 5);
+            g_lava_battle_enemy_idle_frames[i] =
+               PAL_LavaBattleReadEnemyField(enemy_id, LAVA_ENEMY_FIELD_IDLE_FRAMES);
+            g_lava_battle_enemy_idle_speed[i] =
+               PAL_LavaBattleReadEnemyField(enemy_id, LAVA_ENEMY_FIELD_IDLE_ANIM_SPEED);
+            g_lava_battle_enemy_idle_object_id[i] = state->enemy_object_id[i];
          }
       }
       g_lava_battle_enemy_pos_x[i] = x;
@@ -502,12 +617,18 @@ static void PAL_LavaBattleLoadBackground(void)
 
 void PAL_LavaBattlePrepareVisuals(LAVA_BATTLE_STATE *state)
 {
+   if (g_lava_fpMGO != 0)
+   {
+      fclose((FILE *)g_lava_fpMGO);
+      g_lava_fpMGO = 0;
+   }
    PAL_LavaBattleClearKeepEffect();
    PAL_LavaBattleClearCurrentEffect();
    PAL_LavaBattleClearSummonHold();
    PAL_LavaBattleLoadBackground();
    PAL_LavaBattleInitPlayerLayout();
-    PAL_LavaBattleLayoutEnemies(state);
+   PAL_LavaBattleLayoutEnemies(state);
+   PAL_LavaBattlePreloadSprites(state);
    if (g_lava_autotest_search || g_lava_autotest_load)
    {
       printf("[LAVA][BATTLEVIS] prepared bg=%d field=%d enemies=%d\n",
@@ -520,6 +641,17 @@ void PAL_LavaBattlePrepareVisuals(LAVA_BATTLE_STATE *state)
 void PAL_LavaBattleFreeVisuals(void)
 {
    int i;
+
+   if (g_lava_battle_fp_players != 0)
+   {
+      fclose(g_lava_battle_fp_players);
+      g_lava_battle_fp_players = 0;
+   }
+   if (g_lava_battle_fp_enemies != 0)
+   {
+      fclose(g_lava_battle_fp_enemies);
+      g_lava_battle_fp_enemies = 0;
+   }
 
    g_lava_battle_background_ready = 0;
    g_lava_battle_visual_draw_logged = 0;
@@ -768,7 +900,6 @@ static int PAL_LavaBattlePlayerFrameIndex(LAVA_BATTLE_STATE *state, int player_i
 
 static void PAL_LavaBattleDrawPlayers(LAVA_BATTLE_STATE *state)
 {
-   FILE *fp;
    int i;
    int party_count;
 
@@ -782,11 +913,7 @@ static void PAL_LavaBattleDrawPlayers(LAVA_BATTLE_STATE *state)
        return;
     }
 
-    fp = UTIL_OpenRequiredFile("F.MKF");
-   if (fp == 0)
-   {
-      return;
-   }
+   PAL_LavaBattleOpenAssetFiles();
 
    party_count = g_lava_party_count;
    if (party_count > 3)
@@ -795,7 +922,6 @@ static void PAL_LavaBattleDrawPlayers(LAVA_BATTLE_STATE *state)
    }
    if (party_count <= 0)
    {
-      fclose(fp);
       return;
    }
 
@@ -808,8 +934,6 @@ static void PAL_LavaBattleDrawPlayers(LAVA_BATTLE_STATE *state)
       int frame_y;
       int player_role;
       int sprite_num;
-      int sprite_size;
-      long ret;
 
       if (state->party_hp_max[i] <= 0)
       {
@@ -834,35 +958,20 @@ static void PAL_LavaBattleDrawPlayers(LAVA_BATTLE_STATE *state)
          continue;
       }
 
-      sprite_size = PAL_LavaBattleGetDecompressedSize(sprite_num, fp);
-      if (sprite_size <= 0 || sprite_size > 65536)
       {
-         if ((g_lava_autotest_search || g_lava_autotest_load) &&
-             !g_lava_battle_player_draw_logged[i])
-         {
-            printf("[LAVA][BATTLEVIS] player bad size slot=%d role=%d sprite=%d size=%d\n",
-               i, player_role, sprite_num, sprite_size);
-            g_lava_battle_player_draw_logged[i] = 1;
-         }
-         continue;
-      }
+         addr cached_sprite;
 
-      ret = PAL_MKFDecompressChunk((addr)g_lava_sprite_buf, sprite_size, sprite_num, fp);
-      if (ret <= 0)
-      {
-         if ((g_lava_autotest_search || g_lava_autotest_load) &&
-             !g_lava_battle_player_draw_logged[i])
+         cached_sprite = PAL_LavaBattleGetCachedSprite(
+            LAVA_BATTLE_SPRITE_SOURCE_PLAYER, sprite_num,
+            g_lava_battle_fp_players);
+         if (cached_sprite == 0)
          {
-            printf("[LAVA][BATTLEVIS] player sprite fail slot=%d role=%d sprite=%d ret=%ld\n",
-               i, player_role, sprite_num, ret);
-            g_lava_battle_player_draw_logged[i] = 1;
+            continue;
          }
-         continue;
+         frame_count = PAL_SpriteGetNumFrames((LPSPRITE)cached_sprite);
+         frame_index = PAL_LavaBattlePlayerFrameIndex(state, i, frame_count);
+         frame = PAL_SpriteGetFrame((LPSPRITE)cached_sprite, frame_index);
       }
-
-      frame_count = PAL_SpriteGetNumFrames((LPSPRITE)g_lava_sprite_buf);
-      frame_index = PAL_LavaBattlePlayerFrameIndex(state, i, frame_count);
-      frame = PAL_SpriteGetFrame((LPSPRITE)g_lava_sprite_buf, frame_index);
       if (frame == 0)
       {
          if ((g_lava_autotest_search || g_lava_autotest_load) &&
@@ -915,23 +1024,16 @@ static void PAL_LavaBattleDrawPlayers(LAVA_BATTLE_STATE *state)
       }
    }
 
-   fclose(fp);
 }
 
 static void PAL_LavaBattleDrawEnemies(LAVA_BATTLE_STATE *state)
 {
-    FILE *fp;
-
-    if (state == 0)
-    {
-      return;
-   }
-
-   fp = UTIL_OpenRequiredFile("ABC.MKF");
-   if (fp == 0)
+   if (state == 0)
    {
       return;
    }
+
+   PAL_LavaBattleOpenAssetFiles();
 
     for (g_bde_i = 0;
          g_bde_i < state->enemy_count && g_bde_i < LAVA_BATTLE_MAX_ENEMIES;
@@ -950,45 +1052,24 @@ static void PAL_LavaBattleDrawEnemies(LAVA_BATTLE_STATE *state)
           continue;
        }
 
-       g_bde_size = PAL_LavaBattleGetDecompressedSize(g_bde_id, fp);
-       if (g_bde_size <= 0 || g_bde_size > 65536)
        {
-          if (g_lava_autotest_search || g_lava_autotest_load)
+          addr cached_sprite;
+
+          cached_sprite = PAL_LavaBattleGetCachedSprite(
+             LAVA_BATTLE_SPRITE_SOURCE_ENEMY, g_bde_id,
+             g_lava_battle_fp_enemies);
+          if (cached_sprite == 0)
           {
-             printf("[LAVA][BATTLEVIS] enemy sprite bad size slot=%d obj=%d enemy=%d size=%d\n",
-                g_bde_i, state->enemy_object_id[g_bde_i], g_bde_id, g_bde_size);
+             continue;
           }
-          continue;
-       }
-
-       g_bde_read_ret = PAL_MKFReadChunk((addr)g_lava_mkf_buf, g_bde_size, g_bde_id, fp);
-       if (g_bde_read_ret > 0)
-       {
-          PAL_TmpReset();
-          g_bde_ret = Decompress((addr)g_lava_mkf_buf, (addr)g_lava_sprite_buf, g_bde_size);
-       }
-       else
-       {
-          g_bde_ret = g_bde_read_ret;
-       }
-       if (g_bde_ret <= 0)
-       {
-          if (g_lava_autotest_search || g_lava_autotest_load)
+          g_bde_frames = PAL_SpriteGetNumFrames((LPSPRITE)cached_sprite);
+          g_bde_frame_idx = PAL_LavaBattleEnemyIdleFrameIndex(g_bde_i,
+             state->enemy_object_id[g_bde_i], g_bde_id, g_bde_frames);
+          g_bde_frame = PAL_SpriteGetFrame((LPSPRITE)cached_sprite, g_bde_frame_idx);
+          if (g_bde_frame == 0)
           {
-             printf("[LAVA][BATTLEVIS] enemy sprite fail slot=%d obj=%d enemy=%d size=%d ret=%ld\n",
-                g_bde_i, state->enemy_object_id[g_bde_i], g_bde_id, g_bde_size, g_bde_ret);
+             g_bde_frame = PAL_SpriteGetFrame((LPSPRITE)cached_sprite, 0);
           }
-          continue;
-       }
-
-       g_bde_frames = PAL_SpriteGetNumFrames((LPSPRITE)g_lava_sprite_buf);
-       g_bde_frame_idx = PAL_LavaBattleEnemyIdleFrameIndex(g_bde_i,
-          state->enemy_object_id[g_bde_i], g_bde_id, g_bde_frames);
-
-       g_bde_frame = PAL_SpriteGetFrame((LPSPRITE)g_lava_sprite_buf, g_bde_frame_idx);
-       if (g_bde_frame == 0)
-       {
-          g_bde_frame = PAL_SpriteGetFrame((LPSPRITE)g_lava_sprite_buf, 0);
        }
        if (g_bde_frame == 0)
        {
@@ -1002,7 +1083,7 @@ static void PAL_LavaBattleDrawEnemies(LAVA_BATTLE_STATE *state)
              g_bde_i,
              state->enemy_object_id[g_bde_i],
              g_bde_id,
-             g_bde_size,
+             PAL_LavaBattleGetDecompressedSize(g_bde_id, g_lava_battle_fp_enemies),
              g_bde_frames,
              PAL_RLEGetWidth(g_bde_frame),
              PAL_RLEGetHeight(g_bde_frame));
@@ -1024,12 +1105,10 @@ static void PAL_LavaBattleDrawEnemies(LAVA_BATTLE_STATE *state)
         }
      }
 
-   fclose(fp);
 }
 
 void PAL_LavaBattleDrawEnemyTargetOverlay(LAVA_BATTLE_STATE *state, int target_sel)
 {
-   FILE *fp;
    int enemy_id;
    int frame_count;
    int frame_index;
@@ -1037,9 +1116,7 @@ void PAL_LavaBattleDrawEnemyTargetOverlay(LAVA_BATTLE_STATE *state, int target_s
    int frame_y;
    int object_id;
    int sprite_id;
-   int sprite_size;
-   long read_ret;
-   long ret;
+   addr cached_sprite;
    LPCBITMAPRLE frame;
 
    if ((g_lava_logic_frame_num & 1) == 0 || state == 0 ||
@@ -1061,43 +1138,23 @@ void PAL_LavaBattleDrawEnemyTargetOverlay(LAVA_BATTLE_STATE *state, int target_s
       return;
    }
 
-   fp = UTIL_OpenRequiredFile("ABC.MKF");
-   if (fp == 0)
-   {
-      return;
-   }
-
+   PAL_LavaBattleOpenAssetFiles();
    sprite_id = enemy_id;
-   sprite_size = PAL_LavaBattleGetDecompressedSize(sprite_id, fp);
-   if (sprite_size <= 0 || sprite_size > 65536)
-   {
-      fclose(fp);
-      return;
-   }
-
-   read_ret = PAL_MKFReadChunk((addr)g_lava_mkf_buf, sprite_size, sprite_id, fp);
-   if (read_ret > 0)
-   {
-      PAL_TmpReset();
-      ret = Decompress((addr)g_lava_mkf_buf, (addr)g_lava_sprite_buf, sprite_size);
-   }
-   else
-   {
-      ret = read_ret;
-   }
-   fclose(fp);
-   if (ret <= 0)
+   cached_sprite = PAL_LavaBattleGetCachedSprite(
+      LAVA_BATTLE_SPRITE_SOURCE_ENEMY, sprite_id,
+      g_lava_battle_fp_enemies);
+   if (cached_sprite == 0)
    {
       return;
    }
 
-   frame_count = PAL_SpriteGetNumFrames((LPSPRITE)g_lava_sprite_buf);
+   frame_count = PAL_SpriteGetNumFrames((LPSPRITE)cached_sprite);
    frame_index = PAL_LavaBattleEnemyCurrentFrameIndex(target_sel,
       object_id, frame_count);
-   frame = PAL_SpriteGetFrame((LPSPRITE)g_lava_sprite_buf, frame_index);
+   frame = PAL_SpriteGetFrame((LPSPRITE)cached_sprite, frame_index);
    if (frame == 0)
    {
-      frame = PAL_SpriteGetFrame((LPSPRITE)g_lava_sprite_buf, 0);
+      frame = PAL_SpriteGetFrame((LPSPRITE)cached_sprite, 0);
    }
    if (frame == 0)
    {

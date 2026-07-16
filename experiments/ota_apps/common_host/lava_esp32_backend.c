@@ -27,63 +27,219 @@ volatile unsigned char lav_key = 0;
 char ExePath[260] = "/";
 extern int g_lava_shutdown_requested;
 
-static uint16_t *s_frame_buf;
-static size_t s_frame_pixels;
+static int64_t s_last_button_scan_us;
 
 /* ==================== Display bridge ==================== */
 
-/* VDC pixel: RGB(r,g,b) = R | (G<<8) | (B<<16) | 0xFF000000  (see graph/vdc.h) */
-void lrt_refresh(void)
+static int32_t present_indexed_frame_sync(const uint8_t *pixels, uint32_t width,
+                                          uint32_t height, uint32_t pitch_bytes,
+                                          const uint8_t *palette_rgba)
 {
-    LavaRuntime *rt = lrt_get_global();
-    if (!rt) return;
-
-    VDC *vdc = lrt_get_screen(rt);
-    if (!vdc || !vdc->mem || rt->screen_width <= 0 || rt->screen_height <= 0)
-        return;
-
-    int w = rt->screen_width;
-    int h = rt->screen_height;
+    uint16_t palette_rgb565[256];
     int out_w = display_host_width();
     int out_h = display_host_height();
-    const uint32_t *src = vdc->mem;
+    if (!pixels || !palette_rgba || width == 0 || height == 0 || pitch_bytes < width ||
+        out_w <= 0 || out_h <= 0)
+        return MIA_HOST_RESULT_INVALID_ARGUMENT;
 
-    if (out_w <= 0 || out_h <= 0) return;
-    size_t required = (size_t)out_w * (size_t)out_h;
-    if (required > s_frame_pixels)
-    {
-        free(s_frame_buf);
-        s_frame_buf = heap_caps_malloc(required * sizeof(uint16_t),
-                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_frame_buf == NULL)
-        {
-            s_frame_pixels = 0;
-            return;
-        }
-        s_frame_pixels = required;
-    }
-
-    memset(s_frame_buf, 0, required * sizeof(uint16_t));
-    int copy_w = w < out_w ? w : out_w;
-    int copy_h = h < out_h ? h : out_h;
+    int copy_w = (int)width < out_w ? (int)width : out_w;
+    int copy_h = (int)height < out_h ? (int)height : out_h;
     int offset_x = (out_w - copy_w) / 2;
     int offset_y = (out_h - copy_h) / 2;
 
-    for (int y = 0; y < copy_h; y++)
+    for (int i = 0; i < 256; i++)
     {
-        const uint32_t *srow = src + (size_t)y * w;
-        uint16_t *drow = s_frame_buf + (size_t)(y + offset_y) * out_w + offset_x;
-        for (int x = 0; x < copy_w; x++)
+        const uint8_t *color = palette_rgba + i * 4;
+        uint8_t r = color[0];
+        uint8_t g = color[1];
+        uint8_t b = color[2];
+        palette_rgb565[i] =
+            (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    }
+
+    return display_host_present_indexed8_region(
+        pixels, palette_rgb565, offset_x, offset_y, (uint32_t)copy_w,
+        (uint32_t)copy_h, pitch_bytes);
+}
+
+#ifdef LAVA_DISPLAY_DUAL_CORE
+
+#define LAVA_DISPLAY_FRAME_SLOTS 2
+#define LAVA_DISPLAY_SLOT_FREE 0
+#define LAVA_DISPLAY_SLOT_FILLING 1
+#define LAVA_DISPLAY_SLOT_PENDING 2
+#define LAVA_DISPLAY_SLOT_ACTIVE 3
+
+typedef struct
+{
+    uint8_t *pixels;
+    uint8_t palette_rgba[256 * 4];
+    uint32_t width;
+    uint32_t height;
+    uint8_t state;
+} LavaDisplayFrameSlot;
+
+static LavaDisplayFrameSlot s_display_slots[LAVA_DISPLAY_FRAME_SLOTS];
+static portMUX_TYPE s_display_mux = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t s_display_task;
+static size_t s_display_slot_capacity;
+static uint8_t s_display_async_ready;
+static uint8_t s_display_async_failed;
+
+static void lava_display_task(void *argument)
+{
+    (void)argument;
+    printf("[LAVA][DISPLAY] worker core=%d\n", xPortGetCoreID());
+    for (;;)
+    {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        for (;;)
         {
-            uint32_t p = srow[x];
-            uint8_t r = p & 0xFF;
-            uint8_t g = (p >> 8) & 0xFF;
-            uint8_t b = (p >> 16) & 0xFF;
-            drow[x] = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+            int slot_index = -1;
+            portENTER_CRITICAL(&s_display_mux);
+            for (int i = 0; i < LAVA_DISPLAY_FRAME_SLOTS; i++)
+            {
+                if (s_display_slots[i].state == LAVA_DISPLAY_SLOT_PENDING)
+                {
+                    s_display_slots[i].state = LAVA_DISPLAY_SLOT_ACTIVE;
+                    slot_index = i;
+                    break;
+                }
+            }
+            portEXIT_CRITICAL(&s_display_mux);
+            if (slot_index < 0)
+                break;
+
+            LavaDisplayFrameSlot *slot = &s_display_slots[slot_index];
+            (void)present_indexed_frame_sync(
+                slot->pixels, slot->width, slot->height, slot->width,
+                slot->palette_rgba);
+
+            portENTER_CRITICAL(&s_display_mux);
+            slot->state = LAVA_DISPLAY_SLOT_FREE;
+            portEXIT_CRITICAL(&s_display_mux);
         }
     }
-    display_host_present_rgb565(s_frame_buf, (uint32_t)out_w, (uint32_t)out_h,
-                                (uint32_t)out_w * sizeof(uint16_t));
+}
+
+static int lava_display_async_init(size_t frame_bytes)
+{
+    if (s_display_async_ready)
+        return frame_bytes <= s_display_slot_capacity;
+    if (s_display_async_failed)
+        return 0;
+
+    for (int i = 0; i < LAVA_DISPLAY_FRAME_SLOTS; i++)
+    {
+        s_display_slots[i].pixels = heap_caps_malloc(
+            frame_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_display_slots[i].pixels == NULL)
+            s_display_slots[i].pixels = heap_caps_malloc(frame_bytes, MALLOC_CAP_8BIT);
+        if (s_display_slots[i].pixels == NULL)
+        {
+            for (int j = 0; j < i; j++)
+            {
+                heap_caps_free(s_display_slots[j].pixels);
+                s_display_slots[j].pixels = NULL;
+            }
+            s_display_async_failed = 1;
+            return 0;
+        }
+        s_display_slots[i].state = LAVA_DISPLAY_SLOT_FREE;
+    }
+
+    s_display_slot_capacity = frame_bytes;
+    if (xTaskCreatePinnedToCore(lava_display_task, "lava_display", 4096, NULL, 4,
+                                &s_display_task, 0) != pdPASS)
+    {
+        for (int i = 0; i < LAVA_DISPLAY_FRAME_SLOTS; i++)
+        {
+            heap_caps_free(s_display_slots[i].pixels);
+            s_display_slots[i].pixels = NULL;
+        }
+        s_display_async_failed = 1;
+        return 0;
+    }
+
+    s_display_async_ready = 1;
+    printf("[LAVA][DISPLAY] core0 async slots=%d frame_bytes=%u\n",
+           LAVA_DISPLAY_FRAME_SLOTS, (unsigned int)frame_bytes);
+    return 1;
+}
+
+#endif
+
+/* Runtime palette pixel: R | (G<<8) | (B<<16) | 0xFF000000. */
+int32_t lrt_present_indexed_frame(const uint8_t *pixels, uint32_t width,
+                                  uint32_t height, uint32_t pitch_bytes,
+                                  const uint8_t *palette_rgba)
+{
+    if (!pixels || !palette_rgba || width == 0 || height == 0 ||
+        pitch_bytes < width || height > SIZE_MAX / width)
+        return MIA_HOST_RESULT_INVALID_ARGUMENT;
+
+#ifdef LAVA_DISPLAY_DUAL_CORE
+    const size_t frame_bytes = (size_t)width * height;
+    if (s_display_async_ready && frame_bytes > s_display_slot_capacity)
+        return MIA_HOST_RESULT_INVALID_ARGUMENT;
+    if (lava_display_async_init(frame_bytes))
+    {
+        int slot_index = -1;
+        portENTER_CRITICAL(&s_display_mux);
+        for (int i = 0; i < LAVA_DISPLAY_FRAME_SLOTS; i++)
+        {
+            if (s_display_slots[i].state == LAVA_DISPLAY_SLOT_PENDING)
+            {
+                slot_index = i;
+                break;
+            }
+        }
+        if (slot_index < 0)
+        {
+            for (int i = 0; i < LAVA_DISPLAY_FRAME_SLOTS; i++)
+            {
+                if (s_display_slots[i].state == LAVA_DISPLAY_SLOT_FREE)
+                {
+                    slot_index = i;
+                    break;
+                }
+            }
+        }
+        if (slot_index >= 0)
+            s_display_slots[slot_index].state = LAVA_DISPLAY_SLOT_FILLING;
+        portEXIT_CRITICAL(&s_display_mux);
+
+        if (slot_index < 0)
+            return MIA_HOST_RESULT_OK;
+
+        LavaDisplayFrameSlot *slot = &s_display_slots[slot_index];
+        for (uint32_t row = 0; row < height; row++)
+            memcpy(slot->pixels + (size_t)row * width,
+                   pixels + (size_t)row * pitch_bytes, width);
+        memcpy(slot->palette_rgba, palette_rgba, sizeof(slot->palette_rgba));
+        slot->width = width;
+        slot->height = height;
+
+        portENTER_CRITICAL(&s_display_mux);
+        slot->state = LAVA_DISPLAY_SLOT_PENDING;
+        portEXIT_CRITICAL(&s_display_mux);
+        xTaskNotifyGive(s_display_task);
+        return MIA_HOST_RESULT_OK;
+    }
+#endif
+
+    return present_indexed_frame_sync(pixels, width, height, pitch_bytes, palette_rgba);
+}
+
+void lrt_refresh(void)
+{
+    LavaRuntime *rt = lrt_get_global();
+    if (!rt || !rt->index_buf || rt->screen_width <= 0 || rt->screen_height <= 0)
+        return;
+
+    (void)lrt_present_indexed_frame(
+        rt->index_buf, (uint32_t)rt->screen_width, (uint32_t)rt->screen_height,
+        (uint32_t)rt->screen_width, (const uint8_t *)rt->palette);
 }
 
 /* ==================== Input bridge ==================== */
@@ -114,7 +270,12 @@ static void push_lava_key(unsigned char key)
 
 void lrt_poll_keys(void)
 {
-    mia_host_buttons_poll();
+    int64_t now = esp_timer_get_time();
+    if (s_last_button_scan_us == 0 || now - s_last_button_scan_us >= 1000)
+    {
+        mia_host_buttons_poll();
+        s_last_button_scan_us = now;
+    }
 
     struct { uint8_t btn; unsigned char key; } map[] = {
         { MIA_HOST_BUTTON_UP,     LAVA_KEY_UP },

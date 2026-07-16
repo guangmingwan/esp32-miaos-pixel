@@ -181,6 +181,7 @@ struct tagLAVA_BATTLE_STATE
 
 void PAL_LavaBattlePrepareVisuals(LAVA_BATTLE_STATE *state);
 void PAL_LavaBattleFreeVisuals(void);
+addr PAL_LavaBattleGetPlayerAssetFile(void);
 void PAL_LavaBattleDrawSceneFrame(LAVA_BATTLE_STATE *state, int target_sel);
 void PAL_LavaBattleDrawEnemyTargetOverlay(LAVA_BATTLE_STATE *state, int target_sel);
 void PAL_LavaBattleClearKeepEffect(void);

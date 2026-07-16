@@ -89,8 +89,8 @@
 #define LAVA_BATTLE_ITEM_SUBMENU_USE 0
 #define LAVA_BATTLE_ITEM_SUBMENU_THROW 1
 #define LAVA_BATTLE_FLOAT_NUM_COUNT 8
-#define LAVA_BATTLE_FLOAT_NUM_FRAMES 10
-#define LAVA_BATTLE_FLOAT_NUM_FRAME_MS 40
+#define LAVA_BATTLE_FLOAT_NUM_FRAMES 6
+#define LAVA_BATTLE_FLOAT_NUM_FRAME_MS 25
 
 int PAL_BattleUIWaitForPlayerAction(LAVA_BATTLE_STATE *state);
 void PAL_BattleUIDrawFrame(LAVA_BATTLE_STATE *state, int ui_state, int target_sel, char *message);
@@ -1009,7 +1009,7 @@ static void PAL_BattleUIPlayPlayerAttackMotion(int player_index, int target)
          PAL_BattleUIApplyMagicHitFeedback(target, FALSE, FALSE, 1);
       }
       PAL_BattleUIRedrawRoundFrame(0);
-      Delay(step == 2 ? 70 : 45);
+      Delay(step == 2 ? 40 : 25);
       if (step == 2)
       {
          PAL_BattleUIClearMagicVisualState();
@@ -1053,7 +1053,7 @@ static void PAL_BattleUIPlayEnemyAttackMotion(int target)
          PAL_BattleUISetPartyPose(target, 4);
       }
       PAL_BattleUIRedrawRoundFrame(0);
-      Delay(step == 2 ? 70 : 45);
+      Delay(step == 2 ? 40 : 25);
       if (step == 2)
       {
          g_lava_battle_enemy_color_shift[enemy_index] = 0;
@@ -3409,16 +3409,16 @@ static int PAL_BattleUIFindMagicObjectByMagicNum(int magic_num)
 static void PAL_BattleUIPlaySummonSprite(int magic_object_id, int magic_num)
 {
    FILE *fp;
+   long decompressed_size;
+   long decompress_ret;
    int chunk;
    int frame_delay;
    int frame_index;
    int n;
    int play_frames;
-   int repeat;
    int speed;
    int step;
    int dump_step;
-   int old_hide_players;
    int saved_direct_screen;
    int x;
    int y;
@@ -3436,7 +3436,7 @@ static void PAL_BattleUIPlaySummonSprite(int magic_object_id, int magic_num)
       return;
    }
 
-   fp = UTIL_OpenFile("F.MKF");
+   fp = (FILE *)PAL_LavaBattleGetPlayerAssetFile();
    if (fp == 0)
    {
       if (PAL_BattleUIDebugMagicEffect())
@@ -3447,10 +3447,29 @@ static void PAL_BattleUIPlaySummonSprite(int magic_object_id, int magic_num)
       return;
    }
 
-   sprite = PAL_BattleUILoadMagicSpriteChunk(fp, chunk, "summon");
-   fclose(fp);
+   decompressed_size = PAL_BattleUIGetChunkDecompressedSize(fp, chunk);
+   if (decompressed_size <= 0)
+   {
+      if (PAL_BattleUIDebugMagicEffect())
+      {
+         printf("[LAVA][MAGICFX] summon bad size magic=%d chunk=%d unpacked=%ld\n",
+            magic_num, chunk, decompressed_size);
+      }
+      return;
+   }
+   sprite = (addr)malloc(decompressed_size);
    if (sprite == 0)
    {
+      printf("[LAVA][MAGICFX] summon alloc fail magic=%d chunk=%d bytes=%ld\n",
+         magic_num, chunk, decompressed_size);
+      return;
+   }
+   decompress_ret = PAL_MKFDecompressChunk(sprite, decompressed_size, chunk, fp);
+   if (!PAL_LavaDecompressOK(decompress_ret, decompressed_size))
+   {
+      printf("[LAVA][MAGICFX] summon decompress fail magic=%d chunk=%d ret=%ld expected=%ld\n",
+         magic_num, chunk, decompress_ret, decompressed_size);
+      free((void *)sprite);
       return;
    }
 
@@ -3460,24 +3479,29 @@ static void PAL_BattleUIPlaySummonSprite(int magic_object_id, int magic_num)
       if (PAL_BattleUIDebugMagicEffect())
       {
          printf("[LAVA][MAGICFX] summon no frames magic=%d chunk=%d\n",
-            magic_num, chunk);
+             magic_num, chunk);
       }
+      free((void *)sprite);
       return;
    }
 
    x = 240 + PAL_BattleUIReadMagicSignedField(magic_num, 2);
    y = 165 + PAL_BattleUIReadMagicSignedField(magic_num, 3);
    speed = PAL_BattleUIReadMagicSignedField(magic_num, 5);
-   frame_delay = (speed + 5) * 10;
+   frame_delay = (speed + 5) * 5;
    if (frame_delay < 10)
    {
       frame_delay = 10;
    }
-   if (frame_delay > 120)
+   if (frame_delay > 60)
    {
-      frame_delay = 120;
+      frame_delay = 60;
    }
-   play_frames = n;
+   play_frames = n - 1;
+   if (play_frames <= 0)
+   {
+      play_frames = n;
+   }
    if (play_frames > 80)
    {
       play_frames = 80;
@@ -3495,10 +3519,11 @@ static void PAL_BattleUIPlaySummonSprite(int magic_object_id, int magic_num)
    {
       PAL_BattleUISetPartyColorShiftAll(step);
       PAL_BattleUIRedrawRoundFrame(0);
-      Delay(35);
+      Delay(20);
    }
 
    frame = (addr)PAL_SpriteGetFrame(sprite, 0);
+   g_lava_battle_hide_players = 1;
    for (step = 8; step >= 0; step -= 2)
    {
       PAL_BattleUIRedrawRoundFrame(0);
@@ -3509,35 +3534,34 @@ static void PAL_BattleUIPlaySummonSprite(int magic_object_id, int magic_num)
                y - PAL_RLEGetHeight((LPCBITMAPRLE)frame)), step);
       }
       VIDEO_UpdateScreen(0);
-      Delay(45);
+      Delay(25);
    }
 
    PAL_BattleUISetPartyColorShiftAll(0);
-   old_hide_players = g_lava_battle_hide_players;
-   g_lava_battle_hide_players = 1;
    dump_step = 0;
    for (frame_index = 0; frame_index < play_frames; frame_index++)
    {
-      repeat = frame_index == play_frames - 1 ? 4 : 1;
-      for (step = 0; step < repeat; step++)
+      PAL_BattleUIRedrawRoundFrame(0);
+      frame = (addr)PAL_SpriteGetFrame(sprite, frame_index);
+      if (frame != 0)
       {
-         PAL_BattleUIRedrawRoundFrame(0);
-         frame = (addr)PAL_SpriteGetFrame(sprite, frame_index);
-          if (frame != 0)
-          {
-             PAL_BattleUIDumpPersistentRawMagicFrameBMP(magic_object_id, magic_num,
-                chunk, dump_step, play_frames + 3, frame_index, frame, 0);
-             PAL_BattleUISetSummonHold(frame, x, y);
-             PAL_BattleUIBlitMagicFrameAt((LPCBITMAPRLE)frame, x, y);
-          }
-         VIDEO_UpdateScreen(0);
-         Delay(frame_delay);
-         dump_step++;
+         PAL_BattleUIDumpPersistentRawMagicFrameBMP(magic_object_id, magic_num,
+            chunk, dump_step, play_frames, frame_index, frame, 0);
+         PAL_BattleUISetSummonHold(frame, x, y);
+         PAL_BattleUIBlitMagicFrameAt((LPCBITMAPRLE)frame, x, y);
       }
-    }
-    g_lava_battle_hide_players = old_hide_players;
-    g_lava_direct_screen = saved_direct_screen;
-    if (g_lava_autotest_fengshen || PAL_BattleUIDebugMagicEffect())
+      VIDEO_UpdateScreen(0);
+      Delay(frame_delay);
+      dump_step++;
+   }
+   frame = (addr)PAL_SpriteGetFrame(sprite, n - 1);
+   if (frame != 0)
+   {
+      PAL_BattleUISetSummonHold(frame, x, y);
+   }
+   g_lava_direct_screen = saved_direct_screen;
+   free((void *)sprite);
+   if (g_lava_autotest_fengshen || PAL_BattleUIDebugMagicEffect())
    {
       printf("[LAVA][MAGICFX] summon done magic=%d chunk=%d\n", magic_num, chunk);
    }
@@ -3596,7 +3620,7 @@ static void PAL_BattleUIPlayMagicHitFeedback(int target, int target_is_player, i
    {
       PAL_BattleUIApplyMagicHitFeedback(target, target_is_player, from_enemy, step);
       PAL_BattleUIRedrawRoundFrame(0);
-      Delay(45);
+      Delay(25);
    }
    PAL_BattleUIClearMagicVisualState();
    PAL_BattleUIRedrawRoundFrame(0);
@@ -3688,15 +3712,14 @@ static void PAL_BattleUIPlayMagicSprite(int magic_object_id, int target, int tar
       }
       hide_players_for_summon = 1;
       old_hide_players = g_lava_battle_hide_players;
-      g_lava_battle_hide_players = 1;
       g_lava_battle_hide_cast_panels = 1;
+      PAL_LavaBattleApplyBackgroundShift(summon_bg_shift);
       PAL_BattleUIPlaySummonSprite(magic_object_id, magic_num);
       if (g_lava_autotest_fengshen || PAL_BattleUIDebugMagicEffect())
       {
          printf("[LAVA][MAGICFX] summon return obj=%d name='%s' magic=%d\n",
             magic_object_id, PAL_BattleUILogText(magic_name), magic_num);
       }
-      PAL_LavaBattleApplyBackgroundShift(summon_bg_shift);
       printf("[LAVA][MAGICFX] summon bg-shift=%d obj=%d name='%s' magic=%d\n",
          summon_bg_shift, magic_object_id, PAL_BattleUILogText(magic_name), magic_num);
       chain_magic_num = PAL_LavaFightReadMagicField(magic_num, 0);

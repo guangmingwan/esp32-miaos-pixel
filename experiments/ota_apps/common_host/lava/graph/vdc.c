@@ -1048,7 +1048,7 @@ static void showchar(int x, int y, unsigned int color, unsigned char* font_data,
 static void drawborderchar(int w, int h, unsigned int fgcolor, unsigned int border)
 {
 	int x, y;
-	unsigned int* p;
+	u32 *p;
 
 	/* 扫描每个字符像素 */
 	for (y = 1;y <= h;y++) {

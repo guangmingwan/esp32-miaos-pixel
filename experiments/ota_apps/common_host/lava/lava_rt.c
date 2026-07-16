@@ -87,6 +87,7 @@ static const byte lrt_mes_font[][8] = {
 
 /** 当前运行时上下文（单例模式） */
 static LavaRuntime *g_runtime = NULL;
+static void lrt_present_all(LavaRuntime *rt);
 
 /** 帮助面板显示状态 */
 static int g_keymap_overlay_visible = 0;
@@ -388,6 +389,7 @@ LavaRuntime* lrt_create(int width, int height, const byte *font_data)
         free(rt);
         return NULL;
     }
+    rt->owns_index_buf = 1;
 
     /* 设置裁剪区域 */
     g_screen_vdc.clip.x0 = 0;
@@ -425,6 +427,23 @@ LavaRuntime* lrt_get_global(void)
     return g_runtime;
 }
 
+int lrt_bind_index_buffer(LavaRuntime *rt, byte *pixels, int width, int height)
+{
+    if (!rt || !pixels || width != rt->screen_width || height != rt->screen_height) {
+        return -1;
+    }
+    if (rt->index_buf == pixels) {
+        return 0;
+    }
+    if (rt->owns_index_buf && rt->index_buf) {
+        free(rt->index_buf);
+    }
+    rt->index_buf = pixels;
+    rt->owns_index_buf = 0;
+    lrt_present_all(rt);
+    return 0;
+}
+
 void lrt_destroy(LavaRuntime *rt)
 {
     if (!rt) return;
@@ -434,10 +453,10 @@ void lrt_destroy(LavaRuntime *rt)
         g_screen_vdc.mem = NULL;
     }
 
-    if (rt->index_buf) {
+    if (rt->owns_index_buf && rt->index_buf) {
         free(rt->index_buf);
-        rt->index_buf = NULL;
     }
+    rt->index_buf = NULL;
 
     free(rt);
     g_runtime = NULL;
@@ -1830,7 +1849,12 @@ void lrt_delay(unsigned int ms)
 #ifdef _WIN32
     Sleep(ms);
 #else
-    usleep(ms * 1000);
+    while (ms > 0) {
+        unsigned int slice = ms > 5 ? 5 : ms;
+        lrt_poll_keys();
+        usleep(slice * 1000);
+        ms -= slice;
+    }
 #endif
 }
 

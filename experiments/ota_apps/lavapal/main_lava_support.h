@@ -1,12 +1,8 @@
 #ifndef MAIN_LAVA_SUPPORT_H
 #define MAIN_LAVA_SUPPORT_H
 
-#ifndef LAVA_NATIVE_COMPILED
 #define FILE char
 #define UINT long
-#else
-#define UINT unsigned int
-#endif
 
 #define PAL_POS long
 #define LPSPRITE addr
@@ -137,6 +133,10 @@ int g_lava_view_y;
 int g_lava_scene_ready;
 int g_lava_defer_scene_preview_draw;
 long g_lava_logic_frame_num;
+long g_lava_render_frame_num;
+int g_lava_run_logic_frame;
+int g_lava_walk_substep_pending;
+int g_lava_walk_substep_dir;
 long g_lava_scene_event_offset;
 long g_lava_scene_script_offset;
 char g_lava_scene_event_raw[5332 * 32];
@@ -154,6 +154,9 @@ int g_lava_dialog_location;
 int g_lava_dialog_icon_x;
 int g_lava_dialog_icon_y;
 int g_lava_dialog_replay_snapshot_valid;
+int g_lava_pending_enter_tail_script;
+int g_lava_defer_enter_tail_after_dialog;
+int g_lava_suppress_trigger_visual_events;
 int g_lava_intro_obj9_probe_active;
 int g_lava_dialog_replay_scene_first;
 int g_lava_dialog_replay_scene_last;
@@ -258,6 +261,7 @@ int g_lava_sprites_to_draw_count;
 
 #define FPS 10
 #define FRAME_TIME (1000 / FPS)
+#define RENDER_FRAME_TIME 55
 #define MAINMENU_BACKGROUND_FBPNUM (gConfig.fIsWIN95 ? 2 : 60)
 #define MAINMENU_LABEL_NEWGAME 7
 #define MAINMENU_LABEL_LOADGAME 8
@@ -315,6 +319,13 @@ int PAL_StartBattle(WORD wEnemyTeam, BOOL fIsBoss);
 SDL_Color g_lava_palette_cache[256];
 char g_lava_fbp_buf[64000];
 char g_lava_sprite_buf[65536];
+#define LAVA_MGO_SPRITE_CACHE_SLOTS 32
+char g_lava_mgo_sprite_cache[LAVA_MGO_SPRITE_CACHE_SLOTS][65536];
+int g_lava_mgo_sprite_cache_num[LAVA_MGO_SPRITE_CACHE_SLOTS];
+DWORD g_lava_mgo_sprite_cache_stamp[LAVA_MGO_SPRITE_CACHE_SLOTS];
+DWORD g_lava_mgo_sprite_cache_clock;
+char g_lava_ui_sprite_buf[65536];
+int g_lava_ui_sprite_ready;
 int g_lava_chase_range = 1;
 int g_lava_chase_speed_change_cycles = 0;
 DWORD g_lava_mkf_read_offset;
@@ -608,6 +619,10 @@ int g_lava_msg_file_is_gb2312;
 int g_lava_word_file_is_gb2312;
 char g_lava_msg_buf[1024];
 char g_lava_word_buf[64];
+#define LAVA_WORD_FILE_CACHE_SIZE (256 * 1024)
+char g_lava_word_file_cache[LAVA_WORD_FILE_CACHE_SIZE];
+long g_lava_word_file_cache_bytes;
+int g_lava_word_file_cache_ready;
 char g_lava_desc_buf[256];
 char g_lava_font_ascii[1536];
 char g_lava_font_map[36000];
@@ -629,17 +644,8 @@ int g_lava_font_pair_map_count;
 char g_lava_word_utf8_buf[128];
 char g_lava_desc_utf8_buf[512];
 #endif
-#ifdef LAVA_ESP32
-#define LAVA_PERM_HEAP_SIZE (512 * 1024)
-#define LAVA_TMP_HEAP_SIZE (256 * 1024)
-char *g_lava_perm_heap;
-char *g_lava_tmp_heap;
-#else
-#define LAVA_PERM_HEAP_SIZE ((int)sizeof(g_lava_perm_heap))
-#define LAVA_TMP_HEAP_SIZE ((int)sizeof(g_lava_tmp_heap))
 char g_lava_perm_heap[4];
 char g_lava_tmp_heap[4];
-#endif
 int g_lava_perm_heap_pos;
 int g_lava_tmp_heap_pos;
 char g_lava_font_offset_x[1];
@@ -714,7 +720,6 @@ static int PAL_LavaFseekOK(FILE *fp, long offset, int origin)
 
 #define PAL_LAVA_KEY_LAST_MAGIC 0x1F
 #define PAL_LAVA_KEY_BEST_MAGIC 0x19
-#define PAL_LAVA_SHORTCUT_RELEASE_FRAMES 12
 
 #define YJ1_Decompress YJOne_Decompress
 #define YJ2_Decompress YJTwo_Decompress
@@ -944,6 +949,7 @@ static void PAL_LavaResetPartyTrail(void)
 {
    int i;
 
+   g_lava_walk_substep_pending = 0;
    for (i = 0; i < 5; i++)
    {
       g_lava_party_trail_x[i] = g_lava_party_x;
@@ -995,8 +1001,10 @@ static void PAL_LavaApplyPartyStepDelta(int step_x, int step_y)
    }
 }
 
-static int PAL_LavaMovePartyStep(int move_dir)
+static int PAL_LavaMovePartyStepDistance(int move_dir, int divisor, int lookahead)
 {
+   int collision_x;
+   int collision_y;
    int dx;
    int dy;
    int next_x;
@@ -1033,15 +1041,25 @@ static int PAL_LavaMovePartyStep(int move_dir)
       return 0;
    }
 
+   if (divisor > 1)
+   {
+      dx = dx < 0 ? -10 : 10;
+      dy = dy < 0 ? -5 : 5;
+   }
+
    next_x = g_lava_party_x + dx;
    next_y = g_lava_party_y + dy;
-   if (PAL_LavaTileBlocked(next_x, next_y) || PAL_LavaEventBlocked(next_x, next_y, 0))
+   collision_x = lookahead ? next_x + dx : next_x;
+   collision_y = lookahead ? next_y + dy : next_y;
+   if (PAL_LavaTileBlocked(collision_x, collision_y) ||
+       PAL_LavaEventBlocked(collision_x, collision_y, 0))
    {
-      if (PAL_LavaTouchSceneAt(next_x, next_y))
+      if (PAL_LavaTouchSceneAt(collision_x, collision_y))
       {
          return -1;
       }
-      printf("[LAVA][BLOCK] next=(%d,%d) dir=%d\n", next_x, next_y, g_lava_party_direction);
+      printf("[LAVA][BLOCK] next=(%d,%d) dir=%d\n",
+         collision_x, collision_y, g_lava_party_direction);
       PAL_LavaUpdateViewport();
       PAL_LavaDrawSceneFrame();
       return 0;
@@ -1064,6 +1082,16 @@ static int PAL_LavaMovePartyStep(int move_dir)
    }
 
    return 1;
+}
+
+static int PAL_LavaMovePartyStep(int move_dir)
+{
+   return PAL_LavaMovePartyStepDistance(move_dir, 1, 0);
+}
+
+static int PAL_LavaMovePartySubstep(int move_dir, int lookahead)
+{
+   return PAL_LavaMovePartyStepDistance(move_dir, 2, lookahead);
 }
 
 static void PAL_LavaWalkPartyToTargetSpeed(int target_x, int target_y, int speed_x, int speed_y, char *op_name)
@@ -3030,6 +3058,16 @@ static addr PAL_LavaSceneEventData(int object_id)
    return (addr)(g_lava_scene_event_raw + (object_id - 1) * 32);
 }
 
+static void PAL_LavaSetRoleSpriteNum(int role, int sprite_num)
+{
+   if (role < 0 || role >= 6)
+   {
+      return;
+   }
+
+   PAL_LavaWriteU16((addr)g_lava_data_buf, 12 * 2 + role * 2, sprite_num);
+}
+
 static void PAL_LavaRebuildSceneAutoscriptRuntime(void)
 {
    int object_id;
@@ -3671,14 +3709,7 @@ addr PAL_PermAlloc(int size)
 
    if (size <= 0) return 0;
    aligned = (size + 3) & ~3;
-   heap_limit = LAVA_PERM_HEAP_SIZE;
-#ifdef LAVA_ESP32
-   if (g_lava_perm_heap == 0)
-   {
-      g_lava_perm_heap = PAL_MEM_ALLOC(heap_limit);
-      if (g_lava_perm_heap == 0) return 0;
-   }
-#endif
+   heap_limit = (int)sizeof(g_lava_perm_heap);
    if (g_lava_perm_heap_pos > heap_limit - aligned) return 0;
    p = (addr)(g_lava_perm_heap + g_lava_perm_heap_pos);
    g_lava_perm_heap_pos += aligned;
@@ -3716,14 +3747,7 @@ addr PAL_TmpAlloc(int size)
 
    if (size <= 0) return 0;
    aligned = (size + 3) & ~3;
-   heap_limit = LAVA_TMP_HEAP_SIZE;
-#ifdef LAVA_ESP32
-   if (g_lava_tmp_heap == 0)
-   {
-      g_lava_tmp_heap = PAL_MEM_ALLOC(heap_limit);
-      if (g_lava_tmp_heap == 0) return 0;
-   }
-#endif
+   heap_limit = (int)sizeof(g_lava_tmp_heap);
    if (g_lava_tmp_heap_pos > heap_limit - aligned) return 0;
    p = (addr)(g_lava_tmp_heap + g_lava_tmp_heap_pos);
    g_lava_tmp_heap_pos += aligned;
@@ -3882,6 +3906,7 @@ void PAL_FreeUI(void)
 
 int PAL_InitText(void)
 {
+    long word_file_size;
     int count;
     int i;
     FILE *fp;
@@ -3892,6 +3917,8 @@ int PAL_InitText(void)
     g_lava_fpDESC = 0;
     g_lava_msg_file_is_gb2312 = 0;
     g_lava_word_file_is_gb2312 = 0;
+    g_lava_word_file_cache_bytes = 0;
+    g_lava_word_file_cache_ready = 0;
 
     fp = UTIL_OpenRequiredFile("M_GB2312.MSG");
     if (fp != 0)
@@ -3904,6 +3931,23 @@ int PAL_InitText(void)
     if (fp != 0)
     {
        g_lava_word_file_is_gb2312 = 1;
+       fclose(fp);
+    }
+    fp = g_lava_word_file_is_gb2312 ?
+       UTIL_OpenFile("WORD_GB2312.DAT") : UTIL_OpenRequiredFile("WORD.DAT");
+    if (fp != 0)
+    {
+       fseek(fp, 0, SEEK_END);
+       word_file_size = ftell(fp);
+       if (word_file_size > 0 && word_file_size <= LAVA_WORD_FILE_CACHE_SIZE &&
+           PAL_LavaFseekOK(fp, 0, SEEK_SET) &&
+           fread((addr)g_lava_word_file_cache, 1, word_file_size, fp) == word_file_size)
+       {
+          g_lava_word_file_cache_bytes = word_file_size;
+          g_lava_word_file_cache_ready = 1;
+          printf("[LAVA][WORD] cached=%ld bytes sample295='%s'\n",
+             word_file_size, PAL_LavaReadWord(295));
+       }
        fclose(fp);
     }
     fp = UTIL_OpenRequiredFile("desc_gb2312.dat");
@@ -4022,8 +4066,6 @@ void PAL_ProcessEvent(void)
    int last_hold_right;
    static DWORD last_hold;
    static DWORD last_press;
-   static int last_shortcut_action;
-   static int last_shortcut_idle_frames;
 
    last_hold_up = (g_lava_key_hold & kKeyUp) != 0;
    last_hold_down = (g_lava_key_hold & kKeyDown) != 0;
@@ -4103,41 +4145,15 @@ void PAL_ProcessEvent(void)
        g_InputState.dwKeyPress |= kKeyMenu;
    else if (key == PAL_LAVA_KEY_LAST_MAGIC || key == 'x' || key == 'X' || key == 'p' || key == 'P')
    {
-      if (last_shortcut_action != kKeyForce)
-      {
-         g_InputState.dwKeyPress |= kKeyForce;
-         printf("[LAVA][HOTKEY] input key=%d action=last press=%ld\n",
-            key, (long)g_InputState.dwKeyPress);
-      }
-      last_shortcut_action = kKeyForce;
-      last_shortcut_idle_frames = 0;
+      g_InputState.dwKeyPress |= kKeyForce;
+      printf("[LAVA][HOTKEY] input key=%d action=last press=%ld\n",
+         key, (long)g_InputState.dwKeyPress);
    }
    else if (key == PAL_LAVA_KEY_BEST_MAGIC || key == 'y' || key == 'Y' || key == 'o' || key == 'O')
    {
-      if (last_shortcut_action != kKeyUseItem)
-      {
-         g_InputState.dwKeyPress |= kKeyUseItem;
-         printf("[LAVA][HOTKEY] input key=%d action=best press=%ld\n",
-            key, (long)g_InputState.dwKeyPress);
-      }
-      last_shortcut_action = kKeyUseItem;
-      last_shortcut_idle_frames = 0;
-   }
-   else if (key == 0)
-   {
-      if (last_shortcut_idle_frames < PAL_LAVA_SHORTCUT_RELEASE_FRAMES)
-      {
-         last_shortcut_idle_frames++;
-      }
-      else
-      {
-         last_shortcut_action = 0;
-      }
-   }
-   else
-   {
-      last_shortcut_action = 0;
-      last_shortcut_idle_frames = PAL_LAVA_SHORTCUT_RELEASE_FRAMES;
+      g_InputState.dwKeyPress |= kKeyUseItem;
+      printf("[LAVA][HOTKEY] input key=%d action=best press=%ld\n",
+         key, (long)g_InputState.dwKeyPress);
    }
 
     if (g_lava_autotest_input &&
@@ -5656,7 +5672,24 @@ static void PAL_LavaRunPendingDialog(void)
     if (!suppress_trailing_visuals)
     {
        PAL_LavaDrawSceneFrame();
-    }
+   }
+}
+
+static int PAL_LavaEnterScriptCollectsDialogOp(long op)
+{
+   return op == 0x0005 || op == 0x003C || op == 0x003D || op == 0xFFFF;
+}
+
+static void PAL_LavaRunPendingEnterTail(void)
+{
+   if (g_lava_pending_enter_tail_script <= 0)
+   {
+      return;
+   }
+
+   printf("[LAVA][ENTER] discard deferred tail idx=%d\n",
+      g_lava_pending_enter_tail_script);
+   g_lava_pending_enter_tail_script = 0;
 }
 
 static void PAL_LavaRunPendingSceneEnter(void)
@@ -5677,7 +5710,9 @@ static void PAL_LavaRunPendingSceneEnter(void)
 
    printf("[LAVA][SCENE] enter=%d\n", enter_script);
    PAL_LavaDumpScriptEntry(enter_script - 1);
+   g_lava_defer_enter_tail_after_dialog = 1;
    PAL_LavaRunEnterScript(enter_script);
+   g_lava_defer_enter_tail_after_dialog = 0;
    PAL_LavaUpdateViewport();
    if (g_lava_gpGlobals.fNeedToFadeIn)
    {
@@ -5691,6 +5726,7 @@ static void PAL_LavaRunPendingSceneEnter(void)
       g_lava_gpGlobals.fNeedToFadeIn = FALSE;
    }
    PAL_LavaRunPendingDialog();
+   PAL_LavaRunPendingEnterTail();
    PAL_ClearKeyState();
 }
 
@@ -5791,6 +5827,7 @@ static void PAL_LavaRunEnterScript(int script_index)
    int started;
    int enter_idle;
    int next_enter;
+   int scene_changed;
    int target_x;
    int target_y;
    int x_offset;
@@ -5804,6 +5841,7 @@ static void PAL_LavaRunEnterScript(int script_index)
    started = 0;
    enter_idle = 0;
    next_enter = script_index;
+   scene_changed = 0;
    PAL_LavaCaptureDialogReplaySnapshot();
    g_lava_dialog_event_count = 0;
    while (steps < 256)
@@ -5822,6 +5860,17 @@ static void PAL_LavaRunEnterScript(int script_index)
       a = PAL_LavaReadU16((addr)entry, 2);
       b = PAL_LavaReadU16((addr)entry, 4);
       c = PAL_LavaReadU16((addr)entry, 6);
+
+      if (g_lava_defer_enter_tail_after_dialog && dialog_started &&
+          !PAL_LavaEnterScriptCollectsDialogOp(op))
+      {
+         started = 1;
+         g_lava_pending_enter_tail_script = idx;
+         next_enter = idx;
+         printf("[LAVA][ENTER] defer tail idx=%d op=%d a=%d b=%d c=%d\n",
+            idx, (int)op, (int)a, (int)b, (int)c);
+         break;
+      }
 
       if (op == 0)
       {
@@ -6063,8 +6112,7 @@ static void PAL_LavaRunEnterScript(int script_index)
             g_lava_defer_scene_preview_draw = 1;
             PAL_LavaSetScene((int)a);
             g_lava_defer_scene_preview_draw = 0;
-            next_enter = idx + 2;
-            break;
+            scene_changed = 1;
          }
          idx++;
          next_enter = idx + 1;
@@ -6105,11 +6153,24 @@ static void PAL_LavaRunEnterScript(int script_index)
        }
       else if (op == 0x0065)
       {
+         int party_index;
+
          started = 1;
          if (a >= 0 && a < 6)
          {
-            PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_PARTY_SPRITE, (int)a, (int)b, 0);
-            g_lava_player_sprite_num[a] = b;
+            PAL_LavaSetRoleSpriteNum((int)a, (int)b);
+            for (party_index = 0; party_index < g_lava_party_count && party_index < 3; party_index++)
+            {
+               if (g_lava_party_role[party_index] == (int)a)
+               {
+                  PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_PARTY_SPRITE, party_index, (int)b, 0);
+                  g_lava_player_sprite_num[party_index] = b;
+               }
+            }
+            if (c != 0)
+            {
+               PAL_LavaRefreshPartySprites();
+            }
          }
          idx++;
          next_enter = idx + 1;
@@ -6292,13 +6353,6 @@ static void PAL_LavaRunEnterScript(int script_index)
          idx++;
          next_enter = idx + 1;
       }
-      else if (dialog_started)
-      {
-         started = 1;
-         printf("[LAVA][ENTER] stop at unknown op=%d a=%d b=%d c=%d (dialog mode)\n",
-            (int)op, (int)a, (int)b, (int)c);
-         break;
-      }
       else
       {
          started = 1;
@@ -6311,7 +6365,10 @@ static void PAL_LavaRunEnterScript(int script_index)
        steps++;
     }
 
-    PAL_LavaSetActiveSceneEnterScript(next_enter);
+    if (!scene_changed)
+    {
+       PAL_LavaSetActiveSceneEnterScript(next_enter);
+    }
     printf("[LAVA][DIALOG] collected events=%d\n", g_lava_dialog_event_count);
    printf("[LAVA][SCRIPT] applied party_count=%d role0=%d sprite0=%d pos=(%d,%d) dir=%d frame=%d\n",
       g_lava_party_count, g_lava_party_role[0], g_lava_player_sprite_num[0],
@@ -6629,6 +6686,51 @@ static int PAL_LavaRememberMgoFrameMetric(int sprite_num, int frame_num, int wid
    return slot;
 }
 
+static addr PAL_LavaGetCachedMgoSprite(int sprite_num)
+{
+   int i;
+   int slot;
+
+   if (sprite_num <= 0 || g_lava_fpMGO == 0)
+   {
+      return 0;
+   }
+
+   g_lava_mgo_sprite_cache_clock++;
+   if (g_lava_mgo_sprite_cache_clock == 0)
+   {
+      g_lava_mgo_sprite_cache_clock = 1;
+   }
+   slot = -1;
+   for (i = 0; i < LAVA_MGO_SPRITE_CACHE_SLOTS; i++)
+   {
+      if (g_lava_mgo_sprite_cache_num[i] == sprite_num)
+      {
+         g_lava_mgo_sprite_cache_stamp[i] = g_lava_mgo_sprite_cache_clock;
+         return (addr)g_lava_mgo_sprite_cache[i];
+      }
+      if (slot < 0 || g_lava_mgo_sprite_cache_num[i] == 0 ||
+          g_lava_mgo_sprite_cache_stamp[i] < g_lava_mgo_sprite_cache_stamp[slot])
+      {
+         slot = i;
+         if (g_lava_mgo_sprite_cache_num[i] == 0)
+         {
+            break;
+         }
+      }
+   }
+
+   if (slot < 0 || PAL_MKFDecompressChunk((addr)g_lava_mgo_sprite_cache[slot], 65536,
+       sprite_num, (FILE *)g_lava_fpMGO) < 0)
+   {
+      return 0;
+   }
+   g_lava_mgo_sprite_cache_num[slot] = sprite_num;
+   g_lava_mgo_sprite_cache_stamp[slot] = g_lava_mgo_sprite_cache_clock;
+   g_lava_dbg_mgo_decompresses++;
+   return (addr)g_lava_mgo_sprite_cache[slot];
+}
+
 static int PAL_LavaMapTileHeight(int x, int y, int h, int layer)
 {
    long tile;
@@ -6753,6 +6855,7 @@ static int PAL_LavaDrawSceneEventObject(int object_id, int view_x, int view_y)
    int metric;
    int width;
    int height;
+   addr sprite;
    LPCBITMAPRLE frame_rle;
    int screen_x;
    int screen_y;
@@ -6798,13 +6901,12 @@ static int PAL_LavaDrawSceneEventObject(int object_id, int view_x, int view_y)
    metric = PAL_LavaFindMgoFrameMetric(sprite_num, frame);
    if (metric < 0)
    {
-      if (PAL_MKFDecompressChunk((addr)g_lava_sprite_buf, sizeof(g_lava_sprite_buf),
-          sprite_num, (FILE *)g_lava_fpMGO) < 0)
-      {
-         return 0;
-      }
-      g_lava_dbg_mgo_decompresses++;
-      frame_rle = PAL_SpriteGetFrame((addr)g_lava_sprite_buf, frame);
+       sprite = PAL_LavaGetCachedMgoSprite(sprite_num);
+       if (sprite == 0)
+       {
+          return 0;
+       }
+       frame_rle = PAL_SpriteGetFrame(sprite, frame);
       if (frame_rle == 0)
       {
          return 0;
@@ -6876,6 +6978,7 @@ static void PAL_LavaDrawPartyLeader(void)
    int height;
    int x;
    int y;
+   addr sprite;
 
    sprite_num = g_lava_player_sprite_num[0];
    frame_count = g_lava_player_walk_frames[0];
@@ -6890,12 +6993,11 @@ static void PAL_LavaDrawPartyLeader(void)
       g_lava_party_frame %= frame_count;
    }
 
-   if (PAL_MKFDecompressChunk((addr)g_lava_sprite_buf, sizeof(g_lava_sprite_buf),
-       sprite_num, (FILE *)g_lava_fpMGO) < 0) return;
-   g_lava_dbg_mgo_decompresses++;
+   sprite = PAL_LavaGetCachedMgoSprite(sprite_num);
+   if (sprite == 0) return;
 
    frame = g_lava_party_direction * frame_count + g_lava_party_frame;
-   frame_rle = PAL_SpriteGetFrame((addr)g_lava_sprite_buf, frame);
+   frame_rle = PAL_SpriteGetFrame(sprite, frame);
    if (frame_rle == 0) return;
 
    width = PAL_LavaRLEWidth(frame_rle);
@@ -6913,8 +7015,6 @@ static void PAL_LavaDrawPartyLeader(void)
 static void PAL_LavaDrawPartyFollowers(void)
 {
     int i;
-    long sprite_size;
-    long sprite_ret;
 
     for (i = 1; i < g_lava_party_count && i < 3; i++)
     {
@@ -6930,21 +7030,15 @@ static void PAL_LavaDrawPartyFollowers(void)
       int base_y;
       int base_dir;
       int frame_dir;
+      addr sprite;
 
       sprite_num = g_lava_player_sprite_num[i];
       frame_count = g_lava_player_walk_frames[i];
       if (sprite_num <= 0) continue;
       if (frame_count <= 0) frame_count = 3;
 
-      sprite_size = PAL_MKFGetChunkSize(sprite_num, (FILE *)g_lava_fpMGO);
-      if (sprite_size <= 0 || sprite_size > 65536) continue;
-      if (PAL_MKFReadChunk((addr)g_lava_mkf_buf, sprite_size,
-          sprite_num, (FILE *)g_lava_fpMGO) < 0) continue;
-      PAL_TmpReset();
-      sprite_ret = Decompress((addr)g_lava_mkf_buf, (addr)g_lava_sprite_buf,
-         sizeof(g_lava_sprite_buf));
-      if (sprite_ret < 0) continue;
-      g_lava_dbg_mgo_decompresses++;
+       sprite = PAL_LavaGetCachedMgoSprite(sprite_num);
+       if (sprite == 0) continue;
 
       base_x = g_lava_party_trail_x[1];
       base_y = g_lava_party_trail_y[1];
@@ -6962,7 +7056,7 @@ static void PAL_LavaDrawPartyFollowers(void)
       }
 
       frame = frame_dir * frame_count + g_lava_party_frame;
-      frame_rle = PAL_SpriteGetFrame((addr)g_lava_sprite_buf, frame);
+       frame_rle = PAL_SpriteGetFrame(sprite, frame);
       if (frame_rle == 0) continue;
 
       width = PAL_LavaRLEWidth(frame_rle);
@@ -6994,25 +7088,19 @@ static void PAL_LavaDrawPartyFollowers(void)
          int f_x;
          int f_y;
          int trail_index;
+         addr f_sprite;
 
          f_sprite_num = g_lava_player_sprite_num[3 + i];
          f_frame_count = g_lava_player_walk_frames[3 + i];
          if (f_sprite_num <= 0) continue;
          if (f_frame_count <= 0) f_frame_count = 3;
 
-         sprite_size = PAL_MKFGetChunkSize(f_sprite_num, (FILE *)g_lava_fpMGO);
-         if (sprite_size <= 0 || sprite_size > 65536) continue;
-         if (PAL_MKFReadChunk((addr)g_lava_mkf_buf, sprite_size,
-             f_sprite_num, (FILE *)g_lava_fpMGO) < 0) continue;
-         PAL_TmpReset();
-         sprite_ret = Decompress((addr)g_lava_mkf_buf, (addr)g_lava_sprite_buf,
-            sizeof(g_lava_sprite_buf));
-         if (sprite_ret < 0) continue;
-         g_lava_dbg_mgo_decompresses++;
+          f_sprite = PAL_LavaGetCachedMgoSprite(f_sprite_num);
+          if (f_sprite == 0) continue;
 
          trail_index = 3 + i;
          f_frame = g_lava_party_trail_dir[trail_index] * f_frame_count + g_lava_party_frame;
-         f_frame_rle = PAL_SpriteGetFrame((addr)g_lava_sprite_buf, f_frame);
+          f_frame_rle = PAL_SpriteGetFrame(f_sprite, f_frame);
          if (f_frame_rle == 0) continue;
 
          f_width = PAL_LavaRLEWidth(f_frame_rle);
@@ -7050,15 +7138,17 @@ static void PAL_LavaDrawSceneFrame(void)
    LPCBITMAPRLE tmp_raw_frame;
    LPCBITMAPRLE frame_rle;
    LPSPRITE sprite;
-   int cached_sprite_num;
    int saved_direct_screen;
 
-   fp_mgo = UTIL_OpenRequiredFile("MGO.MKF");
+   if (g_lava_fpMGO == 0)
+   {
+      g_lava_fpMGO = (addr)UTIL_OpenRequiredFile("MGO.MKF");
+   }
+   fp_mgo = (FILE *)g_lava_fpMGO;
    saved_direct_screen = g_lava_direct_screen;
    g_lava_direct_screen = 1;
    ClearScreen();
    memset(g_screen_surface.pixels, 0, SCREEN_W * SCREEN_H);
-   g_lava_fpMGO = (addr)fp_mgo;
    g_lava_dbg_map_tiles_drawn = 0;
    g_lava_dbg_mgo_decompresses = 0;
    g_lava_sprites_to_draw_count = 0;
@@ -7066,15 +7156,12 @@ static void PAL_LavaDrawSceneFrame(void)
    PAL_LavaMapBlitLayer(g_lava_view_x, g_lava_view_y, 1);
 
    PAL_LavaDrawSceneActors(g_lava_view_x, g_lava_view_y);
-   cached_sprite_num = 0;
-
    for (i = 0; i < g_lava_sprites_to_draw_count - 1; i++)
    {
       for (j = 0; j < g_lava_sprites_to_draw_count - 1 - i; j++)
       {
-          if (g_lava_sprites_to_draw[j].y + g_lava_sprites_to_draw[j].layer >
-              g_lava_sprites_to_draw[j + 1].y + g_lava_sprites_to_draw[j + 1].layer)
-          {
+         if (g_lava_sprites_to_draw[j].y > g_lava_sprites_to_draw[j + 1].y)
+         {
             tmp_source_kind = g_lava_sprites_to_draw[j].source_kind;
             tmp_source_num = g_lava_sprites_to_draw[j].source_num;
             tmp_frame_num = g_lava_sprites_to_draw[j].frame_num;
@@ -7109,21 +7196,11 @@ static void PAL_LavaDrawSceneFrame(void)
       {
          frame_rle = g_lava_sprites_to_draw[i].raw_frame;
       }
-      else if (g_lava_sprites_to_draw[i].source_kind == LAVA_SPRITE_SOURCE_MGO)
-      {
-         if (cached_sprite_num != g_lava_sprites_to_draw[i].source_num)
-         {
-            if (fp_mgo == 0 || PAL_MKFDecompressChunk((addr)g_lava_sprite_buf, sizeof(g_lava_sprite_buf),
-                g_lava_sprites_to_draw[i].source_num, fp_mgo) < 0)
-            {
-               cached_sprite_num = 0;
-               continue;
-            }
-            cached_sprite_num = g_lava_sprites_to_draw[i].source_num;
-            g_lava_dbg_mgo_decompresses++;
-         }
-         sprite = (addr)g_lava_sprite_buf;
-         frame_rle = PAL_SpriteGetFrame(sprite, g_lava_sprites_to_draw[i].frame_num);
+       else if (g_lava_sprites_to_draw[i].source_kind == LAVA_SPRITE_SOURCE_MGO)
+       {
+          sprite = PAL_LavaGetCachedMgoSprite(g_lava_sprites_to_draw[i].source_num);
+          if (sprite == 0) continue;
+          frame_rle = PAL_SpriteGetFrame(sprite, g_lava_sprites_to_draw[i].frame_num);
       }
       if (frame_rle == 0)
       {
@@ -7135,11 +7212,6 @@ static void PAL_LavaDrawSceneFrame(void)
       PAL_RLEBlitToSurface(frame_rle, gpScreen, PAL_XY(screen_x, screen_y));
    }
 
-   if (fp_mgo != 0)
-   {
-      fclose(fp_mgo);
-   }
-   g_lava_fpMGO = 0;
    VIDEO_UpdateScreen(0);
    g_lava_direct_screen = saved_direct_screen;
 }
@@ -10009,16 +10081,23 @@ static addr PAL_LavaLoadUISprite(void)
     FILE *fp;
     long size;
 
+   if (g_lava_ui_sprite_ready)
+   {
+      return (addr)g_lava_ui_sprite_buf;
+   }
+
    fp = UTIL_OpenRequiredFile("DATA.MKF");
    if (fp == 0) return 0;
-   size = PAL_MKFReadChunk((addr)g_lava_mkf_buf, 65536, 9, fp);
+   size = PAL_MKFReadChunk((addr)g_lava_ui_sprite_buf,
+      sizeof(g_lava_ui_sprite_buf), 9, fp);
    fclose(fp);
    if (size <= 0)
    {
       return 0;
    }
 
-   return (addr)g_lava_mkf_buf;
+   g_lava_ui_sprite_ready = 1;
+   return (addr)g_lava_ui_sprite_buf;
 }
 
 static int PAL_LavaDrawSpriteBoxAt(addr sprite, int x, int y, int rows, int columns, int style)
@@ -10198,23 +10277,28 @@ static char *PAL_LavaReadWord(int word_id)
    }
 
    offset = word_id * LAVA_WORD_DAT_WIDTH;
-   fp = g_lava_word_file_is_gb2312 ?
-      UTIL_OpenFile("WORD_GB2312.DAT") : UTIL_OpenRequiredFile("WORD.DAT");
-   if (fp == 0)
+   if (g_lava_word_file_cache_ready &&
+       offset >= 0 && offset + LAVA_WORD_DAT_WIDTH <= g_lava_word_file_cache_bytes)
    {
-      return 0;
+      memcpy(g_lava_word_buf, g_lava_word_file_cache + offset,
+         LAVA_WORD_DAT_WIDTH);
    }
-   if (!PAL_LavaFseekOK(fp, offset, SEEK_SET))
+   else
    {
+      fp = g_lava_word_file_is_gb2312 ?
+         UTIL_OpenFile("WORD_GB2312.DAT") : UTIL_OpenRequiredFile("WORD.DAT");
+      if (fp == 0)
+      {
+         return 0;
+      }
+      if (!PAL_LavaFseekOK(fp, offset, SEEK_SET) ||
+          fread((addr)g_lava_word_buf, 1, LAVA_WORD_DAT_WIDTH, fp) != LAVA_WORD_DAT_WIDTH)
+      {
+         fclose(fp);
+         return 0;
+      }
       fclose(fp);
-      return 0;
    }
-   if (fread((addr)g_lava_word_buf, 1, LAVA_WORD_DAT_WIDTH, fp) != LAVA_WORD_DAT_WIDTH)
-   {
-      fclose(fp);
-      return 0;
-   }
-   fclose(fp);
 
    len = LAVA_WORD_DAT_WIDTH;
    while (len > 0 && g_lava_word_buf[len - 1] == ' ')
@@ -12228,8 +12312,8 @@ void PAL_LoadResources(void)
 void PAL_StartFrame(void)
 {
    int changed;
-   int dx;
-   int dy;
+   int finishing_step;
+   int run_logic;
    int move_dir;
    int dir_press;
    int dir_hold;
@@ -12238,9 +12322,12 @@ void PAL_StartFrame(void)
 
    if (g_lava_scene_enter_pending)
    {
+      g_lava_walk_substep_pending = 0;
       PAL_LavaRunPendingSceneEnter();
       return;
    }
+
+   run_logic = g_lava_run_logic_frame;
 
    dir_press = g_InputState.dwKeyPress & (kKeyDown | kKeyLeft | kKeyUp | kKeyRight);
    dir_hold = (g_lava_frame_hold | g_lava_key_hold) & (kKeyDown | kKeyLeft | kKeyUp | kKeyRight);
@@ -12281,7 +12368,25 @@ void PAL_StartFrame(void)
       return;
    }
 
-   changed = PAL_LavaMovePartyStep(move_dir);
+   finishing_step = g_lava_walk_substep_pending;
+   if (finishing_step)
+   {
+      changed = PAL_LavaMovePartySubstep(g_lava_walk_substep_dir, 0);
+      g_lava_walk_substep_pending = 0;
+   }
+   else if (move_dir != kDirUnknown)
+   {
+      changed = PAL_LavaMovePartySubstep(move_dir, 1);
+      if (changed > 0)
+      {
+         g_lava_walk_substep_pending = 1;
+         g_lava_walk_substep_dir = move_dir;
+      }
+   }
+   else
+   {
+      changed = 0;
+   }
    if (changed > 0)
    {
       if (g_lava_autotest_input)
@@ -12301,13 +12406,18 @@ void PAL_StartFrame(void)
       return;
    }
 
-    if (changed > 0 && g_lava_logic_frame_num >= g_lava_touch_cooldown_until_frame && PAL_LavaTouchScene())
+    if (changed > 0 && finishing_step &&
+        g_lava_logic_frame_num >= g_lava_touch_cooldown_until_frame &&
+        PAL_LavaTouchScene())
     {
        return;
     }
 
-   PAL_LavaTickSceneEventObjects();
-   PAL_LavaRunSceneAutoScripts();
+   if (run_logic)
+   {
+      PAL_LavaTickSceneEventObjects();
+      PAL_LavaRunSceneAutoScripts();
+   }
    PAL_LavaUpdateViewport();
    PAL_LavaDrawSceneFrame();
 }
@@ -12321,6 +12431,8 @@ void PAL_StartFrame(void)
 
 void PAL_GameMain(void)
 {
+   DWORD dwLogicTime;
+   DWORD dwNow;
    DWORD dwTime;
 
    PAL_LavaInitAutotestFlags();
@@ -12475,6 +12587,7 @@ void PAL_GameMain(void)
     }
 
     dwTime = SDL_GetTicks();
+    dwLogicTime = dwTime;
    while (TRUE)
    {
       if (g_lava_shutdown_requested)
@@ -12483,12 +12596,19 @@ void PAL_GameMain(void)
       }
       PAL_LoadResources();
       PAL_ClearKeyState();
-      PAL_DelayUntil(dwTime);
-      PAL_ProcessEvent();
-      dwTime = SDL_GetTicks() + FRAME_TIME;
-      g_lava_logic_frame_num++;
-      PAL_StartFrame();
-      if (g_lava_autotest_input)
+       PAL_DelayUntil(dwTime);
+       PAL_ProcessEvent();
+        dwNow = SDL_GetTicks();
+        dwTime = dwNow + RENDER_FRAME_TIME;
+        g_lava_render_frame_num++;
+        g_lava_run_logic_frame = (int)(dwNow - dwLogicTime) >= 0;
+        if (g_lava_run_logic_frame)
+        {
+           g_lava_logic_frame_num++;
+           dwLogicTime = dwNow + FRAME_TIME;
+        }
+        PAL_StartFrame();
+        if (g_lava_autotest_input && g_lava_run_logic_frame)
       {
          g_lava_autotest_input_step++;
       }

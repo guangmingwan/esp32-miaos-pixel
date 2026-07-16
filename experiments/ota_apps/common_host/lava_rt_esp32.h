@@ -58,6 +58,10 @@
 /* LavaX runtime types + lrt_* declarations */
 #include "lava/lava_rt.h"
 
+int32_t lrt_present_indexed_frame(const uint8_t *pixels, uint32_t width,
+                                  uint32_t height, uint32_t pitch_bytes,
+                                  const uint8_t *palette_rgba);
+
 /* ==================== LavaX type aliases used by game shim ==================== */
 typedef uint8_t  lava_char;
 typedef int16_t  lava_int;

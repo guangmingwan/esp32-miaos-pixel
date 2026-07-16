@@ -103,6 +103,8 @@ static void game_task(void *argument) {
 
 void app_main(void) {
     ESP_ERROR_CHECK(host_platform_init());
+    display_host_backlight_set(0);
+    display_host_fill_screen_rgb565(0);
     display_host_backlight_set(1);
     xTaskCreatePinnedToCore(game_task, "lava_pal", 65536, NULL, 5, NULL, 1);
 }

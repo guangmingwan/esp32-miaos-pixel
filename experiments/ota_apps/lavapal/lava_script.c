@@ -551,8 +551,11 @@ static long PAL_LavaRunTriggerScript(long script_index, int object_id)
                 {
                    PAL_LavaWriteU16(evt, 22, (int)b);
                 }
-                PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_POSE,
-                   object_id, PAL_LavaReadU16(evt, 20), PAL_LavaReadU16(evt, 22));
+               if (!g_lava_suppress_trigger_visual_events)
+               {
+                  PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_POSE,
+                     object_id, PAL_LavaReadU16(evt, 20), PAL_LavaReadU16(evt, 22));
+               }
              }
           }
           idx++;
@@ -639,8 +642,11 @@ static long PAL_LavaRunTriggerScript(long script_index, int object_id)
              {
                 PAL_LavaWriteU16(evt, 22, (int)a);
                 PAL_LavaWriteU16(evt, 20, 0);
-                PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_GESTURE,
-                   object_id, (int)a, 0);
+                if (!g_lava_suppress_trigger_visual_events)
+                {
+                   PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_GESTURE,
+                      object_id, (int)a, 0);
+                }
              }
           }
           idx++;
@@ -655,8 +661,11 @@ static long PAL_LavaRunTriggerScript(long script_index, int object_id)
              {
                 PAL_LavaWriteU16(evt, 2, (int)b);
                 PAL_LavaWriteU16(evt, 4, (int)c);
-                PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_POS,
-                   (a == 0 || a == 0xFFFF) ? object_id : (int)a, (int)b, (int)c);
+                if (!g_lava_suppress_trigger_visual_events)
+                {
+                   PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_POS,
+                      (a == 0 || a == 0xFFFF) ? object_id : (int)a, (int)b, (int)c);
+                }
              }
           }
           idx++;
@@ -671,8 +680,11 @@ static long PAL_LavaRunTriggerScript(long script_index, int object_id)
              {
                 PAL_LavaWriteU16(evt, 20, (int)b);
                 PAL_LavaWriteU16(evt, 22, (int)c);
-                PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_POSE,
-                   (a == 0 || a == 0xFFFF) ? object_id : (int)a, (int)b, (int)c);
+                if (!g_lava_suppress_trigger_visual_events)
+                {
+                   PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_POSE,
+                      (a == 0 || a == 0xFFFF) ? object_id : (int)a, (int)b, (int)c);
+                }
              }
           }
            idx++;
@@ -913,8 +925,11 @@ static long PAL_LavaRunTriggerScript(long script_index, int object_id)
           if (evt != 0)
           {
             PAL_LavaWriteS16(evt, 12, (int)b);
-            PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_STATE,
-               (a == 0 || a == 0xFFFF) ? object_id : (int)a, (int)b, 0);
+            if (!g_lava_suppress_trigger_visual_events)
+            {
+               PAL_LavaQueueDialogEvent(LAVA_DIALOG_EVENT_EVENT_STATE,
+                  (a == 0 || a == 0xFFFF) ? object_id : (int)a, (int)b, 0);
+            }
             printf("[LAVA][TRIGGER] set state target=%d value=%d current=%d\n",
                (a == 0 || a == 0xFFFF) ? object_id : (int)a,
                (int)b,
@@ -1005,9 +1020,22 @@ static long PAL_LavaRunTriggerScript(long script_index, int object_id)
        }
       else if (op == 0x0065)
       {
+         int party_index;
+
          if (a >= 0 && a < 6)
          {
-            g_lava_player_sprite_num[a] = b;
+            PAL_LavaSetRoleSpriteNum((int)a, (int)b);
+            for (party_index = 0; party_index < g_lava_party_count && party_index < 3; party_index++)
+            {
+               if (g_lava_party_role[party_index] == (int)a)
+               {
+                  g_lava_player_sprite_num[party_index] = b;
+               }
+            }
+            if (c != 0)
+            {
+               PAL_LavaRefreshPartySprites();
+            }
          }
          idx++;
          next_entry = idx;
@@ -1059,6 +1087,35 @@ static long PAL_LavaRunTriggerScript(long script_index, int object_id)
          idx++;
          next_entry = idx;
         }
+      else if (op == 0x0075)
+      {
+         g_lava_follower_count = 0;
+         g_lava_party_count = 0;
+         if (a != 0)
+         {
+            g_lava_party_role[g_lava_party_count] = a - 1;
+            g_lava_party_count++;
+         }
+         if (b != 0)
+         {
+            g_lava_party_role[g_lava_party_count] = b - 1;
+            g_lava_party_count++;
+         }
+         if (c != 0)
+         {
+            g_lava_party_role[g_lava_party_count] = c - 1;
+            g_lava_party_count++;
+         }
+         if (g_lava_party_count == 0)
+         {
+            g_lava_party_role[0] = 0;
+            g_lava_party_count = 1;
+         }
+         PAL_LavaRefreshPartySprites();
+         PAL_LavaResetPartyTrail();
+         idx++;
+         next_entry = idx;
+      }
       else if (op == 0x007A)
       {
          target_x = a * 32 + c * 16;

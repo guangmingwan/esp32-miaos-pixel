@@ -218,7 +218,6 @@ static int PAL_Y(long v)
 static void lava_native_present_palette_buffer(const uint8_t *pixels, const SDL_Color *palette)
 {
    LavaRuntime *rt;
-   int i;
 
    rt = lrt_get_global();
    if (rt == NULL || pixels == NULL || palette == NULL)
@@ -226,12 +225,25 @@ static void lava_native_present_palette_buffer(const uint8_t *pixels, const SDL_
       return;
    }
 
+#ifdef LAVA_ESP32
+   (void)lrt_present_indexed_frame(
+      pixels, SCREEN_W, SCREEN_H, SCREEN_W, (const uint8_t *)palette);
+#else
+   int i;
    for (i = 0; i < 256; ++i)
    {
       lrt_set_palette(rt, i, palette[i].r, palette[i].g, palette[i].b);
    }
-   lrt_write_block(0, 0, SCREEN_W, SCREEN_H, 0, pixels);
+   if (rt->index_buf != NULL && rt->screen_width == SCREEN_W && rt->screen_height == SCREEN_H)
+   {
+      memcpy(rt->index_buf, pixels, (size_t)SCREEN_W * (size_t)SCREEN_H);
+   }
+   else
+   {
+      lrt_write_block(0, 0, SCREEN_W, SCREEN_H, 0, pixels);
+   }
    lrt_refresh();
+#endif
 }
 
 static void lava_native_present_current_screen(void)
@@ -316,6 +328,11 @@ static void lava_init_video(void)
    {
       memset(g_lava_native_back_surface->pixels, 0, (size_t)SCREEN_W * (size_t)SCREEN_H);
    }
+   if (g_lava_native_screen_surface && g_lava_native_screen_surface->pixels)
+   {
+      lrt_bind_index_buffer(lrt_get_global(),
+         (byte *)g_lava_native_screen_surface->pixels, SCREEN_W, SCREEN_H);
+   }
    g_lava_direct_screen = 0;
 }
 
@@ -364,6 +381,9 @@ static void GetCommandLine(addr cmdline)
 
 static void SDL_SetPalette(addr palette, int firstcolor, int ncolors)
 {
+   LavaRuntime *rt;
+   int i;
+
    if (palette == 0 || firstcolor < 0 || ncolors <= 0)
    {
       return;
@@ -374,7 +394,15 @@ static void SDL_SetPalette(addr palette, int firstcolor, int ncolors)
    }
 
    memcpy(&g_current_palette[firstcolor], (void *)palette, (size_t)ncolors * sizeof(SDL_Color));
-   lrt_set_palette_vm(firstcolor, ncolors, (const uint8_t *)palette);
+   rt = lrt_get_global();
+   if (rt != NULL)
+   {
+      for (i = 0; i < ncolors; i++)
+      {
+         SDL_Color *color = &((SDL_Color *)palette)[i];
+         lrt_set_palette(rt, firstcolor + i, color->r, color->g, color->b);
+      }
+   }
 }
 
 static void VIDEO_UpdateScreen(addr rect)

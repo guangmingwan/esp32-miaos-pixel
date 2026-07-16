@@ -60,6 +60,7 @@ typedef struct {
     void *screen_vdc;       /* 屏幕 VDC 指针 */
     u32 palette[256];       /* 256色调色板（32位颜色） */
     byte *index_buf;        /* lavaVM 兼容像素索引缓冲 */
+    byte owns_index_buf;    /* index_buf 是否由 runtime 负责释放 */
 
     /* 屏幕配置 */
     int screen_width;
@@ -95,6 +96,8 @@ typedef struct {
  * @return 运行时上下文指针，失败返回 NULL
  */
 LavaRuntime* lrt_create(int width, int height, const byte *font_data);
+
+int lrt_bind_index_buffer(LavaRuntime *rt, byte *pixels, int width, int height);
 
 /**
  * @brief 销毁运行时上下文

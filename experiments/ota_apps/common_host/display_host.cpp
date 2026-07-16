@@ -516,6 +516,100 @@ extern "C" int32_t display_host_present_rgb565_region(const uint16_t *pixels, in
   return MIA_HOST_RESULT_OK;
 }
 
+extern "C" int32_t display_host_present_indexed8_region(
+    const uint8_t *pixels, const uint16_t *palette_rgb565, int32_t x, int32_t y,
+    uint32_t width, uint32_t height, uint32_t pitch_bytes) {
+  if (!g_ready || g_lcd == nullptr) return MIA_HOST_RESULT_NOT_READY;
+  if (pixels == nullptr || palette_rgb565 == nullptr || x < 0 || y < 0 ||
+      width == 0 || height == 0 || x + width > SCREEN_W || y + height > SCREEN_H ||
+      pitch_bytes < width) {
+    return MIA_HOST_RESULT_INVALID_ARGUMENT;
+  }
+
+#ifdef MIA_DISPLAY_ASYNC_REGION
+  uint16_t *chunks[2] = {g_chunk, g_async_chunk};
+  spi_transaction_t transactions[2] = {};
+  size_t pending = 0;
+  size_t chunk_index = 0;
+  if (lcd_set_window((uint16_t)x, (uint16_t)y, (uint16_t)(x + width - 1),
+                     (uint16_t)(y + height - 1)) != ESP_OK) {
+    return MIA_HOST_RESULT_IO;
+  }
+  gpio_set_level(LCD_DC_PIN, 1);
+  gpio_set_level(LCD_CS_PIN, 0);
+#endif
+
+  for (uint32_t row_start = 0; row_start < height; row_start += PRESENT_ROWS) {
+    const uint32_t rows =
+        (height - row_start) < PRESENT_ROWS ? height - row_start : PRESENT_ROWS;
+#ifdef MIA_DISPLAY_ASYNC_REGION
+    const size_t buffer_index = chunk_index & 1u;
+    if (pending == 2u) {
+      spi_transaction_t *completed = nullptr;
+      if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) {
+        gpio_set_level(LCD_CS_PIN, 1);
+        return MIA_HOST_RESULT_IO;
+      }
+      --pending;
+    }
+    uint16_t *chunk = chunks[buffer_index];
+#else
+    uint16_t *chunk = g_chunk;
+#endif
+    for (uint32_t row = 0; row < rows; ++row) {
+      const uint8_t *source_row = pixels + (row_start + row) * pitch_bytes;
+      uint16_t *output_row = chunk + row * width;
+      for (uint32_t column = 0; column < width; ++column) {
+        const uint16_t color = palette_rgb565[source_row[column]];
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+        output_row[column] = color;
+#else
+        output_row[column] = __builtin_bswap16(color);
+#endif
+      }
+    }
+#ifdef MIA_DISPLAY_ASYNC_REGION
+    spi_transaction_t &transaction = transactions[buffer_index];
+    transaction = {};
+    transaction.length = (size_t)rows * width * sizeof(uint16_t) * 8u;
+    transaction.tx_buffer = chunk;
+    if (spi_device_queue_trans(g_lcd, &transaction, portMAX_DELAY) != ESP_OK) {
+      while (pending > 0u) {
+        spi_transaction_t *completed = nullptr;
+        if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) break;
+        --pending;
+      }
+      gpio_set_level(LCD_CS_PIN, 1);
+      return MIA_HOST_RESULT_IO;
+    }
+    ++pending;
+    ++chunk_index;
+#else
+    if (lcd_set_window((uint16_t)x, (uint16_t)(y + row_start),
+                       (uint16_t)(x + width - 1),
+                       (uint16_t)(y + row_start + rows - 1)) != ESP_OK ||
+        tx_bytes(1, chunk, (size_t)rows * width * sizeof(uint16_t)) != ESP_OK) {
+      return MIA_HOST_RESULT_IO;
+    }
+    yield_once();
+#endif
+  }
+
+#ifdef MIA_DISPLAY_ASYNC_REGION
+  while (pending > 0u) {
+    spi_transaction_t *completed = nullptr;
+    if (spi_device_get_trans_result(g_lcd, &completed, portMAX_DELAY) != ESP_OK) {
+      gpio_set_level(LCD_CS_PIN, 1);
+      return MIA_HOST_RESULT_IO;
+    }
+    --pending;
+  }
+  gpio_set_level(LCD_CS_PIN, 1);
+  taskYIELD();
+#endif
+  return MIA_HOST_RESULT_OK;
+}
+
 extern "C" int32_t display_host_present_rgb565_scaled_region(
     const uint16_t *pixels, uint32_t source_width, uint32_t source_height,
     uint32_t source_pitch_bytes, int32_t x, int32_t y, uint32_t width,
