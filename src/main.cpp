@@ -884,15 +884,15 @@ static void drawLauncher() {
   launcherRenderYield();
 
   if (g_bootLoaderHintVisible) {
-    lavaFillRect(24, 44, 272, 156, LAVA_DARK_BLUE);
+    lavaFillRect(24, 44, 272, 174, LAVA_DARK_BLUE);
     lavaFillRect(24, 44, 272, 20, LAVA_YELLOW);
     lavaDrawText(30, launcherBarTextY(44, 20), miaTr("Boot Loader"), LAVA_BLACK, LAVA_YELLOW);
-    lavaDrawText(40, 82, miaTr("1. Hold ST"), LAVA_WHITE, LAVA_DARK_BLUE);
-    lavaDrawText(40, 100, miaTr("2. Press RESET"), LAVA_WHITE, LAVA_DARK_BLUE);
-    lavaDrawText(40, 118, miaTr("3. Release RESET into"), LAVA_WHITE, LAVA_DARK_BLUE);
+    lavaDrawText(40, 82, miaTr("1. Hold ST"), LAVA_BLACK, LAVA_DARK_BLUE);
+    lavaDrawText(40, 100, miaTr("2. Press RESET"), LAVA_BLACK, LAVA_DARK_BLUE);
+    lavaDrawText(40, 118, miaTr("3. Release RESET into"), LAVA_BLACK, LAVA_DARK_BLUE);
     lavaDrawText(58, 136, miaTr("download mode"), LAVA_CYAN, LAVA_DARK_BLUE);
-    lavaDrawText(40, 162, miaTr("RESET alone returns to"), LAVA_GRAY, LAVA_DARK_BLUE);
-    lavaDrawText(58, 180, miaTr("normal boot"), LAVA_GRAY, LAVA_DARK_BLUE);
+    lavaDrawText(40, 162, miaTr("RESET alone returns to"), LAVA_BLACK, LAVA_DARK_BLUE);
+    lavaDrawText(58, 180, miaTr("normal boot"), LAVA_BLACK, LAVA_DARK_BLUE);
     lavaDrawText(86, 198, miaTr("A/B:Back"), LAVA_YELLOW, LAVA_DARK_BLUE);
     launcherRenderYield();
   }
