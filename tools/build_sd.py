@@ -56,7 +56,7 @@ APPS = (
     App("pce", "Emulators"),
     App("sms", "Emulators"),
     App("snes", "Emulators"),
-    App("lava_pal", "Games", "experiments/ota_apps/lavapal/build/lava_pal.bin"),
+    App("lava_pal", "Games", "experiments/ota_apps/lavapal/build-idf5/lava_pal.bin"),
     App("minesweeper", "Games"),
     App("music", "Media"),
     App("diagnostic", "Settings"),

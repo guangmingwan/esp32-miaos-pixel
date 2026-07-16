@@ -42,7 +42,7 @@ void drawSerialTransfer(AppContext &context) {
              static_cast<unsigned long>(snapshot.totalBytes));
     lavaDrawText(8, 114, line, LAVA_GREEN, LAVA_BLACK);
   } else {
-    lavaDrawText(8, 114, "Commands: PING LIST MKDIR DELETE PUT GET", LAVA_GREEN, LAVA_BLACK);
+    lavaDrawText(8, 114, "PING LIST MKDIR DELETE RENAME PUT GET", LAVA_GREEN, LAVA_BLACK);
   }
   lavaDrawText(8, 222, "SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
   lavaPresent();

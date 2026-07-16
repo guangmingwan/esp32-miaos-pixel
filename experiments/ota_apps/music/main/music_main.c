@@ -1,4 +1,5 @@
 #include "mia_host_abi.h"
+#include "music_i18n.h"
 #include "music_player.h"
 
 #include <esp_log.h>
@@ -7,7 +8,7 @@
 #include <string.h>
 
 #define MUSIC_MAX_ENTRIES 48
-#define MUSIC_VISIBLE_ENTRIES 9
+#define MUSIC_VISIBLE_ENTRIES 8
 
 #ifndef MIA_MUSIC_AUTOPLAY_FIRST
 #define MIA_MUSIC_AUTOPLAY_FIRST 0
@@ -17,7 +18,7 @@ static MiaHostDirEntry entries[MUSIC_MAX_ENTRIES];
 static uint32_t entry_count;
 static uint32_t selected_entry;
 static char current_path[128] = "/music";
-static char status_text[48] = "A:Open  B:Up  SEL+ST:Exit";
+static char status_text[48];
 static uint8_t autoplay_attempted;
 
 static uint8_t exit_pressed(void) {
@@ -59,6 +60,7 @@ static void build_audio_path(char *dest, uint32_t dest_size, const char *base,
 }
 
 static void scan_current_directory(void) {
+  const MusicText *text = music_text();
   entry_count = 0;
   selected_entry = 0;
   int32_t result = mia_host_sd_list_dir(current_path, entries, MUSIC_MAX_ENTRIES);
@@ -67,7 +69,7 @@ static void scan_current_directory(void) {
     result = mia_host_sd_list_dir(current_path, entries, MUSIC_MAX_ENTRIES);
   }
   if (result <= 0) {
-    copy_text(status_text, sizeof(status_text), "Directory empty");
+    copy_text(status_text, sizeof(status_text), text->directory_empty);
     return;
   }
 
@@ -82,7 +84,7 @@ static void scan_current_directory(void) {
   }
   entry_count = count;
   copy_text(status_text, sizeof(status_text),
-            count == 0 ? "No audio files" : "A:Open  B:Up  SEL+ST:Exit");
+            count == 0 ? text->no_audio_files : text->browse_status);
 }
 
 static void navigate_to_parent(void) {
@@ -98,13 +100,14 @@ static void navigate_to_parent(void) {
 }
 
 static void draw_music_app(void) {
+  const MusicText *text = music_text();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, "Music", MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, 2, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
   mia_host_draw_text(4, 24, current_path, MIA_HOST_CYAN, MIA_HOST_BLACK);
 
   if (entry_count == 0) {
-    mia_host_draw_text(84, 96, "No audio files", MIA_HOST_RED, MIA_HOST_BLACK);
+    mia_host_draw_text(84, 96, text->no_audio_files, MIA_HOST_RED, MIA_HOST_BLACK);
   }
 
   uint32_t first_visible = 0;
@@ -124,12 +127,12 @@ static void draw_music_app(void) {
     } else {
       snprintf(line, sizeof(line), "%s", entries[index].name);
     }
-    mia_host_fill_rect(4, y - 2, 312, 14, bg);
+    mia_host_fill_rect(4, y - 2, 312, 16, bg);
     mia_host_draw_text(8, y, line, fg, bg);
   }
 
   mia_host_draw_text(8, 204, status_text, MIA_HOST_GREEN, MIA_HOST_BLACK);
-  mia_host_draw_text(8, 222, "UP/DN Move  A:Open  B:Up", MIA_HOST_GRAY,
+  mia_host_draw_text(8, 222, text->browse_controls, MIA_HOST_GRAY,
                      MIA_HOST_BLACK);
   mia_host_present();
 }

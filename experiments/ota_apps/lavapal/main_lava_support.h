@@ -10790,14 +10790,14 @@ static void PAL_LavaDrawMainMenuText(int selected)
    int cash_x;
    char cash_buf[16];
 
-   PAL_LavaDrawShadowText(10, 10, "银两", MENUITEM_COLOR);
+   PAL_LavaDrawShadowText(10, 10, "银两", 0x00);
    sprintf(cash_buf, "%d", g_lava_cash);
     cash_x = 84 - (int)strlen(cash_buf) * 8;
     if (cash_x < 44)
    {
       cash_x = 49;
    }
-   PAL_LavaDrawShadowText(cash_x, 10, cash_buf, 0xCF);
+   PAL_LavaDrawShadowText(cash_x, 10, cash_buf, 0x00);
     for (i = 0; i < 4; i++)
     {
        int color = (i == selected) ? MENUITEM_COLOR_SELECTED : MENUITEM_COLOR;
@@ -10911,14 +10911,14 @@ static void PAL_LavaDrawMagicMenuContent(int current_party, int current_index)
    PAL_LavaDrawSceneFrame();
 
    PAL_LavaDrawSingleLineBox(0, 0, 5);
-   PAL_LavaDrawShadowText(10, 10, "银两", MENUITEM_COLOR);
+   PAL_LavaDrawShadowText(10, 10, "银两", 0x00);
    {
       char cash_buf[16];
       int cash_x;
       sprintf(cash_buf, "%d", g_lava_cash);
       cash_x = 89 - (int)strlen(cash_buf) * 8;
       if (cash_x < 49) cash_x = 49;
-      PAL_LavaDrawShadowText(cash_x, 10, cash_buf, 0xCF);
+      PAL_LavaDrawShadowText(cash_x, 10, cash_buf, 0x00);
    }
 
    PAL_LavaDrawSingleLineBox(215, 0, 5);

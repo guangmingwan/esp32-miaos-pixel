@@ -300,6 +300,35 @@ void handleDelete(const char *rawPath) {
   launcherLogAppendf("serial delete path=%s", normalizedPath.c_str());
 }
 
+void handleRename(char *rawPaths) {
+  if (!ensureSdReady()) {
+    return;
+  }
+
+  char *separator = rawPaths == nullptr ? nullptr : strchr(rawPaths, '\t');
+  if (separator == nullptr) {
+    sendError("invalid paths");
+    return;
+  }
+  *separator = '\0';
+
+  String oldPath;
+  String newPath;
+  if (!parsePathArgument(rawPaths, oldPath) || !parsePathArgument(separator + 1, newPath) ||
+      oldPath == "/" || newPath == "/") {
+    sendError("invalid paths");
+    return;
+  }
+  if (!SD.rename(oldPath, newPath)) {
+    sendError("rename failed");
+    return;
+  }
+  sendOk("rename");
+  setStatus("Renamed path");
+  copyText(g_targetPath, sizeof(g_targetPath), newPath.c_str());
+  launcherLogAppendf("serial rename old=%s new=%s", oldPath.c_str(), newPath.c_str());
+}
+
 void processCommand() {
   g_commandBuffer[g_commandLength] = '\0';
   if (g_commandLength == 0) {
@@ -328,7 +357,7 @@ void processCommand() {
     return;
   }
   if (strcmp(command, "HELP") == 0) {
-    sendLine("OK COMMANDS PING LIST MKDIR DELETE PUT GET HELP; CONTROL SFS1 EXIT");
+    sendLine("OK COMMANDS PING LIST MKDIR DELETE RENAME PUT GET HELP; CONTROL SFS1 EXIT");
     setStatus("Help shown");
     return;
   }
@@ -342,6 +371,10 @@ void processCommand() {
   }
   if (strcmp(command, "DELETE") == 0) {
     handleDelete(arg1);
+    return;
+  }
+  if (strcmp(command, "RENAME") == 0) {
+    handleRename(arg1);
     return;
   }
   if (strcmp(command, "PUT") == 0) {

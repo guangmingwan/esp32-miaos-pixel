@@ -236,6 +236,21 @@ def delete(
 
 
 @app.command()
+def rename(
+    old_remote_path: str,
+    new_remote_path: str,
+    port: str = "/dev/ttyACM0",
+    baud: int = 115200,
+    timeout_seconds: float = 2.0,
+) -> None:
+    client = with_client(port, baud, timeout_seconds)
+    try:
+        rprint(client.send_command(f"RENAME {old_remote_path}\t{new_remote_path}"))
+    finally:
+        client.close()
+
+
+@app.command()
 def put(
     local_path: Path,
     remote_path: str,

@@ -64,10 +64,10 @@ constexpr gpio_num_t HC165_CLK_PIN = GPIO_NUM_39;
 constexpr gpio_num_t HC165_DAT_PIN = GPIO_NUM_38;
 
 #ifndef MIA_AUDIO_DMA_BUF_COUNT
-#define MIA_AUDIO_DMA_BUF_COUNT 6
+#define MIA_AUDIO_DMA_BUF_COUNT 8
 #endif
 #ifndef MIA_AUDIO_DMA_BUF_LEN
-#define MIA_AUDIO_DMA_BUF_LEN 256
+#define MIA_AUDIO_DMA_BUF_LEN 512
 #endif
 
 constexpr int HC165_LEFT = 0;
@@ -117,7 +117,7 @@ static uint8_t g_hc165_state = 0xFF;
 static bool g_sd_ready = false;
 static sdmmc_card_t *g_card = nullptr;
 static AudioStatus g_audio = {};
-static int16_t g_stereo_scratch[1024 * 2] = {};
+static int16_t g_stereo_scratch[2304 * 2] = {};
 
 static void delay_us(uint32_t us) { esp_rom_delay_us(us); }
 
@@ -263,7 +263,7 @@ static const int16_t *expand_frames(const int16_t *samples, uint32_t frame_count
     *expanded_frames = frame_count;
     return samples;
   }
-  if (channels != 1 || frame_count > 1024) {
+  if (channels != 1 || frame_count > 2304) {
     *expanded_frames = 0;
     return nullptr;
   }

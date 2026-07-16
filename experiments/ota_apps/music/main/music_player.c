@@ -1,33 +1,57 @@
 #include "music_player.h"
 
 #include "mia_host_abi.h"
+#include "music_i18n.h"
 
+#include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <esp_log.h>
+#include <esp_system.h>
 
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_ONLY_MP3
 #include "third_party/minimp3_ex.h"
 
-#define PCM_FRAMES_PER_CHUNK 512
+#define DR_WAV_IMPLEMENTATION
+#include "third_party/dr_wav.h"
+
+#define DR_FLAC_IMPLEMENTATION
+#include "third_party/dr_flac.h"
+
+/* Header-only: implementation lives in third_party/stb_vorbis_impl.c so its
+ * static helpers don't collide with minimp3's. */
+#define STB_VORBIS_HEADER_ONLY
+#include "third_party/stb_vorbis.c"
+
+/* Decoded PCM chunk: ~52 ms of stereo 44.1 kHz audio. Larger chunk reduces
+ * SD card read frequency (main cause of MP3 stutter) and amortizes decode cost. */
+#define PCM_FRAMES_PER_CHUNK 2304
 #define PCM_SAMPLES_PER_CHUNK (PCM_FRAMES_PER_CHUNK * 2)
 
 #define FFT_SIZE 128
 #define SPECTRUM_BARS 20
 
+static const char *TAG = "music_player";
+
 enum MusicFormat {
   MUSIC_FORMAT_UNKNOWN = 0,
   MUSIC_FORMAT_MP3,
+  MUSIC_FORMAT_WAV,
+  MUSIC_FORMAT_FLAC,
+  MUSIC_FORMAT_OGG,
 };
 
 /* ---- Dual-core shared state (audio task on core 0, UI on core 1) ---- */
 
 /* Audio path copied here before starting the audio task */
 static char s_audio_path[256];
+static volatile enum MusicFormat s_audio_format = MUSIC_FORMAT_UNKNOWN;
 
 /* Control flags */
 static volatile bool s_audio_open_ok = false;   /* latch: set once on successful file open */
@@ -36,16 +60,22 @@ static volatile bool s_audio_running = false;
 static volatile bool s_audio_exit = false;
 static volatile TaskHandle_t s_audio_task_handle = NULL;
 
-/* PCM double-buffer for FFT data (audio → UI) */
+/* PCM double-buffer for FFT data (audio -> UI) */
 #define FFT_SHARED_SAMPLES 256
 static int16_t s_fft_shared[FFT_SHARED_SAMPLES];
 static volatile uint8_t s_fft_channels = 0;
 static portMUX_TYPE s_fft_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* ---- Static buffers for the audio task only (core 0), no conflict ---- */
-static mp3dec_ex_t g_mp3;
 static int16_t g_pcm[PCM_SAMPLES_PER_CHUNK];
-static char g_vfs_path[256];
+
+/* Per-format decoder state (only one active at a time). */
+static mp3dec_ex_t g_mp3;
+static mp3dec_io_t g_mp3_io;
+static FILE *g_audio_file;
+static drwav g_wav;
+static drflac *g_flac;
+static stb_vorbis *g_vorbis;
 
 /* ---- Static data for UI task only (core 1), no conflict ---- */
 static float g_fft_win[FFT_SIZE];
@@ -76,26 +106,286 @@ static enum MusicFormat detect_format(const char *path) {
   if (strcmp(lower, "mp3") == 0) {
     return MUSIC_FORMAT_MP3;
   }
+  if (strcmp(lower, "wav") == 0 || strcmp(lower, "wave") == 0) {
+    return MUSIC_FORMAT_WAV;
+  }
+  if (strcmp(lower, "flac") == 0) {
+    return MUSIC_FORMAT_FLAC;
+  }
+  if (strcmp(lower, "ogg") == 0 || strcmp(lower, "oga") == 0) {
+    return MUSIC_FORMAT_OGG;
+  }
   return MUSIC_FORMAT_UNKNOWN;
 }
 
 static const char *to_vfs_path(const char *path) {
+  static char vfs_path[256];
   if (path == NULL || path[0] == '\0') {
     return NULL;
   }
   if (strncmp(path, "/sd/", 4) == 0 || strcmp(path, "/sd") == 0) {
     return path;
   }
-  if (snprintf(g_vfs_path, sizeof(g_vfs_path), "/sd%s", path) >=
-      (int)sizeof(g_vfs_path)) {
+  if (snprintf(vfs_path, sizeof(vfs_path), "/sd%s", path) >=
+      (int)sizeof(vfs_path)) {
     return NULL;
   }
-  return g_vfs_path;
+  return vfs_path;
 }
 
 int music_is_supported_file(const char *name) {
   return detect_format(name) != MUSIC_FORMAT_UNKNOWN;
 }
+
+/* ---- Generic VFS read/seek/tell callbacks for dr_flac / dr_wav ---- */
+
+static size_t vfs_read_cb(void *user_data, void *buffer, size_t bytes) {
+  FILE *file = (FILE *)user_data;
+  return file == NULL ? 0 : fread(buffer, 1, bytes, file);
+}
+
+/* Shared fseek wrapper. DR_*_SEEK_SET=0, _CUR=1, _END=2 — identical values. */
+static int vfs_seek_common(void *user_data, int offset, int origin) {
+  FILE *file = (FILE *)user_data;
+  if (file == NULL) {
+    return 0;
+  }
+  int whence;
+  switch (origin) {
+    case 0: whence = SEEK_SET; break;
+    case 1: whence = SEEK_CUR; break;
+    case 2: whence = SEEK_END; break;
+    default: return 0;
+  }
+  return fseek(file, offset, whence) == 0 ? 1 : 0;
+}
+
+static int vfs_tell_common(void *user_data, int64_t *cursor) {
+  FILE *file = (FILE *)user_data;
+  if (file == NULL || cursor == NULL) {
+    return 0;
+  }
+  long pos = ftell(file);
+  if (pos < 0) {
+    return 0;
+  }
+  *cursor = (int64_t)pos;
+  return 1;
+}
+
+/* dr_wav strongly-typed callbacks */
+static drwav_bool32 wav_read_cb(void *user_data, void *buffer, size_t bytes) {
+  return (drwav_bool32)vfs_read_cb(user_data, buffer, bytes);
+}
+static drwav_bool32 wav_seek_cb(void *user_data, int offset,
+                                drwav_seek_origin origin) {
+  return (drwav_bool32)vfs_seek_common(user_data, offset, (int)origin);
+}
+static drwav_bool32 wav_tell_cb(void *user_data, drwav_int64 *cursor) {
+  return (drwav_bool32)vfs_tell_common(user_data, cursor);
+}
+
+/* dr_flac strongly-typed callbacks */
+static size_t flac_read_cb(void *user_data, void *buffer, size_t bytes) {
+  return vfs_read_cb(user_data, buffer, bytes);
+}
+static drflac_bool32 flac_seek_cb(void *user_data, int offset,
+                                  drflac_seek_origin origin) {
+  return (drflac_bool32)vfs_seek_common(user_data, offset, (int)origin);
+}
+static drflac_bool32 flac_tell_cb(void *user_data, drflac_int64 *cursor) {
+  return (drflac_bool32)vfs_tell_common(user_data, cursor);
+}
+
+/* MP3 read/seek wrappers (minimp3 uses uint64_t position + separate user_data) */
+static size_t mp3_file_read(void *buffer, size_t size, void *user_data) {
+  FILE *file = (FILE *)user_data;
+  return file == NULL ? 0 : fread(buffer, 1, size, file);
+}
+
+static int mp3_file_seek(uint64_t position, void *user_data) {
+  FILE *file = (FILE *)user_data;
+  if (file == NULL || position > LONG_MAX) {
+    return -1;
+  }
+  return fseek(file, (long)position, SEEK_SET);
+}
+
+/* ---- Decoder backend abstraction ----
+ * Each backend exposes open/read/close. Open must populate sample_rate and
+ * channels on success. Read returns frames decoded (0 = EOF), -1 on error. */
+
+typedef struct {
+  int (*open)(const char *vfs_path, int *sample_rate, uint8_t *channels);
+  int (*read_pcm16)(int16_t *out, int max_frames);
+  void (*close)(void);
+} DecoderBackend;
+
+/* ---- MP3 backend ---- */
+static int mp3_open(const char *vfs_path, int *sample_rate, uint8_t *channels) {
+  memset(&g_mp3, 0, sizeof(g_mp3));
+  memset(&g_mp3_io, 0, sizeof(g_mp3_io));
+  g_audio_file = fopen(vfs_path, "rb");
+  if (g_audio_file == NULL) {
+    ESP_LOGE(TAG, "mp3 fopen failed errno=%d", errno);
+    return -1;
+  }
+  g_mp3_io.read = mp3_file_read;
+  g_mp3_io.read_data = g_audio_file;
+  g_mp3_io.seek = mp3_file_seek;
+  g_mp3_io.seek_data = g_audio_file;
+  if (mp3dec_ex_open_cb(&g_mp3, &g_mp3_io, MP3D_DO_NOT_SCAN) != 0) {
+    ESP_LOGE(TAG, "mp3 open failed last_error=%d", g_mp3.last_error);
+    mp3dec_ex_close(&g_mp3);
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+    return -1;
+  }
+  *sample_rate = g_mp3.info.hz;
+  *channels = (uint8_t)g_mp3.info.channels;
+  return 0;
+}
+
+static int mp3_read_pcm16(int16_t *out, int max_frames) {
+  /* mp3dec_ex_read returns samples (channels * frames). */
+  size_t samples = mp3dec_ex_read(&g_mp3, out, (size_t)max_frames * 2);
+  return g_mp3.info.channels > 0 ? (int)(samples / g_mp3.info.channels) : 0;
+}
+
+static void mp3_close(void) {
+  mp3dec_ex_close(&g_mp3);
+  if (g_audio_file) {
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+  }
+}
+
+/* ---- WAV backend ---- */
+static int wav_open(const char *vfs_path, int *sample_rate, uint8_t *channels) {
+  g_audio_file = fopen(vfs_path, "rb");
+  if (g_audio_file == NULL) {
+    ESP_LOGE(TAG, "wav fopen failed errno=%d", errno);
+    return -1;
+  }
+  if (!drwav_init(&g_wav, wav_read_cb, wav_seek_cb, wav_tell_cb, g_audio_file,
+                  NULL)) {
+    ESP_LOGE(TAG, "wav init failed");
+    drwav_uninit(&g_wav);
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+    return -1;
+  }
+  if (g_wav.channels == 0 || g_wav.channels > 2 || g_wav.sampleRate == 0) {
+    ESP_LOGE(TAG, "wav unsupported format channels=%u rate=%u",
+             g_wav.channels, g_wav.sampleRate);
+    drwav_uninit(&g_wav);
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+    return -1;
+  }
+  *sample_rate = (int)g_wav.sampleRate;
+  *channels = (uint8_t)g_wav.channels;
+  return 0;
+}
+
+static int wav_read_pcm16(int16_t *out, int max_frames) {
+  return (int)drwav_read_pcm_frames_s16(&g_wav, (drwav_uint64)max_frames, out);
+}
+
+static void wav_close(void) {
+  drwav_uninit(&g_wav);
+  if (g_audio_file) {
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+  }
+}
+
+/* ---- FLAC backend ---- */
+static int flac_open(const char *vfs_path, int *sample_rate, uint8_t *channels) {
+  g_audio_file = fopen(vfs_path, "rb");
+  if (g_audio_file == NULL) {
+    ESP_LOGE(TAG, "flac fopen failed errno=%d", errno);
+    return -1;
+  }
+  g_flac = drflac_open(flac_read_cb, flac_seek_cb, flac_tell_cb, g_audio_file, NULL);
+  if (g_flac == NULL) {
+    ESP_LOGE(TAG, "flac open failed");
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+    return -1;
+  }
+  if (g_flac->channels == 0 || g_flac->channels > 2 || g_flac->sampleRate == 0) {
+    ESP_LOGE(TAG, "flac unsupported format channels=%u rate=%u",
+             g_flac->channels, g_flac->sampleRate);
+    drflac_close(g_flac);
+    g_flac = NULL;
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+    return -1;
+  }
+  *sample_rate = (int)g_flac->sampleRate;
+  *channels = (uint8_t)g_flac->channels;
+  return 0;
+}
+
+static int flac_read_pcm16(int16_t *out, int max_frames) {
+  return (int)drflac_read_pcm_frames_s16(g_flac, (drflac_uint64)max_frames, out);
+}
+
+static void flac_close(void) {
+  if (g_flac) {
+    drflac_close(g_flac);
+    g_flac = NULL;
+  }
+  if (g_audio_file) {
+    fclose(g_audio_file);
+    g_audio_file = NULL;
+  }
+}
+
+/* ---- OGG (Vorbis) backend ---- */
+static int ogg_open(const char *vfs_path, int *sample_rate, uint8_t *channels) {
+  int ogg_err = 0;
+  /* stb_vorbis_open_filename manages its own FILE handle. */
+  g_vorbis = stb_vorbis_open_filename(vfs_path, &ogg_err, NULL);
+  if (g_vorbis == NULL) {
+    ESP_LOGE(TAG, "ogg open failed err=%d", ogg_err);
+    return -1;
+  }
+  stb_vorbis_info info = stb_vorbis_get_info(g_vorbis);
+  if (info.channels == 0 || info.channels > 2 || info.sample_rate == 0) {
+    ESP_LOGE(TAG, "ogg unsupported format channels=%d rate=%u",
+             info.channels, info.sample_rate);
+    stb_vorbis_close(g_vorbis);
+    g_vorbis = NULL;
+    return -1;
+  }
+  *sample_rate = (int)info.sample_rate;
+  *channels = (uint8_t)info.channels;
+  return 0;
+}
+
+static int ogg_read_pcm16(int16_t *out, int max_frames) {
+  stb_vorbis_info info = stb_vorbis_get_info(g_vorbis);
+  /* stb_vorbis_get_samples_short_interleaved returns samples (not frames). */
+  int n = stb_vorbis_get_samples_short_interleaved(
+      g_vorbis, info.channels, out, max_frames * info.channels);
+  return n;
+}
+
+static void ogg_close(void) {
+  if (g_vorbis) {
+    stb_vorbis_close(g_vorbis);
+    g_vorbis = NULL;
+  }
+}
+
+static const DecoderBackend BACKENDS[] = {
+    [MUSIC_FORMAT_MP3]  = { mp3_open,  mp3_read_pcm16,  mp3_close },
+    [MUSIC_FORMAT_WAV]  = { wav_open,  wav_read_pcm16,  wav_close },
+    [MUSIC_FORMAT_FLAC] = { flac_open, flac_read_pcm16, flac_close },
+    [MUSIC_FORMAT_OGG]  = { ogg_open,  ogg_read_pcm16,  ogg_close },
+};
 
 /* ---- Spectrum analyzer (128-point FFT) — runs on core 1 (UI) ---- */
 
@@ -110,7 +400,7 @@ static void init_fft_window(void) {
 }
 
 static void draw_spectrum_bars(const int16_t *pcm, uint32_t frames,
-                               uint8_t channels) {
+                                uint8_t channels) {
   if (frames < (uint32_t)FFT_SIZE) return;
   init_fft_window();
 
@@ -221,51 +511,73 @@ static void audio_task_func(void *arg) {
 
   const char *vfs_path = s_audio_path;
   uint8_t audio_open = 0;
+  uint32_t decoded_chunks = 0;
+  int sample_rate = 0;
+  uint8_t channels = 0;
 
-  memset(&g_mp3, 0, sizeof(g_mp3));
-  if (mp3dec_ex_open(&g_mp3, vfs_path, MP3D_DO_NOT_SCAN) != 0) {
+  const DecoderBackend *backend = &BACKENDS[s_audio_format];
+
+  ESP_LOGI(TAG, "open fmt=%d path=%s", s_audio_format, vfs_path);
+  if (backend->open(vfs_path, &sample_rate, &channels) != 0) {
     s_audio_task_handle = NULL;
     vTaskDelete(NULL);
     return;
   }
 
+  if (channels == 0 || channels > 2 || sample_rate <= 0) {
+    ESP_LOGE(TAG, "invalid audio format hz=%d channels=%d", sample_rate, channels);
+    backend->close();
+    s_audio_task_handle = NULL;
+    vTaskDelete(NULL);
+    return;
+  }
+
+  ESP_LOGI(TAG, "open ok hz=%d channels=%d", sample_rate, channels);
   s_audio_open_ok = true;   /* latch — never cleared, UI uses this to distinguish open-ok from playback-done */
   portMEMORY_BARRIER();     /* ensure open_ok is globally visible before any subsequent stores */
   s_audio_running = true;
 
   while (!s_audio_stop) {
-    size_t samples = mp3dec_ex_read(&g_mp3, g_pcm, PCM_SAMPLES_PER_CHUNK);
-    if (samples == 0) {
+    int frames = backend->read_pcm16(g_pcm, PCM_FRAMES_PER_CHUNK);
+    if (frames < 0) {
+      ESP_LOGE(TAG, "decode failed chunk=%lu", (unsigned long)decoded_chunks);
+      break;
+    }
+    if (frames == 0) {
+      ESP_LOGI(TAG, "decode ended chunks=%lu", (unsigned long)decoded_chunks);
       break;
     }
 
-    uint8_t channels = (uint8_t)g_mp3.info.channels;
-    if (channels == 0 || channels > 2 || g_mp3.info.hz <= 0) {
-      break;
+    if (decoded_chunks == 0) {
+      ESP_LOGI(TAG, "first pcm frames=%d", frames);
     }
 
     if (!audio_open) {
-      if (!mia_host_audio_open((uint32_t)g_mp3.info.hz, channels, 16)) {
+      if (!mia_host_audio_open((uint32_t)sample_rate, channels, 16)) {
+        ESP_LOGE(TAG, "audio open failed hz=%d channels=%d", sample_rate, channels);
         break;
       }
       audio_open = 1;
+      ESP_LOGI(TAG, "audio output opened");
     }
 
-    if (mia_host_audio_write_pcm16(g_pcm, (uint32_t)(samples / channels),
-                                   channels) < 0) {
+    if (mia_host_audio_write_pcm16(g_pcm, (uint32_t)frames, channels) < 0) {
+      ESP_LOGE(TAG, "audio write failed chunk=%lu frames=%d channels=%u",
+               (unsigned long)decoded_chunks, frames, (unsigned)channels);
       break;
     }
+    ++decoded_chunks;
 
     /* Share PCM samples for UI spectrum (core 1 will read via critical section).
      * Always store mono-mixed samples so the UI's 128-element fft_buf works
      * regardless of the source channel count. */
-    uint32_t copy_count = (samples / channels);
+    uint32_t copy_count = (uint32_t)frames;
     if (copy_count > FFT_SHARED_SAMPLES) {
       copy_count = FFT_SHARED_SAMPLES;
     }
     portENTER_CRITICAL(&s_fft_mux);
     if (channels >= 2) {
-      /* Stereo → mono mix on the fly as we copy */
+      /* Stereo -> mono mix on the fly as we copy */
       for (uint32_t i = 0; i < copy_count; i++) {
         int32_t l = g_pcm[i * 2];
         int32_t r = g_pcm[i * 2 + 1];
@@ -280,26 +592,32 @@ static void audio_task_func(void *arg) {
 
   mia_host_audio_stop();
   mia_host_audio_close();
-  mp3dec_ex_close(&g_mp3);
+  backend->close();
+  ESP_LOGI(TAG, "audio task stopped chunks=%lu stop=%d exit=%d",
+           (unsigned long)decoded_chunks, s_audio_stop, s_audio_exit);
   s_audio_running = false;
   s_audio_task_handle = NULL;
   vTaskDelete(NULL);
 }
 
-/* ---- Dual-core MP3 playback entry point (UI on core 1, starts audio on core 0) ---- */
+/* ---- Dual-core playback entry point (UI on core 1, starts audio on core 0) ---- */
 
 extern void switch_to_launcher(void);
 
-static MusicPlayResult play_mp3(const char *path, char *status,
-                                size_t status_size) {
+static MusicPlayResult play_audio_file(const char *path, char *status,
+                                       size_t status_size) {
+  const MusicText *text = music_text();
   const char *vfs_path = to_vfs_path(path);
   if (vfs_path == NULL) {
-    set_status(status, status_size, "Path too long");
+    set_status(status, status_size, text->path_too_long);
     return MUSIC_PLAY_OPEN_FAILED;
   }
 
   /* Copy path for audio task (it runs on core 0 with its own stack) */
   snprintf(s_audio_path, sizeof(s_audio_path), "%s", vfs_path);
+  s_audio_format = detect_format(path);
+  ESP_LOGI(TAG, "play request path=%s vfs=%s fmt=%d", path, s_audio_path,
+           s_audio_format);
 
   /* Get short filename for display */
   const char *fname = strrchr(path, '/');
@@ -310,9 +628,9 @@ static MusicPlayResult play_mp3(const char *path, char *status,
   /* Draw initial Now Playing screen on core 1 (UI) */
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, 320, 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, "Now Playing", MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, 2, text->now_playing, MIA_HOST_BLACK, MIA_HOST_YELLOW);
   mia_host_draw_text(4, 24, name_buf, MIA_HOST_CYAN, MIA_HOST_BLACK);
-  mia_host_draw_text(8, 220, "B:Stop   SEL+ST:Exit", MIA_HOST_GREEN,
+  mia_host_draw_text(8, 220, text->playback_controls, MIA_HOST_GREEN,
                      MIA_HOST_BLACK);
 
   /* Reset control flags before starting audio task */
@@ -322,8 +640,15 @@ static MusicPlayResult play_mp3(const char *path, char *status,
   s_audio_exit = false;
 
   /* Start audio task on core 0 (priority 6 — slightly higher than UI at 5) */
-  xTaskCreatePinnedToCore(audio_task_func, "music_audio", 32768, NULL, 6,
-                          (TaskHandle_t *)&s_audio_task_handle, 0);
+  const BaseType_t task_result =
+      xTaskCreatePinnedToCore(audio_task_func, "music_audio", 32768, NULL, 6,
+                              (TaskHandle_t *)&s_audio_task_handle, 0);
+  if (task_result != pdPASS) {
+    ESP_LOGE(TAG, "audio task create failed result=%ld free_heap=%u",
+             (long)task_result, (unsigned)esp_get_free_heap_size());
+    set_status(status, status_size, text->playback_failed);
+    return MUSIC_PLAY_AUDIO_FAILED;
+  }
 
   /* Wait for audio file to open (or fail) with timeout.
    * s_audio_open_ok is a latch set once on success — it stays true
@@ -332,7 +657,7 @@ static MusicPlayResult play_mp3(const char *path, char *status,
    * itself on open failure — detect that to exit early.
    * The timeout is generous (10 s) because mp3dec_ex_open() over
    * SPI SD card can be slow for some files. */
-  mia_host_draw_text(84, 96, "Opening...", MIA_HOST_YELLOW, MIA_HOST_BLACK);
+  mia_host_draw_text(84, 96, text->opening, MIA_HOST_YELLOW, MIA_HOST_BLACK);
   mia_host_present();
   int wait_ms = 0;
   while (!s_audio_open_ok && s_audio_task_handle != NULL && wait_ms < 10000) {
@@ -341,9 +666,11 @@ static MusicPlayResult play_mp3(const char *path, char *status,
   }
 
   if (!s_audio_open_ok) {
-    mia_host_draw_text(84, 96, "Open failed", MIA_HOST_RED, MIA_HOST_BLACK);
+    ESP_LOGE(TAG, "audio task did not open file wait_ms=%d handle=%p", wait_ms,
+             (void *)s_audio_task_handle);
+    mia_host_draw_text(84, 96, text->open_failed, MIA_HOST_RED, MIA_HOST_BLACK);
     mia_host_present();
-    set_status(status, status_size, "MP3 open failed");
+    set_status(status, status_size, text->audio_open_failed);
     return MUSIC_PLAY_OPEN_FAILED;
   }
 
@@ -406,21 +733,20 @@ static MusicPlayResult play_mp3(const char *path, char *status,
 
   set_status(status, status_size,
              result == MUSIC_PLAY_STOPPED
-                 ? "Stopped"
-                 : (result == MUSIC_PLAY_OK ? "Done" : "Playback failed"));
+                  ? text->stopped
+                  : (result == MUSIC_PLAY_OK ? text->done : text->playback_failed));
+  ESP_LOGI(TAG, "play returned result=%d status=%s", result, status);
   return result;
 }
 
 MusicPlayResult music_play_file(const char *path, char *status,
                                 size_t status_size) {
-  switch (detect_format(path)) {
-    case MUSIC_FORMAT_MP3:
-      return play_mp3(path, status, status_size);
-    case MUSIC_FORMAT_UNKNOWN:
-    default:
-      set_status(status, status_size, "Unsupported file");
-      return MUSIC_PLAY_UNSUPPORTED;
+  enum MusicFormat fmt = detect_format(path);
+  if (fmt == MUSIC_FORMAT_UNKNOWN) {
+    set_status(status, status_size, music_text()->unsupported_file);
+    return MUSIC_PLAY_UNSUPPORTED;
   }
+  return play_audio_file(path, status, status_size);
 }
 
 MusicPlayResult music_probe_file(const char *path, char *status,
