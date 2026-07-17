@@ -1,10 +1,37 @@
 # Build artifacts
 .pio/
+build/
+build-*/
+build-idf*/
+**/build/
+**/build-*/
 .sdkconfig.esp32s3
+*.bin
+*.elf
+*.map
+*.a
+*.o
+*.ninja
+ninja_log
+*.ninja_deps
+CMakeFiles/
+**/CMakeFiles/
+cmake/
+**/cmake/
+cache/
+**/cache/
+logs/
+**/log/
+
+# Release / SD card image artifacts
+esp32-miaos-pixel_*/
+*.img
+*.zip
 
 # SDK config (generated from sdkconfig.defaults)
 sdkconfig.esp32s3
 sdkconfig.esp32dev-idf
+sdkconfig
 
 # ESP-IDF managed
 managed_components/
@@ -22,6 +49,8 @@ Thumbs.db
 # Cache
 __pycache__/
 *.pyc
+.cache/
+**/.cache/
 
 # Project internals
 .omo/

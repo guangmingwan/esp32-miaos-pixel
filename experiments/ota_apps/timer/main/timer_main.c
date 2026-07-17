@@ -26,7 +26,8 @@ static void draw_timer(uint32_t now_ms) {
 
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, mia_host_text_y_centered(0, 20), text->title, MIA_HOST_BLACK,
+                     MIA_HOST_YELLOW);
   mia_host_draw_text(118, 54, running ? text->running : text->paused,
                      running ? MIA_HOST_GREEN : MIA_HOST_YELLOW, MIA_HOST_BLACK);
   snprintf(line, sizeof(line), "%02lu:%02lu.%lu", (unsigned long)minutes,

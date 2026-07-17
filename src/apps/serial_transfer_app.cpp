@@ -32,9 +32,10 @@ void drawSerialTransfer(AppContext &context) {
   char line[48];
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, miaTr("Serial Files"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), miaTr("VCP File Transfer"), LAVA_BLACK,
+               LAVA_YELLOW);
   lavaDrawText(8, 34,
-               miaTr(snapshot.sdReady ? "USB serial file service" : "SD unavailable"),
+               miaTr(snapshot.sdReady ? "USB VCP file service" : "SD unavailable"),
                snapshot.sdReady ? LAVA_CYAN : LAVA_RED, LAVA_BLACK);
   lavaDrawText(8, 54, miaTr("Host: tools/serial_sd_client.py"), LAVA_WHITE, LAVA_BLACK);
   lavaDrawText(8, 74, miaTr(snapshot.status), LAVA_YELLOW, LAVA_BLACK);
@@ -60,7 +61,8 @@ void serialTransferBegin(AppContext &context) {
 void serialTransferTick(AppContext &context, uint32_t nowMs) {
   serialFileServiceTick();
   const SerialFileServiceSnapshot snapshot = serialFileServiceSnapshot();
-  const uint32_t refreshIntervalMs = (snapshot.uploadActive || snapshot.downloadActive) ? 1000 : 200;
+  const bool transferring = snapshot.uploadActive || snapshot.downloadActive;
+  const uint32_t refreshIntervalMs = transferring ? 1000 : 200;
   if (nowMs - g_lastRenderMs >= refreshIntervalMs) {
     g_lastRenderMs = nowMs;
     drawSerialTransfer(context);
@@ -77,7 +79,7 @@ void serialTransferEnd(AppContext &context) {
 }
 
 const LauncherApp &serialTransferApp() {
-  static const LauncherApp app = {"Serial Files", serialTransferBegin, serialTransferTick,
+  static const LauncherApp app = {"VCP File Transfer", serialTransferBegin, serialTransferTick,
                                   serialTransferEnd};
   return app;
 }

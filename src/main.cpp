@@ -88,6 +88,14 @@ static bool g_otaExportSuccess = false;
 
 static int16_t g_tabScrollX = 0;
 
+static void initVcpTask(void *readyTask) {
+  Serial.setRxBufferSize(8192);
+  Serial.setTxBufferSize(8192);
+  Serial.begin(115200);
+  xTaskNotifyGive(static_cast<TaskHandle_t>(readyTask));
+  vTaskDelete(nullptr);
+}
+
 static const SdAppManifestSummary *selectedSdApp(uint8_t itemIndex);
 static inline void launcherRenderYield();
 static const char *sdScanStatusText();
@@ -213,7 +221,8 @@ static void drawLoadingBitmap(int16_t x, int16_t y, const uint8_t *bitmap, uint8
 static void drawSdAppLoadingMessage() {
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(6, 2, miaTr("MiaOS Launcher"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(6, lavaTextYCentered(0, 20), miaTr("MiaOS Launcher"), LAVA_BLACK,
+               LAVA_YELLOW);
 
   const int16_t line1X = (LAVA_SCREEN_W - LOADING_LINE1_W) / 2;
   const int16_t line2X = (LAVA_SCREEN_W - LOADING_LINE2_W) / 2;
@@ -243,7 +252,8 @@ static void drawOtaSyncProgress(const char *stage, const char *appName, size_t c
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(6, 2, miaTr("MiaOS Launcher"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(6, lavaTextYCentered(0, 20), miaTr("MiaOS Launcher"), LAVA_BLACK,
+               LAVA_YELLOW);
   lavaDrawText(18, 58, miaTr("OTA App Sync"), LAVA_CYAN, LAVA_BLACK);
   lavaDrawText(18, 86, miaTr(stage), LAVA_WHITE, LAVA_BLACK);
   if (appName && appName[0]) {
@@ -284,7 +294,8 @@ static void drawSdFlashProgress(size_t completed, size_t total, void *context) {
   lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
   lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
   lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 20, LAVA_YELLOW);
-  lavaDrawText(boxX + 8, boxY + 4, miaTr("Loading"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(boxX + 8, lavaTextYCentered(boxY + 2, 20), miaTr("Loading"),
+               LAVA_BLACK, LAVA_YELLOW);
   if (state && state->appName) {
     char appLine[48];
     snprintf(appLine, sizeof(appLine), "%s: %.31s", miaTr("App"), state->appName);
@@ -695,11 +706,6 @@ static void switchLauncherTab(int8_t delta) {
   clampLauncherSelection();
 }
 
-static int16_t launcherBarTextY(int16_t barY, int16_t barHeight) {
-  const int16_t offset = (barHeight - lavaFontHeight()) / 2;
-  return barY + (offset > 0 ? offset : 0);
-}
-
 static void drawLauncherClock() {
   RtcDateTime rtcNow = {2000, 1, 1, 0, 0, 0, 6};
   char clockText[48];
@@ -718,7 +724,7 @@ static void drawLauncherClock() {
     snprintf(clockText, sizeof(clockText), "%s", miaTr("RTC unavailable"));
   }
   const int16_t textX = LAVA_SCREEN_W - 6 - lavaTextWidth(clockText);
-  lavaDrawText(textX, launcherBarTextY(0, 20), clockText, LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(textX, lavaTextYCentered(0, 20), clockText, LAVA_BLACK, LAVA_YELLOW);
 }
 
 extern "C" void esp32_task_wdt_reset(void) {
@@ -750,7 +756,8 @@ static void drawLauncher() {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(6, launcherBarTextY(0, 20), miaTr("MiaOS Launcher"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(6, lavaTextYCentered(0, 20), miaTr("MiaOS Launcher"), LAVA_BLACK,
+               LAVA_YELLOW);
   drawLauncherClock();
   launcherRenderYield();
   if (g_launcherNeedsInitialRender) {
@@ -801,7 +808,7 @@ static void drawLauncher() {
       const uint8_t bg = tab == g_selectedTab ? LAVA_BLUE : LAVA_BLACK;
       const uint8_t fg = tab == g_selectedTab ? LAVA_YELLOW : LAVA_GRAY;
       lavaFillRect(drawX, 28, tabWidths[tab], 20, bg);
-      lavaDrawText(drawX + 6, launcherBarTextY(28, 20), tabName, fg, bg);
+      lavaDrawText(drawX + 6, lavaTextYCentered(28, 20), tabName, fg, bg);
     }
     tabX += tabWidths[tab] + 4;
     launcherRenderYield();
@@ -852,7 +859,7 @@ static void drawLauncher() {
     const uint8_t itemTag = selected ? LAVA_BLACK : LAVA_GREEN;
     const uint8_t itemCursor = selected ? LAVA_YELLOW : LAVA_YELLOW;
     lavaFillRect(6, y, 308, appRowHeight, itemBg);
-    const int16_t itemTextY = launcherBarTextY(y, appRowHeight);
+    const int16_t itemTextY = lavaTextYCentered(y, appRowHeight);
     lavaDrawText(12, itemTextY, selected ? ">" : " ", itemCursor, itemBg);
     char sdLine[128];
     const char *displayText = name;
@@ -886,7 +893,8 @@ static void drawLauncher() {
   if (g_bootLoaderHintVisible) {
     lavaFillRect(24, 44, 272, 174, LAVA_DARK_BLUE);
     lavaFillRect(24, 44, 272, 20, LAVA_YELLOW);
-    lavaDrawText(30, launcherBarTextY(44, 20), miaTr("Boot Loader"), LAVA_BLACK, LAVA_YELLOW);
+    lavaDrawText(30, lavaTextYCentered(44, 20), miaTr("Boot Loader"), LAVA_BLACK,
+                 LAVA_YELLOW);
     lavaDrawText(40, 82, miaTr("1. Hold ST"), LAVA_BLACK, LAVA_DARK_BLUE);
     lavaDrawText(40, 100, miaTr("2. Press RESET"), LAVA_BLACK, LAVA_DARK_BLUE);
     lavaDrawText(40, 118, miaTr("3. Release RESET into"), LAVA_BLACK, LAVA_DARK_BLUE);
@@ -906,7 +914,7 @@ static void drawLauncher() {
     lavaFillRect(26, 52, 268, 136, LAVA_GRAY);
     lavaFillRect(28, 54, 264, 132, LAVA_LIGHT_GRAY);
     lavaFillRect(28, 54, 264, 20, LAVA_YELLOW);
-    lavaDrawText(34, launcherBarTextY(54, 20),
+    lavaDrawText(34, lavaTextYCentered(54, 20),
                  app == nullptr ? miaTr("SD App") : miaAppDisplayName(app->category, app->name), LAVA_BLACK,
                  LAVA_YELLOW);
     for (uint8_t i = 0; i < 2; ++i) {
@@ -915,7 +923,7 @@ static void drawLauncher() {
       const uint8_t fg = selected ? LAVA_YELLOW : LAVA_BLACK;
       const int16_t menuY = 88 + i * 22;
       lavaFillRect(40, menuY, 240, 16, bg);
-      lavaDrawText(52, launcherBarTextY(menuY, 16), miaTr(MENU_ITEMS[i]), fg, bg);
+      lavaDrawText(52, lavaTextYCentered(menuY, 16), miaTr(MENU_ITEMS[i]), fg, bg);
     }
     lavaDrawText(52, 148, miaTr("A:Confirm  B/SEL:Back"), LAVA_DARK_BLUE, LAVA_LIGHT_GRAY);
     launcherRenderYield();
@@ -929,7 +937,7 @@ static void drawLauncher() {
     lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, LAVA_YELLOW);
-    lavaDrawText(boxX + 8, launcherBarTextY(boxY + 2, 18), miaTr("Export OTA to SD"), LAVA_BLACK,
+    lavaDrawText(boxX + 8, lavaTextYCentered(boxY + 2, 18), miaTr("Export OTA to SD"), LAVA_BLACK,
                  LAVA_YELLOW);
     char catLine[48];
     snprintf(catLine, sizeof(catLine), miaTr("Category: %s"), miaTr(g_otaExportManifest.category));
@@ -955,7 +963,7 @@ static void drawLauncher() {
     lavaFillRect(boxX, boxY, boxW, boxH, LAVA_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, boxH - 4, LAVA_LIGHT_GRAY);
     lavaFillRect(boxX + 2, boxY + 2, boxW - 4, 18, g_otaExportSuccess ? LAVA_GREEN : LAVA_RED);
-    lavaDrawText(boxX + 8, launcherBarTextY(boxY + 2, 18),
+    lavaDrawText(boxX + 8, lavaTextYCentered(boxY + 2, 18),
                  g_otaExportSuccess ? miaTr("Export OK") : miaTr("Export Failed"),
                  LAVA_BLACK, g_otaExportSuccess ? LAVA_GREEN : LAVA_RED);
     const char *msg = g_otaExportSuccess
@@ -1203,11 +1211,16 @@ static void printStartupInfo() {
 }
 
 void setup() {
-  Serial.setRxBufferSize(4096);
-  Serial.begin(115200);
+  const bool cpuAt240Mhz = setCpuFrequencyMhz(240);
+  TaskHandle_t vcpInitTask = nullptr;
+  xTaskCreatePinnedToCore(initVcpTask, "vcp_init", 4096, xTaskGetCurrentTaskHandle(), 3,
+                          &vcpInitTask, 1);
+  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
   Serial.println();
   Serial.println("ESP32-S3 Retro-Pixel launcher (ILI9342 320x240)");
+  Serial.printf("CPU frequency: %uMHz set=%s\n", ESP.getCpuFreqMHz(),
+                cpuAt240Mhz ? "OK" : "FAILED");
   Serial.printf("Chip: %s rev%d, CPU %uMHz\n", ESP.getChipModel(),
                 ESP.getChipRevision(), ESP.getCpuFreqMHz());
   launcherTrace("[setup] configurePins");
@@ -1264,7 +1277,7 @@ void loop() {
 
   serialFileServicePollLauncherControl();
   if (serialFileServiceTakeEnterRequest()) {
-    launcherTrace("[serial-control] host requested Serial Files");
+    launcherTrace("[vcp-control] host requested VCP File Transfer");
     g_activeApp = &serialTransferApp();
     if (g_activeApp->begin != nullptr) {
       g_activeApp->begin(g_context);

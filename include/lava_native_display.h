@@ -27,4 +27,5 @@ void lavaFillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color);
 void lavaDrawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color);
 void lavaDrawChar(int16_t x, int16_t y, char ch, uint8_t fg, uint8_t bg);
 void lavaDrawText(int16_t x, int16_t y, const char *text, uint8_t fg, uint8_t bg);
+int16_t lavaTextYCentered(int16_t areaY, int16_t areaHeight);
 void lavaPresent();

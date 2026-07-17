@@ -40,7 +40,7 @@ It can also discover OTA partition apps on the SD card and flash them to the
 - `LEFT` / `RIGHT` switch between `System` and SD category tabs.
 
 `About` remains the only informational built-in launcher app. The launcher now exposes a
-`System` tab for `Serial Files`, `Logs`, `About`, `USB Disk`, and `Boot Loader`, while SD-loaded ELF
+`System` tab for `VCP File Transfer`, `Logs`, `About`, `USB Disk`, and `Boot Loader`, while SD-loaded ELF
 apps are grouped into tabs by their SD category directory.
 
 ## WiFi SD File Server
@@ -172,16 +172,17 @@ also includes launcher-owned serial traces from startup, SD scanning, USB Disk,
 and OTA app flash execution; it does not automatically capture every third-party
 library message written directly to `Serial`.
 
-## Serial File Transfer
+## VCP File Transfer
 
-The `Serial Files` entry in the `System` tab starts a serial file service over
-the ESP32-S3 USB CDC/JTAG port. It uses a simple command protocol rather than a
-network FTP stack.
+The `VCP File Transfer` entry in the `System` tab starts a file service over the
+ESP32-S3 USB Serial/JTAG CDC virtual COM port (`/dev/ttyACM*` on Linux), not the
+GPIO UART. It uses a simple command protocol rather than a network FTP stack.
 
 Supported commands:
 
 ```text
 PING
+INFO
 LIST <path>
 MKDIR <path>
 DELETE <path>
@@ -192,12 +193,12 @@ Use the host helper script:
 
 ```sh
 uv run tools/serial_sd_client.py ping
-uv run tools/serial_sd_client.py list-dir /MiaOS/Application
+uv run tools/serial_sd_client.py list-dir --remote-path /MiaOS/Application
 uv run tools/serial_sd_client.py mkdir /MiaOS/Test
 uv run tools/serial_sd_client.py put ./app.elf /MiaOS/Application/test.app/app.elf
 ```
 
-Paths should not contain spaces. The launcher writes `Serial Files` activity to
+Paths should not contain spaces. The launcher writes `VCP File Transfer` activity to
 `/MiaOS/logs/latest.log`.
 
 Build the migrated SD apps with:

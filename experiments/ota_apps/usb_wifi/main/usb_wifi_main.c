@@ -87,7 +87,8 @@ static void draw_title(const char *title) {
     /* truncate title to fit */
     char buf[54];
     snprintf(buf, sizeof(buf), "%.*s", 52, title);
-    mia_host_draw_text(4, 4, buf, MIA_HOST_BLACK, MIA_HOST_CYAN);
+    mia_host_draw_text(4, mia_host_text_y_centered(0, 16), buf, MIA_HOST_BLACK,
+                       MIA_HOST_CYAN);
 }
 
 static bool exit_pressed(void) {

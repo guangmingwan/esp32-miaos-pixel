@@ -126,7 +126,7 @@ void drawRtcApp(AppContext &context) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "RTC Set", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "RTC Set", LAVA_BLACK, LAVA_YELLOW);
 
   char line[48];
   snprintf(line, sizeof(line), "RTC  %04u-%02u-%02u %02u:%02u:%02u",

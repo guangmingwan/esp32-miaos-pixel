@@ -3,8 +3,12 @@
 #include <stddef.h>
 #include <string.h>
 
+#ifdef MIA_DROID_GBK_USE_USLEEP
+#include <unistd.h>
+#elif !defined(MIA_DROID_GBK_NO_YIELD)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#endif
 
 #include "droid_gbk_index.h"
 #include "gbk_unicode_map.h"
@@ -168,7 +172,11 @@ int32_t droid_gbk_draw_text(uint8_t *pixels, int32_t surface_width,
     cursor_x += draw_glyph(pixels, surface_width, surface_height, cursor_x, y,
                            find_glyph(codepoint), fg, bg);
     if ((++rendered % 8) == 0) {
+#ifdef MIA_DROID_GBK_USE_USLEEP
+      usleep(1000);
+#elif !defined(MIA_DROID_GBK_NO_YIELD)
       vTaskDelay(pdMS_TO_TICKS(1));
+#endif
     }
   }
   return cursor_x - x;

@@ -129,7 +129,7 @@ static void drawMinesweeper(AppContext &context) {
   }
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "Minesweeper", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "Minesweeper", LAVA_BLACK, LAVA_YELLOW);
 
   for (uint8_t y = 0; y < BOARD_H; ++y) {
     for (uint8_t x = 0; x < BOARD_W; ++x) {

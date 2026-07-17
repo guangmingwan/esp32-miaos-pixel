@@ -130,6 +130,11 @@ void lavaDrawText(int16_t x, int16_t y, const char *text, uint8_t fg, uint8_t bg
   }
 }
 
+int16_t lavaTextYCentered(int16_t areaY, int16_t areaHeight) {
+  const int16_t offset = (areaHeight - lavaFontHeight()) / 2;
+  return areaY + (offset > 0 ? offset : 0);
+}
+
 void lavaPresent() {
   if (!g_displayReady) {
     return;

@@ -53,7 +53,8 @@ static void draw_diagnostic(uint32_t frame) {
     mia_host_read_battery(&battery_info);
     mia_host_clear(MIA_HOST_BLACK);
     mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-    mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+    mia_host_draw_text(4, mia_host_text_y_centered(0, 20), text->title, MIA_HOST_BLACK,
+                       MIA_HOST_YELLOW);
 
     snprintf(line, sizeof(line), "%s r%u %uMHz Heap %luK", system_info.chip_model,
              system_info.chip_revision, system_info.cpu_mhz,

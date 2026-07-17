@@ -33,7 +33,7 @@ static void drawWifiFiles(AppContext &context) {
   }
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "WiFi Files", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "WiFi Files", LAVA_BLACK, LAVA_YELLOW);
   if (!context.sdReady) {
     lavaDrawText(108, 92, "SD unavailable", LAVA_RED, LAVA_BLACK);
     lavaDrawText(92, 222, "SEL+ST Exit", LAVA_GRAY, LAVA_BLACK);

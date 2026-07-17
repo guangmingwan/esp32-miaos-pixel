@@ -752,7 +752,8 @@ static MusicPlayResult play_audio_file(const char *path, char *status,
   /* Draw initial Now Playing screen on core 1 (UI) */
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, 320, 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 2, text->now_playing, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, mia_host_text_y_centered(0, 20), text->now_playing,
+                     MIA_HOST_BLACK, MIA_HOST_YELLOW);
   mia_host_draw_text(4, 24, name_buf, MIA_HOST_CYAN, MIA_HOST_BLACK);
   mia_host_draw_text(8, 220, text->playback_controls, MIA_HOST_GREEN,
                      MIA_HOST_BLACK);

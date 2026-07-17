@@ -193,13 +193,14 @@ static void draw_picker(const MiaStorageTarget *target, const char *rom_root, co
     mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
     char title[192];
     format_picker_title(target, rom_root, title, sizeof(title));
-    mia_host_draw_text(4, 2, title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+    const int32_t title_y = mia_host_text_y_centered(0, 20);
+    mia_host_draw_text(4, title_y, title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
     char count_text[24];
     snprintf(count_text, sizeof(count_text), "ROM:%u", (unsigned)rom_count);
     const int32_t count_x = mia_host_screen_width() - (int32_t)strlen(count_text) * 8 - 4;
     mia_host_fill_rect(count_x - 4, 0, mia_host_screen_width() - count_x + 4, 20,
                        MIA_HOST_YELLOW);
-    mia_host_draw_text(count_x, 2, count_text, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+    mia_host_draw_text(count_x, title_y, count_text, MIA_HOST_BLACK, MIA_HOST_YELLOW);
     if (message != NULL) mia_host_draw_text(8, 34, message, MIA_HOST_RED, MIA_HOST_BLACK);
     size_t first = selected >= MIA_PICKER_VISIBLE ? selected - MIA_PICKER_VISIBLE + 1u : 0u;
     size_t row = 0;
@@ -243,7 +244,8 @@ static void draw_scan_status(const MiaStorageTarget *target, const char *rom_roo
     format_picker_title(target, rom_root, title, sizeof(title));
     mia_host_clear(MIA_HOST_BLACK);
     mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-    mia_host_draw_text(4, 2, title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+    mia_host_draw_text(4, mia_host_text_y_centered(0, 20), title, MIA_HOST_BLACK,
+                       MIA_HOST_YELLOW);
     mia_host_draw_text(72, 108, text->scanning, MIA_HOST_CYAN, MIA_HOST_BLACK);
     mia_host_present();
 }

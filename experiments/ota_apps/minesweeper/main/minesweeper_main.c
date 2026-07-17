@@ -124,7 +124,8 @@ static void draw_game(void) {
   const MinesweeperText *text = minesweeper_text();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, mia_host_text_y_centered(0, 20), text->title, MIA_HOST_BLACK,
+                     MIA_HOST_YELLOW);
 
   for (uint8_t y = 0; y < BOARD_H; ++y) {
     for (uint8_t x = 0; x < BOARD_W; ++x) {

@@ -278,7 +278,8 @@ static void draw_sd_browser(void) {
   const BrowserText *text = ui_text();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 2, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, mia_host_text_y_centered(0, 20), text->title, MIA_HOST_BLACK,
+                     MIA_HOST_YELLOW);
   char path_text[48];
   copy_display_prefix(path_text, sizeof(path_text), current_path, 38);
   mia_host_draw_text(4, 20, path_text, MIA_HOST_CYAN, MIA_HOST_BLACK);

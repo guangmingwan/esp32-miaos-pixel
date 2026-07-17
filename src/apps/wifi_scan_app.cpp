@@ -29,7 +29,7 @@ static void drawWifiScan(AppContext &context) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "WiFi Scan", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "WiFi Scan", LAVA_BLACK, LAVA_YELLOW);
 
   if (g_scanning) {
     lavaDrawText(128, 96, "Scanning...", LAVA_CYAN, LAVA_BLACK);

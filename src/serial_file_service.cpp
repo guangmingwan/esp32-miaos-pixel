@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include "HWCDC.h"
 #include "launcher_log.h"
 #include "wifi_file_paths.h"
 
@@ -13,8 +17,8 @@ namespace {
 
 constexpr uint16_t COMMAND_BUFFER_SIZE = 160;
 constexpr uint16_t CONTROL_BUFFER_SIZE = 32;
-constexpr size_t UPLOAD_CHUNK_SIZE = 1024;
-constexpr size_t DOWNLOAD_CHUNK_SIZE = 1024;
+constexpr size_t VCP_WINDOW_SIZE = 6144;
+constexpr size_t DOWNLOAD_CHUNK_SIZE = VCP_WINDOW_SIZE;
 constexpr uint32_t UPLOAD_TIMEOUT_MS = 15000;
 constexpr uint32_t DOWNLOAD_TIMEOUT_MS = 15000;
 
@@ -34,12 +38,49 @@ uint32_t g_expectedBytes = 0;
 uint32_t g_receivedBytes = 0;
 uint32_t g_nextUploadAckBytes = 0;
 uint32_t g_lastUploadActivityMs = 0;
+uint8_t g_uploadChunk[VCP_WINDOW_SIZE];
+size_t g_uploadChunkLength = 0;
 File g_uploadFile;
 bool g_downloadActive = false;
 uint32_t g_downloadBytes = 0;
 uint32_t g_sentBytes = 0;
 uint32_t g_lastDownloadActivityMs = 0;
 File g_downloadFile;
+TaskHandle_t g_serviceTask = nullptr;
+volatile bool g_serviceStopRequested = false;
+portMUX_TYPE g_serviceStateMux = portMUX_INITIALIZER_UNLOCKED;
+SerialFileServiceSnapshot g_publishedSnapshot = {};
+
+HWCDC &vcp() { return Serial; }
+void copyText(char *dest, size_t destSize, const char *src);
+
+void publishSnapshot() {
+  SerialFileServiceSnapshot snapshot = {};
+  snapshot.sdReady = g_sdReady;
+  snapshot.uploadActive = g_uploadActive;
+  snapshot.downloadActive = g_downloadActive;
+  snapshot.transferredBytes = g_downloadActive ? g_sentBytes : g_receivedBytes;
+  snapshot.totalBytes = g_downloadActive ? g_downloadBytes : g_expectedBytes;
+  copyText(snapshot.status, sizeof(snapshot.status), g_status);
+  copyText(snapshot.targetPath, sizeof(snapshot.targetPath), g_targetPath);
+
+  portENTER_CRITICAL(&g_serviceStateMux);
+  g_publishedSnapshot = snapshot;
+  portEXIT_CRITICAL(&g_serviceStateMux);
+}
+
+void setServiceTask(TaskHandle_t task) {
+  portENTER_CRITICAL(&g_serviceStateMux);
+  g_serviceTask = task;
+  portEXIT_CRITICAL(&g_serviceStateMux);
+}
+
+TaskHandle_t serviceTask() {
+  portENTER_CRITICAL(&g_serviceStateMux);
+  TaskHandle_t task = g_serviceTask;
+  portEXIT_CRITICAL(&g_serviceStateMux);
+  return task;
+}
 
 void copyText(char *dest, size_t destSize, const char *src) {
   if (destSize == 0) {
@@ -54,8 +95,8 @@ void setStatus(const char *status) {
 }
 
 void sendLine(const char *line) {
-  Serial.print(line);
-  Serial.print('\n');
+  vcp().print(line);
+  vcp().print('\n');
 }
 
 void sendOk(const char *message) {
@@ -144,7 +185,8 @@ bool startUpload(const char *rawPath, const char *rawSize) {
   g_uploadFile.seek(0);
   g_expectedBytes = static_cast<uint32_t>(parsedSize);
   g_receivedBytes = 0;
-  g_nextUploadAckBytes = min<uint32_t>(UPLOAD_CHUNK_SIZE, g_expectedBytes);
+  g_uploadChunkLength = 0;
+  g_nextUploadAckBytes = min<uint32_t>(VCP_WINDOW_SIZE, g_expectedBytes);
   g_uploadActive = true;
   g_lastUploadActivityMs = millis();
   copyText(g_targetPath, sizeof(g_targetPath), normalizedPath.c_str());
@@ -356,8 +398,16 @@ void processCommand() {
     setStatus("Pinged");
     return;
   }
+  if (strcmp(command, "INFO") == 0) {
+    char line[64];
+    snprintf(line, sizeof(line), "OK INFO CPU=%uMHz CORE=%d", ESP.getCpuFreqMHz(),
+             xPortGetCoreID());
+    sendLine(line);
+    setStatus("Info shown");
+    return;
+  }
   if (strcmp(command, "HELP") == 0) {
-    sendLine("OK COMMANDS PING LIST MKDIR DELETE RENAME PUT GET HELP; CONTROL SFS1 EXIT");
+    sendLine("OK COMMANDS PING INFO LIST MKDIR DELETE RENAME PUT GET HELP; CONTROL SFS1 EXIT");
     setStatus("Help shown");
     return;
   }
@@ -401,8 +451,8 @@ void processCommand() {
 }
 
 void pollCommandLine() {
-  while (Serial.available() > 0 && !g_uploadActive && !g_downloadActive) {
-    const int value = Serial.read();
+  while (vcp().available() > 0 && !g_uploadActive && !g_downloadActive) {
+    const int value = vcp().read();
     if (value < 0) {
       break;
     }
@@ -439,34 +489,35 @@ void pollUpload() {
     return;
   }
 
-  while (Serial.available() > 0 && g_receivedBytes < g_expectedBytes) {
-    uint8_t chunk[UPLOAD_CHUNK_SIZE];
-    size_t readCount = 0;
-    const size_t want = min<size_t>(sizeof(chunk), g_expectedBytes - g_receivedBytes);
-    while (readCount < want && Serial.available() > 0) {
-      const int value = Serial.read();
-      if (value < 0) {
-        break;
-      }
-      chunk[readCount++] = static_cast<uint8_t>(value);
+  const size_t remaining = g_expectedBytes - g_receivedBytes - g_uploadChunkLength;
+  const size_t available = static_cast<size_t>(max(0, vcp().available()));
+  if (available > 0 && remaining > 0) {
+    const size_t capacity = sizeof(g_uploadChunk) - g_uploadChunkLength;
+    const size_t readCount = vcp().read(g_uploadChunk + g_uploadChunkLength,
+                                        min(min(capacity, remaining), available));
+    if (readCount > 0) {
+      g_uploadChunkLength += readCount;
+      g_lastUploadActivityMs = millis();
     }
-    if (readCount == 0) {
-      break;
-    }
-    const size_t written = g_uploadFile.write(chunk, readCount);
-    g_receivedBytes += static_cast<uint32_t>(written);
-    g_lastUploadActivityMs = millis();
-    if (written != readCount) {
+  }
+
+  const bool finalChunk = g_receivedBytes + g_uploadChunkLength >= g_expectedBytes;
+  if (g_uploadChunkLength == sizeof(g_uploadChunk) || finalChunk) {
+    const size_t written = g_uploadFile.write(g_uploadChunk, g_uploadChunkLength);
+    if (written != g_uploadChunkLength) {
       finishUpload("Write failed", "write failed", "failed", true);
       return;
     }
+    g_receivedBytes += static_cast<uint32_t>(written);
+    g_uploadChunkLength = 0;
+    g_lastUploadActivityMs = millis();
 
     if (g_receivedBytes < g_expectedBytes && g_receivedBytes >= g_nextUploadAckBytes) {
       char line[32];
       snprintf(line, sizeof(line), "ACK %lu", static_cast<unsigned long>(g_receivedBytes));
       sendLine(line);
-      g_nextUploadAckBytes = min<uint32_t>(g_expectedBytes,
-                                           g_nextUploadAckBytes + UPLOAD_CHUNK_SIZE);
+      g_nextUploadAckBytes =
+          min<uint32_t>(g_expectedBytes, g_nextUploadAckBytes + VCP_WINDOW_SIZE);
     }
   }
 
@@ -512,7 +563,7 @@ void pollDownload() {
     return;
   }
 
-  const int writable = Serial.availableForWrite();
+  const int writable = vcp().availableForWrite();
   if (writable <= 0) {
     return;
   }
@@ -526,7 +577,7 @@ void pollDownload() {
     return;
   }
 
-  const size_t written = Serial.write(chunk, readCount);
+  const size_t written = vcp().write(chunk, readCount);
   g_sentBytes += static_cast<uint32_t>(written);
   if (written != readCount) {
     g_downloadFile.seek(g_sentBytes);
@@ -534,6 +585,34 @@ void pollDownload() {
   if (written > 0) {
     g_lastDownloadActivityMs = millis();
   }
+}
+
+void vcpFileServiceTask(void *) {
+  setServiceTask(xTaskGetCurrentTaskHandle());
+  launcherLogAppendf("vcp service task core=%d", xPortGetCoreID());
+  publishSnapshot();
+
+  while (!g_serviceStopRequested) {
+    pollDownload();
+    pollUpload();
+    pollCommandLine();
+    publishSnapshot();
+    vTaskDelay(1);
+  }
+
+  if (g_uploadActive) {
+    finishUpload("Stopped", nullptr, "aborted", true);
+  }
+  if (g_downloadActive) {
+    finishDownload("Stopped", nullptr, "aborted");
+  }
+  g_uploadActive = false;
+  g_downloadActive = false;
+  setStatus("Stopped");
+  publishSnapshot();
+  launcherLogAppend("vcp service end");
+  setServiceTask(nullptr);
+  vTaskDelete(nullptr);
 }
 
 }
@@ -545,6 +624,7 @@ void serialFileServiceBegin(bool sdReady) {
   g_uploadActive = false;
   g_expectedBytes = 0;
   g_receivedBytes = 0;
+  g_uploadChunkLength = 0;
   g_nextUploadAckBytes = 0;
   g_lastUploadActivityMs = 0;
   g_downloadActive = false;
@@ -552,46 +632,44 @@ void serialFileServiceBegin(bool sdReady) {
   g_sentBytes = 0;
   g_lastDownloadActivityMs = 0;
   g_exitRequested = false;
+  g_serviceStopRequested = false;
   copyText(g_targetPath, sizeof(g_targetPath), "/");
   setStatus(sdReady ? "Waiting for host" : "SD unavailable");
+  publishSnapshot();
   sendLine("SFS1 READY");
-  launcherLogAppendf("serial service begin sd_ready=%d", sdReady ? 1 : 0);
+  launcherLogAppendf("vcp service begin sd_ready=%d", sdReady ? 1 : 0);
+
+  TaskHandle_t task = nullptr;
+  if (xTaskCreatePinnedToCore(vcpFileServiceTask, "vcp_file", 16384, nullptr, 2, &task, 1) !=
+      pdPASS) {
+    setStatus("Task start failed");
+    publishSnapshot();
+    sendError("task start failed");
+  } else {
+    setServiceTask(task);
+  }
 }
 
 void serialFileServiceTick() {
-  pollDownload();
-  pollUpload();
-  pollCommandLine();
 }
 
 void serialFileServiceEnd() {
-  if (g_uploadActive) {
-    finishUpload("Stopped", nullptr, "aborted", true);
+  g_serviceStopRequested = true;
+  while (serviceTask() != nullptr) {
+    delay(1);
   }
-  if (g_downloadActive) {
-    finishDownload("Stopped", nullptr, "aborted");
-  }
-  g_uploadActive = false;
-  g_downloadActive = false;
-  setStatus("Stopped");
-  launcherLogAppend("serial service end");
 }
 
 SerialFileServiceSnapshot serialFileServiceSnapshot() {
-  SerialFileServiceSnapshot snapshot = {};
-  snapshot.sdReady = g_sdReady;
-  snapshot.uploadActive = g_uploadActive;
-  snapshot.downloadActive = g_downloadActive;
-  snapshot.transferredBytes = g_downloadActive ? g_sentBytes : g_receivedBytes;
-  snapshot.totalBytes = g_downloadActive ? g_downloadBytes : g_expectedBytes;
-  copyText(snapshot.status, sizeof(snapshot.status), g_status);
-  copyText(snapshot.targetPath, sizeof(snapshot.targetPath), g_targetPath);
+  portENTER_CRITICAL(&g_serviceStateMux);
+  const SerialFileServiceSnapshot snapshot = g_publishedSnapshot;
+  portEXIT_CRITICAL(&g_serviceStateMux);
   return snapshot;
 }
 
 void serialFileServicePollLauncherControl() {
-  while (Serial.available() > 0) {
-    const int value = Serial.read();
+  while (vcp().available() > 0) {
+    const int value = vcp().read();
     if (value < 0) {
       break;
     }

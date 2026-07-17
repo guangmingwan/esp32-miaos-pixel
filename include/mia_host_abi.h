@@ -14,7 +14,12 @@ void mia_host_clear(uint8_t color);
 void mia_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t color);
 void mia_host_fill_screen_rgb565(uint16_t color);
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
-                        uint8_t bg);
+                         uint8_t bg);
+int32_t mia_host_text_height(void);
+static inline int32_t mia_host_text_y_centered(int32_t area_y, int32_t area_height) {
+  const int32_t offset = (area_height - mia_host_text_height()) / 2;
+  return area_y + (offset > 0 ? offset : 0);
+}
 void mia_host_present(void);
 typedef enum MiaHostResult {
   MIA_HOST_RESULT_OK = 0,

@@ -321,3 +321,6 @@ splash_up_*.bmp
 /main_lava_native.c89.i
 /sdlpal
 /test_yj1.mkf
+
+# clangd index cache (generated, not source)
+**/.cache/clangd/**

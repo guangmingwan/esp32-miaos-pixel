@@ -8,7 +8,7 @@
 # ]
 # ///
 
-# ─── How to run ───
+# ─── USB VCP usage ───
 # 1. Install uv (if not installed):
 #      curl -LsSf https://astral.sh/uv/install.sh | sh
 # 2. Run directly (no venv, no pip install needed):
@@ -30,8 +30,12 @@ import typer
 from rich import print as rprint
 
 
-app = typer.Typer(no_args_is_help=True)
-UPLOAD_CHUNK_SIZE = 1024
+app = typer.Typer(
+    no_args_is_help=True,
+    help="Transfer files over the ESP32-S3 USB CDC/JTAG virtual COM port (VCP).",
+)
+VCP_WINDOW_SIZE = 6144
+UPLOAD_CHUNK_SIZE = VCP_WINDOW_SIZE
 DOWNLOAD_CHUNK_SIZE = 4096
 
 
@@ -115,7 +119,7 @@ class SerialServiceClient:
                 sent += len(chunk)
                 response = self.read_protocol_line()
                 if sent == size:
-                    return response
+                    return response or "ERR missing upload completion"
                 if response != f"ACK {sent}":
                     return response or "ERR missing upload ack"
         return self.read_protocol_line()
@@ -158,6 +162,15 @@ def ping(port: str = "/dev/ttyACM0", baud: int = 115200, timeout_seconds: float 
     client = with_client(port, baud, timeout_seconds)
     try:
         rprint(client.send_command("PING"))
+    finally:
+        client.close()
+
+
+@app.command()
+def info(port: str = "/dev/ttyACM0", baud: int = 115200, timeout_seconds: float = 2.0) -> None:
+    client = with_client(port, baud, timeout_seconds)
+    try:
+        rprint(client.send_command("INFO"))
     finally:
         client.close()
 

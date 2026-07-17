@@ -8,6 +8,7 @@
 #include "app.h"
 #include "lcd_ili9342.h"
 #include "lava_native_display.h"
+#include "lava_text.h"
 #include "mia_i18n.h"
 #include "pins.h"
 #include "rtc_clock.h"
@@ -66,7 +67,7 @@ void mia_host_fill_screen_rgb565(uint16_t color) {
 }
 
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
-                        uint8_t bg) {
+                         uint8_t bg) {
   if (!lavaDisplayReady()) {
     return;
   }
@@ -78,6 +79,8 @@ void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
   }
   lavaDrawText(static_cast<int16_t>(x), static_cast<int16_t>(y), text, fg, bg);
 }
+
+int32_t mia_host_text_height(void) { return lavaFontHeight(); }
 
 void mia_host_present(void) {
   if (lavaDisplayReady()) {

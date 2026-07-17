@@ -26,7 +26,7 @@ static void drawFlashlight(AppContext &context) {
 
   lavaClear(g_lightOn ? LAVA_WHITE : LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "Flashlight", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "Flashlight", LAVA_BLACK, LAVA_YELLOW);
   lavaDrawText(132, 104, g_lightOn ? "LIGHT ON" : "LIGHT OFF",
                 g_lightOn ? LAVA_BLACK : LAVA_WHITE, g_lightOn ? LAVA_WHITE : LAVA_BLACK);
   lavaDrawText(84, 222, "A:Toggle  SEL+ST:Exit", g_lightOn ? LAVA_BLACK : LAVA_GRAY,

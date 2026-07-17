@@ -29,7 +29,8 @@ static void draw_overlay(void) {
   draw_pattern();
   uint16_t bg_inv = ~PATTERN_COLORS[pattern_index];
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, mia_host_text_y_centered(0, 20), text->title, MIA_HOST_BLACK,
+                     MIA_HOST_YELLOW);
   mia_host_draw_text(120, 110, pattern_label(pattern_index, text),
                      MIA_HOST_WHITE, MIA_HOST_BLACK);
   mia_host_fill_rect(0, 222, mia_host_screen_width(), 18, MIA_HOST_BLACK);

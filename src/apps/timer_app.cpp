@@ -41,7 +41,7 @@ static void drawTimer(AppContext &context, uint32_t nowMs) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "Timer", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "Timer", LAVA_BLACK, LAVA_YELLOW);
   lavaDrawText(118, 54, g_running ? "RUNNING" : "PAUSED", g_running ? LAVA_GREEN : LAVA_YELLOW,
                 LAVA_BLACK);
   snprintf(line, sizeof(line), "%02lu:%02lu.%lu", static_cast<unsigned long>(minutes),

@@ -74,7 +74,7 @@ void drawLogViewer(AppContext &context) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, miaTr("Logs"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), miaTr("Logs"), LAVA_BLACK, LAVA_YELLOW);
   lavaDrawText(4, 24, launcherLogPath(), LAVA_CYAN, LAVA_BLACK);
 
   if (g_logLineCount == 0) {

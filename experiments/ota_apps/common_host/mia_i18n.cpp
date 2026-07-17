@@ -48,7 +48,7 @@ static const Translation zhTable[] = {
     {"SD card:unavailable", "SD 卡不可用"},
     {"SD card:unknown", "SD 卡未知状态"},
     {"SEL+ST Exit", "SEL+ST 退出"},
-    {"Serial Files", "串口文件"},
+    {"VCP File Transfer", "VCP文件传输"},
     {"System", "系统"},
     {"To: /MiaOS/%s/%s.app/%s.bin", "目标: /MiaOS/%s/%s.app/%s.bin"},
     {"Upload to SD", "上传到 SD"},

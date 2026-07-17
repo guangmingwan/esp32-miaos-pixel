@@ -124,7 +124,7 @@ static void drawSdBrowser(AppContext &context) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "SD Browser", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "SD Browser", LAVA_BLACK, LAVA_YELLOW);
   lavaDrawText(4, 22, g_currentPath.c_str(), LAVA_CYAN, LAVA_BLACK);
 
   if (!context.sdReady) {

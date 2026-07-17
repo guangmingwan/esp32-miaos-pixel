@@ -59,7 +59,8 @@ static void drawStaticScreen(AppContext &context) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "ESP32-S3 Diagnostic", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "ESP32-S3 Diagnostic", LAVA_BLACK,
+               LAVA_YELLOW);
 
   char line[48];
   snprintf(line, sizeof(line), "%s r%d %uMHz Heap %uK", ESP.getChipModel(),

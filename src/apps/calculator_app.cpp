@@ -105,7 +105,7 @@ static void drawCalculator(AppContext &context) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "Calculator", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), "Calculator", LAVA_BLACK, LAVA_YELLOW);
 
   char line[32];
   lavaDrawRect(20, 32, 280, 24, LAVA_BLUE);

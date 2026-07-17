@@ -494,10 +494,15 @@ extern "C" esp_err_t host_platform_init(void) {
     ESP_LOGE(TAG, "I2C init failed: %d", i2c_err);
   }
 
+#ifdef MIA_DISPLAY_DROID_GBK_SHARED
+  ESP_ERROR_CHECK(mount_sd_card());
+#endif
   if (!display_host_init()) {
     return ESP_FAIL;
   }
+#ifndef MIA_DISPLAY_DROID_GBK_SHARED
   ESP_ERROR_CHECK(mount_sd_card());
+#endif
   update_buttons();
   return ESP_OK;
 }
@@ -518,6 +523,7 @@ extern "C" void mia_host_fill_screen_rgb565(uint16_t color) { display_host_fill_
 extern "C" void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg, uint8_t bg) {
   display_host_draw_text(x, y, text, fg, bg);
 }
+extern "C" int32_t mia_host_text_height(void) { return display_host_text_height(); }
 extern "C" void mia_host_present(void) { display_host_present(); }
 extern "C" int32_t mia_host_present_rgb565(const uint16_t *pixels, uint32_t width,
                                              uint32_t height, uint32_t pitch_bytes) {

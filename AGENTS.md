@@ -28,13 +28,13 @@
 - There is no repo-specific lint, formatter, or unit-test command configured; use a focused `pio run -e ...` for verification.
 - Do not start background serial monitors or tmux serial listeners. When serial logs are needed, use a foreground, time-bounded capture command and report the captured output.
 
-## Serial Files Host Control
+## VCP File Transfer Host Control
 
-- While the launcher is idle, enter the built-in Serial Files app from the host with `uv run tools/serial_sd_client.py enter --port <port>`. The raw wire command is `SFS1 ENTER\n`; the device replies `SFS1 ENTERING` and then `SFS1 READY` after the app starts.
-- Exit Serial Files and return to the launcher with `uv run tools/serial_sd_client.py exit --port <port>`. The raw wire command is `SFS1 EXIT\n`; the device replies `SFS1 EXITING` before running the normal app `end` lifecycle.
-- `SFS1 ENTER` is idempotent while Serial Files is already active and replies `SFS1 READY`. Automatic entry is only polled while the launcher is idle; it cannot switch away from another active built-in or OTA app.
-- Do not send `SFS1 EXIT` during a `PUT` payload. Serial Files treats all incoming bytes as file data until the declared upload size is received or the upload times out.
-- `PUT <path> <size>` uses 1024-byte flow-control windows. After `READY`, the host must send at most 1024 bytes and wait for `ACK <total-received>` before sending the next window; the final window returns `OK stored`. Do not restore unacknowledged streaming because the HWCDC RX queue can overflow and silently drop USB packets.
+- The built-in app uses the ESP32-S3 USB Serial/JTAG CDC virtual COM port (`/dev/ttyACM*` on Linux), not the GPIO UART. While the launcher is idle, enter VCP File Transfer with `uv run tools/serial_sd_client.py enter --port <port>`. The raw wire command is `SFS1 ENTER\n`; the device replies `SFS1 ENTERING` and then `SFS1 READY` after the app starts.
+- Exit VCP File Transfer and return to the launcher with `uv run tools/serial_sd_client.py exit --port <port>`. The raw wire command is `SFS1 EXIT\n`; the device replies `SFS1 EXITING` before running the normal app `end` lifecycle.
+- `SFS1 ENTER` is idempotent while VCP File Transfer is already active and replies `SFS1 READY`. Automatic entry is only polled while the launcher is idle; it cannot switch away from another active built-in or OTA app.
+- Do not send `SFS1 EXIT` during a `PUT` payload. VCP File Transfer treats all incoming bytes as file data until the declared upload size is received or the upload times out.
+- `PUT <path> <size>` uses 6144-byte flow-control windows with an 8192-byte HWCDC RX queue. After `READY`, the host must send at most 6144 bytes and wait for `ACK <total-received>` before sending the next window; the final window returns `OK stored`. Do not restore unacknowledged streaming because the HWCDC RX queue can overflow and silently drop USB packets.
 - `GET <path>` replies `DATA <size>`, followed by exactly that many raw bytes, followed by `OK sent`. The host must read the declared byte count before parsing the completion line.
 - A focused real-device check is: enter, wait for `SFS1 READY`, send `PING` and require `OK PONG`, perform the desired file operation, then exit and require `SFS1 EXITING`. For transfer changes, round-trip a multi-megabyte nonzero file and compare cryptographic hashes before deleting the device copy.
 

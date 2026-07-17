@@ -87,7 +87,7 @@ static void drawHeader(const char *title) {
   char line[24];
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
   snprintf(line, sizeof(line), "%s %u/%u", title, g_aboutPage + 1, ABOUT_PAGE_COUNT);
-  lavaDrawText(4, 6, line, LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, lavaTextYCentered(0, 20), line, LAVA_BLACK, LAVA_YELLOW);
   drawMiaCatIcon(LAVA_SCREEN_W - 22, 1);
 }
 

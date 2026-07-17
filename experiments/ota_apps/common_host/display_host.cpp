@@ -16,8 +16,10 @@
 #include <nvs.h>
 #include <string.h>
 
-#ifdef MIA_DISPLAY_DROID_GBK
+#if defined(MIA_DISPLAY_DROID_GBK)
 #include "droid_gbk_renderer.h"
+#elif defined(MIA_DISPLAY_DROID_GBK_SHARED)
+#include "mia_text_runtime.h"
 #endif
 #endif
 
@@ -96,7 +98,7 @@ DMA_ATTR static uint16_t g_chunk[PRESENT_PIXELS];
 DMA_ATTR static uint16_t g_async_chunk[PRESENT_PIXELS];
 #endif
 static Color g_palette[256];
-#ifdef MIA_DISPLAY_DROID_GBK
+#if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
 static bool g_use_droid_gbk = false;
 #endif
 
@@ -222,7 +224,7 @@ extern "C" int display_host_init(void) {
   if (g_ready) {
     return 1;
   }
-#ifdef MIA_DISPLAY_DROID_GBK
+#if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
   g_use_droid_gbk = mia_host_language() == 1;
   nvs_handle_t font_store;
   if (nvs_open("lava-text", NVS_READONLY, &font_store) == ESP_OK) {
@@ -230,6 +232,9 @@ extern "C" int display_host_init(void) {
     if (nvs_get_u8(font_store, "font", &font) == ESP_OK && font == 8) g_use_droid_gbk = true;
     nvs_close(font_store);
   }
+#ifdef MIA_DISPLAY_DROID_GBK_SHARED
+  if (g_use_droid_gbk && !mia_text_runtime_init()) g_use_droid_gbk = false;
+#endif
 #endif
   bus.mosi_io_num = LCD_MOSI_PIN;
   bus.miso_io_num = LCD_MISO_PIN;
@@ -383,10 +388,16 @@ extern "C" void display_host_draw_text(int32_t x, int32_t y, const char *text, u
   if (text == nullptr) {
     return;
   }
-#ifdef MIA_DISPLAY_DROID_GBK
+#if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
   if (g_use_droid_gbk) {
+#ifdef MIA_DISPLAY_DROID_GBK_SHARED
+    if (mia_text_runtime_draw_text(g_pixels, SCREEN_W, SCREEN_H, x, y, text, fg, bg) >= 0) {
+      return;
+    }
+#else
     droid_gbk_draw_text(g_pixels, SCREEN_W, SCREEN_H, x, y, text, fg, bg);
     return;
+#endif
   }
 #endif
   for (int32_t i = 0; text[i] != '\0'; ++i) {
@@ -395,6 +406,13 @@ extern "C" void display_host_draw_text(int32_t x, int32_t y, const char *text, u
       yield_once();
     }
   }
+}
+
+extern "C" int32_t display_host_text_height(void) {
+#if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
+  if (g_use_droid_gbk) return 16;
+#endif
+  return 7;
 }
 
 extern "C" void display_host_present(void) {
