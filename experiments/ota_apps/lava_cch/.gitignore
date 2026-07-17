@@ -1,0 +1,7 @@
+/.cache/
+/build*/
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.idf5
+/sdkconfig.idf55
+/cchess.app

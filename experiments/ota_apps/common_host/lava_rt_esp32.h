@@ -118,6 +118,7 @@ typedef float    lava_float;
 #define getms()     lrt_getms()
 #define Getms()     lrt_getms()
 #define gettime(t)  lrt_gettime(t)
+#define GetTime(t)  lrt_gettime((byte *)(t))
 #define settime(y,m,d,h,mi,s) lrt_settime(y,m,d,h,mi,s)
 #define SetTime(y,m,d,h,mi,s) lrt_settime(y,m,d,h,mi,s)
 

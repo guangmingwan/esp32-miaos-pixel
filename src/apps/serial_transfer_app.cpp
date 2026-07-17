@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "lava_native_display.h"
+#include "mia_i18n.h"
 #include "serial_file_service.h"
 
 namespace {
@@ -31,20 +32,22 @@ void drawSerialTransfer(AppContext &context) {
   char line[48];
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "Serial Files", LAVA_BLACK, LAVA_YELLOW);
-  lavaDrawText(8, 34, snapshot.sdReady ? "USB serial file service" : "SD unavailable",
+  lavaDrawText(4, 6, miaTr("Serial Files"), LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(8, 34,
+               miaTr(snapshot.sdReady ? "USB serial file service" : "SD unavailable"),
                snapshot.sdReady ? LAVA_CYAN : LAVA_RED, LAVA_BLACK);
-  lavaDrawText(8, 54, "Host: tools/serial_sd_client.py", LAVA_WHITE, LAVA_BLACK);
-  lavaDrawText(8, 74, snapshot.status, LAVA_YELLOW, LAVA_BLACK);
+  lavaDrawText(8, 54, miaTr("Host: tools/serial_sd_client.py"), LAVA_WHITE, LAVA_BLACK);
+  lavaDrawText(8, 74, miaTr(snapshot.status), LAVA_YELLOW, LAVA_BLACK);
   lavaDrawText(8, 94, snapshot.targetPath, LAVA_GRAY, LAVA_BLACK);
   if (snapshot.uploadActive || snapshot.downloadActive) {
-    snprintf(line, sizeof(line), "%lu / %lu bytes", static_cast<unsigned long>(snapshot.transferredBytes),
+    snprintf(line, sizeof(line), miaTr("%lu / %lu bytes"),
+             static_cast<unsigned long>(snapshot.transferredBytes),
              static_cast<unsigned long>(snapshot.totalBytes));
     lavaDrawText(8, 114, line, LAVA_GREEN, LAVA_BLACK);
   } else {
     lavaDrawText(8, 114, "PING LIST MKDIR DELETE RENAME PUT GET", LAVA_GREEN, LAVA_BLACK);
   }
-  lavaDrawText(8, 222, "SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 222, miaTr("SEL+ST:Exit"), LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }
 

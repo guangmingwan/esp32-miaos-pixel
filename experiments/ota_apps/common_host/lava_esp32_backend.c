@@ -305,6 +305,7 @@ void lrt_poll_keys(void)
         mia_host_button_down(MIA_HOST_BUTTON_START))
     {
         g_lava_shutdown_requested = 1;
+        push_lava_key(LAVA_KEY_B);
     }
 }
 

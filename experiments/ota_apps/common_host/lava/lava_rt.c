@@ -1748,9 +1748,14 @@ int lrt_putchar(int c)
 int lrt_getchar(void)
 {
     /* 阻塞直到有按键 */
-    while (lrt_key_head == lrt_key_tail) {
+    while (lrt_key_head == lrt_key_tail && lav_key < 128) {
         lrt_poll_keys();
         lrt_delay(1);
+    }
+    if (lav_key >= 128) {
+        int key = lav_key & 0x7F;
+        lav_key = 0;
+        return key;
     }
     int key = lrt_key_buffer[lrt_key_tail];
     lrt_key_tail = (lrt_key_tail + 1) % 128;

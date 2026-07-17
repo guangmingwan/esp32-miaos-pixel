@@ -1,0 +1,4 @@
+[mapping:lava_cch_psram]
+archive: libmain.a
+entries:
+    main_native (extram_bss)
