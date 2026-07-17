@@ -5,6 +5,7 @@
 
 #include "launcher_log.h"
 #include "lava_native_display.h"
+#include "mia_i18n.h"
 
 namespace {
 
@@ -51,7 +52,7 @@ void loadLogFile(AppContext &context) {
   g_logLoaded = false;
   g_logBuffer[0] = '\0';
   if (!context.sdReady) {
-    strncpy(g_logBuffer, "SD unavailable", sizeof(g_logBuffer) - 1);
+    strncpy(g_logBuffer, miaTr("SD unavailable"), sizeof(g_logBuffer) - 1);
     g_logBuffer[sizeof(g_logBuffer) - 1] = '\0';
     splitLogBuffer();
     return;
@@ -60,7 +61,7 @@ void loadLogFile(AppContext &context) {
   if (launcherLogRead(g_logBuffer, sizeof(g_logBuffer))) {
     g_logLoaded = true;
   } else {
-    strncpy(g_logBuffer, "No launcher log on SD", sizeof(g_logBuffer) - 1);
+    strncpy(g_logBuffer, miaTr("No launcher log on SD"), sizeof(g_logBuffer) - 1);
     g_logBuffer[sizeof(g_logBuffer) - 1] = '\0';
   }
   splitLogBuffer();
@@ -73,11 +74,11 @@ void drawLogViewer(AppContext &context) {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(4, 6, "Logs", LAVA_BLACK, LAVA_YELLOW);
+  lavaDrawText(4, 6, miaTr("Logs"), LAVA_BLACK, LAVA_YELLOW);
   lavaDrawText(4, 24, launcherLogPath(), LAVA_CYAN, LAVA_BLACK);
 
   if (g_logLineCount == 0) {
-    lavaDrawText(92, 96, "No log lines", LAVA_YELLOW, LAVA_BLACK);
+    lavaDrawText(92, 96, miaTr("No log lines"), LAVA_YELLOW, LAVA_BLACK);
   } else {
     const uint8_t visibleEnd = min<uint8_t>(g_logLineCount, g_firstVisibleLogLine + VISIBLE_LOG_LINES);
     for (uint8_t index = g_firstVisibleLogLine; index < visibleEnd; ++index) {
@@ -87,7 +88,7 @@ void drawLogViewer(AppContext &context) {
     }
   }
 
-  lavaDrawText(8, 222, "A:Reload UP/DN:Scroll SEL+ST:Exit", LAVA_GRAY, LAVA_BLACK);
+  lavaDrawText(8, 222, miaTr("A:Reload UP/DN:Scroll SEL+ST:Exit"), LAVA_GRAY, LAVA_BLACK);
   lavaPresent();
 }
 
