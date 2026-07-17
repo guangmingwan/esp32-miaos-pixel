@@ -1,23 +1,24 @@
 #include "mia_host_abi.h"
+#include "rtc_set_i18n.h"
 
 #include <stdint.h>
 #include <stdio.h>
 
-typedef struct FieldSpec {
-  const char *label;
-  uint8_t min_value;
-  uint8_t max_value;
-} FieldSpec;
-
-static const FieldSpec FIELDS[6] = {
-    {"Year", 0, 99},   {"Month", 1, 12}, {"Day", 1, 31},
-    {"Hour", 0, 23},   {"Minute", 0, 59}, {"Second", 0, 59},
-};
-
 static MiaHostDateTime rtc_now = {2000, 1, 1, 0, 0, 0, 6};
 static MiaHostDateTime edit_time = {2000, 1, 1, 0, 0, 0, 6};
 static uint8_t selected_field;
-static const char *status_text = "B:Read  A:Save";
+static const char *status_text;
+
+static const char *field_label(uint8_t index, const RtcSetText *text) {
+  switch (index) {
+    case 0: return text->label_year;
+    case 1: return text->label_month;
+    case 2: return text->label_day;
+    case 3: return text->label_hour;
+    case 4: return text->label_minute;
+    default: return text->label_second;
+  }
+}
 
 static uint8_t exit_pressed(void) {
   return mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
@@ -74,22 +75,24 @@ static void adjust_selected_field(int8_t delta) {
       break;
   }
   clamp_edit_time();
-  status_text = "Edited";
+  status_text = rtc_set_text()->status_edited;
 }
 
 static void load_rtc_into_editor(void) {
+  const RtcSetText *text = rtc_set_text();
   if (mia_host_rtc_read(&rtc_now)) {
     edit_time = rtc_now;
-    status_text = "RTC read OK";
+    status_text = text->status_read_ok;
   } else {
-    status_text = "RTC read FAIL";
+    status_text = text->status_read_fail;
   }
 }
 
 static void draw_rtc_app(void) {
+  const RtcSetText *text = rtc_set_text();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, "RTC Set", MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
 
   char line[48];
   snprintf(line, sizeof(line), "RTC  %04u-%02u-%02u %02u:%02u:%02u", rtc_now.year,
@@ -116,17 +119,17 @@ static void draw_rtc_app(void) {
     }
     mia_host_fill_rect(8, y - 2, 180, 14, bg);
     if (i == 0) {
-      snprintf(line, sizeof(line), "%s: %04d", FIELDS[i].label, value);
+      snprintf(line, sizeof(line), "%s: %04d", field_label(i, text), value);
     } else {
-      snprintf(line, sizeof(line), "%s: %02d", FIELDS[i].label, value);
+      snprintf(line, sizeof(line), "%s: %02d", field_label(i, text), value);
     }
     mia_host_draw_text(12, y, line, fg, bg);
   }
 
   mia_host_draw_text(8, 198, status_text, MIA_HOST_GREEN, MIA_HOST_BLACK);
-  mia_host_draw_text(8, 210, "UP/DN field  LT/RT value", MIA_HOST_GRAY,
+  mia_host_draw_text(8, 210, text->controls_field, MIA_HOST_GRAY,
                      MIA_HOST_BLACK);
-  mia_host_draw_text(8, 224, "A:Save  B:Read  SEL+ST:Exit", MIA_HOST_GRAY,
+  mia_host_draw_text(8, 224, text->controls_save, MIA_HOST_GRAY,
                      MIA_HOST_BLACK);
   mia_host_present();
 }
@@ -137,7 +140,9 @@ int rtc_set_main_impl(int argc, char *argv[]) {
   if (mia_host_abi_version() != 2) {
     return 1;
   }
+  const RtcSetText *text = rtc_set_text();
   selected_field = 0;
+  status_text = text->controls_save;
   load_rtc_into_editor();
   draw_rtc_app();
   while (1) {
@@ -165,9 +170,9 @@ int rtc_set_main_impl(int argc, char *argv[]) {
     if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
       if (mia_host_rtc_write(&edit_time)) {
         load_rtc_into_editor();
-        status_text = "RTC write OK";
+        status_text = text->status_write_ok;
       } else {
-        status_text = "RTC write FAIL";
+        status_text = text->status_write_fail;
       }
       changed = 1;
     }

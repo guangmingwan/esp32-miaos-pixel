@@ -6,6 +6,7 @@
  * a FreeRTOS task.
  */
 
+#include "diagnostic_i18n.h"
 #include "mia_host_abi.h"
 
 #include <stdio.h>
@@ -27,9 +28,9 @@ static void draw_status_box(int32_t x, int32_t y, const char *label, uint8_t ok)
     mia_host_draw_text(x + 8, y + 5, label, color, MIA_HOST_BLACK);
 }
 
-static void draw_button_grid(void) {
+static void draw_button_grid(const DiagnosticText *text) {
     mia_host_fill_rect(0, 112, mia_host_screen_width(), 64, MIA_HOST_BLACK);
-    mia_host_draw_text(2, 112, "BTN", MIA_HOST_WHITE, MIA_HOST_BLACK);
+    mia_host_draw_text(2, 112, text->btn, MIA_HOST_WHITE, MIA_HOST_BLACK);
     for (uint8_t index = 0; index < 14; ++index) {
         int32_t col = index % 7;
         int32_t row = index / 7;
@@ -43,6 +44,7 @@ static void draw_button_grid(void) {
 }
 
 static void draw_diagnostic(uint32_t frame) {
+    const DiagnosticText *text = diagnostic_text();
     MiaHostSystemInfo system_info;
     MiaHostBatteryInfo battery_info;
     char line[48];
@@ -51,7 +53,7 @@ static void draw_diagnostic(uint32_t frame) {
     mia_host_read_battery(&battery_info);
     mia_host_clear(MIA_HOST_BLACK);
     mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-    mia_host_draw_text(4, 6, "ESP32-S3 Diagnostic", MIA_HOST_BLACK, MIA_HOST_YELLOW);
+    mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
 
     snprintf(line, sizeof(line), "%s r%u %uMHz Heap %luK", system_info.chip_model,
              system_info.chip_revision, system_info.cpu_mhz,
@@ -67,16 +69,16 @@ static void draw_diagnostic(uint32_t frame) {
              (unsigned long)(battery_info.millivolts % 1000), (long)battery_info.raw);
     mia_host_draw_text(4, 62, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
 
-    draw_status_box(8, 82, "TFT OK", system_info.tft_ready);
-    draw_status_box(84, 82, "SD OK", system_info.sd_ready);
-    draw_status_box(160, 82, "OTA OK", 1);
-    draw_button_grid();
+    draw_status_box(8, 82, text->tft_ok, system_info.tft_ready);
+    draw_status_box(84, 82, text->sd_ok, system_info.sd_ready);
+    draw_status_box(160, 82, text->ota_ok, 1);
+    draw_button_grid(text);
 
     snprintf(line, sizeof(line), "Uptime %lus F%lu",
              (unsigned long)(mia_host_millis() / 1000), (unsigned long)frame);
     mia_host_draw_text(4, 196, line, MIA_HOST_CYAN, MIA_HOST_BLACK);
-    mia_host_draw_text(4, 210, "Hold SEL+ST to exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
-    mia_host_draw_text(4, 224, "BOOT and ST mirror GPIO0", MIA_HOST_GRAY, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 210, text->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 224, text->boot_note, MIA_HOST_GRAY, MIA_HOST_BLACK);
     mia_host_present();
 }
 

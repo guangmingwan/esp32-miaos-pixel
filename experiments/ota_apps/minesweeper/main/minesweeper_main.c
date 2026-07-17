@@ -3,6 +3,7 @@
  */
 
 #include "mia_host_abi.h"
+#include "minesweeper_i18n.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -120,9 +121,10 @@ static void update_win_state(void) {
 }
 
 static void draw_game(void) {
+  const MinesweeperText *text = minesweeper_text();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, "Minesweeper", MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
 
   for (uint8_t y = 0; y < BOARD_H; ++y) {
     for (uint8_t x = 0; x < BOARD_W; ++x) {
@@ -156,13 +158,13 @@ static void draw_game(void) {
   }
 
   if (game_over) {
-    mia_host_draw_text(84, 196, won ? "You win! A:Restart" : "Boom! A:Restart",
+    mia_host_draw_text(84, 196, won ? text->you_win : text->boom,
                        won ? MIA_HOST_GREEN : MIA_HOST_RED, MIA_HOST_BLACK);
   } else {
-    mia_host_draw_text(38, 206, "DPAD Move  A:Open  B:Flag", MIA_HOST_GRAY,
+    mia_host_draw_text(38, 206, text->controls, MIA_HOST_GRAY,
                        MIA_HOST_BLACK);
   }
-  mia_host_draw_text(92, 222, "SEL+ST Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
+  mia_host_draw_text(92, 222, text->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
   mia_host_present();
 }
 

@@ -18,6 +18,8 @@ from append_manifest import build_trailer, parse_trailer
 ROOT = Path(__file__).resolve().parents[1]
 OTA_ROOT = ROOT / "experiments" / "ota_apps"
 CATEGORIES = ("Application", "Emulators", "Games", "Media", "Settings", "System", "Utils")
+TEXT_LIBRARY = ROOT / "experiments" / "shared_libraries" / "mia_text" / "build" / "libmia_text_v1.so"
+TEXT_LIBRARY_ARCHIVE_PATH = "MiaOS/Library/libmia_text_v1.so"
 
 
 @dataclass(frozen=True)
@@ -59,13 +61,13 @@ APPS = (
     App("lava_pal", "Games", "experiments/ota_apps/lavapal/build-idf5/lava_pal.bin"),
     App("minesweeper", "Games"),
     App("music", "Media"),
-    App("diagnostic", "Settings"),
     App("rtc_set", "Settings"),
-    App("wifi_scan", "Settings"),
     App("usb disk", "System", ".pio/build/esp32s3-usbmsc/firmware.bin"),
     App("usb_wifi", "System"),
     App("calculator", "Utils"),
     App("flashlight", "Utils"),
+    App("wifi_scan", "Utils"),
+    App("diagnostic", "Utils"),
     App("ftp_server", "Utils"),
     App("screen_test", "Utils"),
     App("sd_browser", "Utils"),
@@ -117,8 +119,18 @@ def create_archive(output: Path, build_epoch: int) -> tuple[int, int]:
     try:
         with ZipFile(temporary, "w") as archive:
             archive.writestr(zip_info("MiaOS/", build_epoch), b"")
+            archive.writestr(zip_info("MiaOS/Library/", build_epoch), b"")
             for category in CATEGORIES:
                 archive.writestr(zip_info(f"MiaOS/{category}/", build_epoch), b"")
+            if not TEXT_LIBRARY.is_file():
+                raise FileNotFoundError(
+                    f"missing {TEXT_LIBRARY.relative_to(ROOT)}; build it with "
+                    "idf.py -C experiments/shared_libraries/mia_text so"
+                )
+            library_data = TEXT_LIBRARY.read_bytes()
+            archive.writestr(zip_info(TEXT_LIBRARY_ARCHIVE_PATH, build_epoch), library_data)
+            print(f"Packed {TEXT_LIBRARY_ARCHIVE_PATH} ({len(library_data)} bytes)")
+            packed += 1
             for app in APPS:
                 if not app.artifact.is_file():
                     print(f"Skipped {app.name}: no {app.artifact.relative_to(ROOT)}")

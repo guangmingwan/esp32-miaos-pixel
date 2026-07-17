@@ -1,4 +1,5 @@
 #include "mia_host_abi.h"
+#include "timer_i18n.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +17,7 @@ static uint32_t current_elapsed(uint32_t now_ms) {
 }
 
 static void draw_timer(uint32_t now_ms) {
+  const TimerText *text = timer_text();
   uint32_t total_seconds = current_elapsed(now_ms) / 1000;
   uint32_t minutes = total_seconds / 60;
   uint32_t seconds = total_seconds % 60;
@@ -24,14 +26,14 @@ static void draw_timer(uint32_t now_ms) {
 
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, "Timer", MIA_HOST_BLACK, MIA_HOST_YELLOW);
-  mia_host_draw_text(118, 54, running ? "RUNNING" : "PAUSED",
+  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(118, 54, running ? text->running : text->paused,
                      running ? MIA_HOST_GREEN : MIA_HOST_YELLOW, MIA_HOST_BLACK);
   snprintf(line, sizeof(line), "%02lu:%02lu.%lu", (unsigned long)minutes,
            (unsigned long)seconds, (unsigned long)tenths);
   mia_host_draw_text(110, 96, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
-  mia_host_draw_text(82, 206, "A:Start/Pause", MIA_HOST_GRAY, MIA_HOST_BLACK);
-  mia_host_draw_text(58, 222, "LT+RT:Reset  SEL+ST:Exit", MIA_HOST_GRAY,
+  mia_host_draw_text(82, 206, text->start_pause, MIA_HOST_GRAY, MIA_HOST_BLACK);
+  mia_host_draw_text(58, 222, text->reset_exit, MIA_HOST_GRAY,
                      MIA_HOST_BLACK);
   mia_host_present();
 }

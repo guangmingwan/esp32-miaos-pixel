@@ -1,5 +1,5 @@
+#include "calculator_i18n.h"
 #include "mia_host_abi.h"
-#include "mia_i18n.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -79,15 +79,16 @@ static void press_calculator_key(char key) {
 }
 
 static void draw_calculator(void) {
+  const CalculatorText *text = calculator_text();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, miaTr("Calculator"), MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
 
   char line[32];
   mia_host_fill_rect(20, 32, 280, 24, MIA_HOST_BLUE);
   mia_host_fill_rect(21, 33, 278, 22, MIA_HOST_BLACK);
   if (error_state) {
-    snprintf(line, sizeof(line), "%s", miaTr("Error: divide by 0"));
+    snprintf(line, sizeof(line), "%s", text->error_div0);
   } else {
     snprintf(line, sizeof(line), "%ld", (long)entry);
   }
@@ -98,7 +99,7 @@ static void draw_calculator(void) {
     snprintf(line, sizeof(line), "%ld %c", (long)accumulator, pending_op);
     mia_host_draw_text(28, 64, line, MIA_HOST_GRAY, MIA_HOST_BLACK);
   } else {
-    mia_host_draw_text(28, 64, miaTr("A:OK"), MIA_HOST_GRAY, MIA_HOST_BLACK);
+    mia_host_draw_text(28, 64, text->a_ok, MIA_HOST_GRAY, MIA_HOST_BLACK);
   }
 
   for (uint8_t i = 0; i < 16; ++i) {
@@ -111,7 +112,7 @@ static void draw_calculator(void) {
     mia_host_draw_text(x + 20, y + 8, key_text, fg, bg);
   }
 
-  mia_host_draw_text(20, 222, miaTr("SEL+ST Exit"), MIA_HOST_GRAY, MIA_HOST_BLACK);
+  mia_host_draw_text(20, 222, text->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
   mia_host_present();
 }
 
