@@ -2,6 +2,7 @@
  * ftp_server_main — ported from experiments/elf_apps/ftp_server/src/main.c
  */
 
+#include "ftp_server_i18n.h"
 #include "mia_host_abi.h"
 
 #include <stdint.h>
@@ -14,12 +15,13 @@ static void refresh_status(void) {
 }
 
 static void draw_ftp_server(void) {
+  const FtpServerText *text = ftp_server_text();
   char line[48];
 
   refresh_status();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, "FTP Server", MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
   mia_host_draw_text(4, 34, status.status,
                      status.running ? MIA_HOST_GREEN : MIA_HOST_YELLOW, MIA_HOST_BLACK);
   mia_host_draw_text(4, 56, status.ssid, MIA_HOST_CYAN, MIA_HOST_BLACK);
@@ -29,7 +31,7 @@ static void draw_ftp_server(void) {
   mia_host_draw_text(4, 108, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
   snprintf(line, sizeof(line), "Pass: %s", status.pass);
   mia_host_draw_text(4, 126, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
-  mia_host_draw_text(4, 222, "Use PASV  SEL+ST:Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
+  mia_host_draw_text(4, 222, text->use_pasv_exit, MIA_HOST_GRAY, MIA_HOST_BLACK);
   mia_host_present();
 }
 

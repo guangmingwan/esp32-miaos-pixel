@@ -31,10 +31,9 @@ idf_component_register(
         ${MIA_SMSPLUS_SOURCES}
         "../../common_host/host_platform.cpp"
         "../../common_host/display_host.cpp"
-        "../../common_host/droid_gbk_renderer.cpp"
-        "../../../../src/fonts/droid_gbk_12.c"
-        "../../../../src/gbk_unicode_map.cpp"
-        "../../../../src/droid_gbk_index.cpp"
+        "../../common_host/mia_text_runtime.cpp"
+    PRIV_REQUIRES
+        elf_loader
     INCLUDE_DIRS
         "." "../../common_host"
         "../../emulator_common/app/include"
@@ -59,7 +58,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_HEIGHT=${MIA_HEIGHT}
     MIA_EMULATOR_SAMPLE_RATE=32000
     MIA_EMULATOR_DUAL_CORE_AUDIO=1
-    MIA_DISPLAY_DROID_GBK=1
+    MIA_DISPLAY_DROID_GBK_SHARED=1
     MIA_DISPLAY_PRESENT_ROWS=40
     MIA_DISPLAY_NO_DELAY_YIELD=1
     MIA_DISPLAY_RGB565_WIRE_ORDER=1

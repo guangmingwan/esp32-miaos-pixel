@@ -36,10 +36,7 @@ idf_component_register(
         ${MIA_GBSP_C_SOURCES}
         "../../common_host/host_platform.cpp"
         "../../common_host/display_host.cpp"
-        "../../common_host/droid_gbk_renderer.cpp"
-        "../../../../src/fonts/droid_gbk_12.c"
-        "../../../../src/gbk_unicode_map.cpp"
-        "../../../../src/droid_gbk_index.cpp"
+        "../../common_host/mia_text_runtime.cpp"
     INCLUDE_DIRS
         "."
         "../../common_host"
@@ -52,8 +49,7 @@ idf_component_register(
         "../../emulator_common/vendor/gbsp/components/gbsp-libretro"
         "../../emulator_common/vendor/gbsp/components/gbsp-libretro/libretro/libretro-common/include"
         "../../../../include"
-    REQUIRES ${MIA_PLATFORM_REQUIRES}
-)
+    REQUIRES ${MIA_PLATFORM_REQUIRES} elf_loader)
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_EMULATOR_TARGET="gba"
@@ -68,7 +64,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     RETRO_GO=1
     ROM_BUFFER_SIZE=4
     OVERCLOCK_60FPS=1
-    MIA_DISPLAY_DROID_GBK=1
+    MIA_DISPLAY_DROID_GBK_SHARED=1
     MIA_DISPLAY_INDEXED_BUFFER_PSRAM=1
     MIA_DISPLAY_NO_DELAY_YIELD=1
     MIA_HC165_ACTIVE_HIGH=1

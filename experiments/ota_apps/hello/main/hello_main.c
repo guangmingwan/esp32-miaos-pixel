@@ -2,6 +2,7 @@
  * hello_main — ported from experiments/elf_apps/hello/src/main.c
  */
 
+#include "hello_i18n.h"
 #include "mia_host_abi.h"
 
 int hello_main_impl(int argc, char *argv[]) {
@@ -13,11 +14,12 @@ int hello_main_impl(int argc, char *argv[]) {
     return 1;
   }
 
+  const HelloText *text = hello_text();
   mia_host_log("hello.app: running interactive SD ELF");
 
   mia_host_clear(MIA_HOST_BLACK);
-  mia_host_draw_text(72, 96, "Hello from OTA App", MIA_HOST_WHITE, MIA_HOST_BLACK);
-  mia_host_draw_text(60, 116, "SEL+ST: Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
+  mia_host_draw_text(72, 96, text->title, MIA_HOST_WHITE, MIA_HOST_BLACK);
+  mia_host_draw_text(60, 116, text->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
   mia_host_present();
 
   while (1) {

@@ -2,6 +2,7 @@
  * wifi_files_main — ported from experiments/elf_apps/wifi_files/src/main.c
  */
 
+#include "wifi_files_i18n.h"
 #include "mia_host_abi.h"
 
 #include <stdint.h>
@@ -14,20 +15,21 @@ static void refresh_status(void) {
 }
 
 static void draw_wifi_files(void) {
+  const WifiFilesText *text = wifi_files_text();
   char line[48];
 
   refresh_status();
   mia_host_clear(MIA_HOST_BLACK);
   mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
-  mia_host_draw_text(4, 6, "WiFi Files", MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, 6, text->title, MIA_HOST_BLACK, MIA_HOST_YELLOW);
   mia_host_draw_text(4, 34, status.status,
                      status.running ? MIA_HOST_GREEN : MIA_HOST_YELLOW, MIA_HOST_BLACK);
-  mia_host_draw_text(4, 56, status.ap_mode ? "Mode: AP" : "Mode: Router", MIA_HOST_CYAN,
+  mia_host_draw_text(4, 56, status.ap_mode ? text->mode_ap : text->mode_router, MIA_HOST_CYAN,
                      MIA_HOST_BLACK);
   mia_host_draw_text(4, 78, status.ssid, MIA_HOST_WHITE, MIA_HOST_BLACK);
   snprintf(line, sizeof(line), "http://%s", status.ip);
   mia_host_draw_text(4, 104, line, MIA_HOST_YELLOW, MIA_HOST_BLACK);
-  mia_host_draw_text(4, 222, "Guest access  SEL+ST:Exit", MIA_HOST_GRAY,
+  mia_host_draw_text(4, 222, text->guest_exit, MIA_HOST_GRAY,
                      MIA_HOST_BLACK);
   mia_host_present();
 }

@@ -5,6 +5,7 @@
  */
 
 #include "mia_host_abi.h"
+#include "usb_wifi_i18n.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -163,12 +164,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
     if (id == WIFI_EVENT_STA_DISCONNECTED) {
         g.wifi_connected = false;
-        snprintf(g.wifi_status, sizeof(g.wifi_status), "Disconnected, retry");
+        snprintf(g.wifi_status, sizeof(g.wifi_status), "%s", usb_wifi_text()->disconnected);
         esp_wifi_internal_reg_rxcb(ESP_IF_WIFI_STA, NULL);
         esp_wifi_connect();
     } else if (id == WIFI_EVENT_STA_CONNECTED) {
         g.wifi_connected = true;
-        snprintf(g.wifi_status, sizeof(g.wifi_status), "Connected");
+        snprintf(g.wifi_status, sizeof(g.wifi_status), "%s", usb_wifi_text()->connected);
         esp_wifi_internal_reg_rxcb(ESP_IF_WIFI_STA, pkt_wifi2usb);
     }
 }
@@ -190,7 +191,7 @@ static esp_err_t start_usb_ncm(void) {
     ESP_RETURN_ON_ERROR(tinyusb_net_init(&net_config), TAG, "tinyusb_net_init");
 
     g.usb_ready = true;
-    snprintf(g.usb_status, sizeof(g.usb_status), "NCM ready");
+    snprintf(g.usb_status, sizeof(g.usb_status), "%s", usb_wifi_text()->ncm_ready);
     return ESP_OK;
 }
 
@@ -216,7 +217,7 @@ static esp_err_t start_wifi_sta(const char *ssid, const char *password) {
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
 
     g.wifi_started = true;
-    snprintf(g.wifi_status, sizeof(g.wifi_status), "Connecting...");
+    snprintf(g.wifi_status, sizeof(g.wifi_status), "%s", usb_wifi_text()->connecting);
     return esp_wifi_connect();
 }
 
@@ -235,8 +236,8 @@ static void stop_wifi(void) {
 
 static void draw_scan(void) {
     mia_host_clear(MIA_HOST_BLACK);
-    draw_title("USB WiFi");
-    mia_host_draw_text(100, 110, "Scanning WiFi...", MIA_HOST_YELLOW, MIA_HOST_BLACK);
+    draw_title(usb_wifi_text()->title_usb_wifi);
+    mia_host_draw_text(100, 110, usb_wifi_text()->scanning, MIA_HOST_YELLOW, MIA_HOST_BLACK);
     mia_host_present();
 }
 
@@ -256,10 +257,10 @@ static void do_scan(void) {
 
 static void draw_list(void) {
     mia_host_clear(MIA_HOST_BLACK);
-    draw_title("Select WiFi");
+    draw_title(usb_wifi_text()->select_wifi);
 
     if (g.network_count == 0) {
-        mia_host_draw_text(100, 110, "No networks found", MIA_HOST_RED, MIA_HOST_BLACK);
+        mia_host_draw_text(100, 110, usb_wifi_text()->no_networks, MIA_HOST_RED, MIA_HOST_BLACK);
         mia_host_draw_text(80, 222, "A:Rescan  SEL+ST:Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
         mia_host_present();
         return;
@@ -485,7 +486,7 @@ static void tick_keyboard(void) {
 
 static void draw_connecting(void) {
     mia_host_clear(MIA_HOST_BLACK);
-    draw_title("Connecting...");
+    draw_title(usb_wifi_text()->connecting);
 
     char line[64];
     snprintf(line, sizeof(line), "SSID: %s", g.ssid);
@@ -502,7 +503,7 @@ static void draw_connecting(void) {
     snprintf(line, sizeof(line), "WiFi: %s", g.wifi_status);
     mia_host_draw_text(4, 96, line, MIA_HOST_YELLOW, MIA_HOST_BLACK);
 
-    mia_host_draw_text(4, 130, "Connecting to WiFi...", MIA_HOST_CYAN, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 130, usb_wifi_text()->connecting, MIA_HOST_CYAN, MIA_HOST_BLACK);
     mia_host_present();
 }
 
@@ -600,7 +601,7 @@ static void draw_running(void) {
     mia_host_draw_text(4, 100, "USB NCM network adapter", MIA_HOST_CYAN, MIA_HOST_BLACK);
     mia_host_draw_text(4, 116, "Check PC for new NIC.", MIA_HOST_GRAY, MIA_HOST_BLACK);
 
-    mia_host_draw_text(4, 224, "SEL+ST:Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 224, usb_wifi_text()->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
     mia_host_present();
 }
 
@@ -625,12 +626,12 @@ int usb_wifi_main_impl(int argc, char *argv[]) {
 
     if (have_creds) {
         mia_host_clear(MIA_HOST_BLACK);
-        draw_title("USB WiFi");
+        draw_title(usb_wifi_text()->title_usb_wifi);
         char line[48];
         snprintf(line, sizeof(line), "Saved: %.*s", 42, saved_ssid);
         mia_host_draw_text(4, 80, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
         mia_host_draw_text(4, 110, "A:Connect  B:Rescan", MIA_HOST_YELLOW, MIA_HOST_BLACK);
-        mia_host_draw_text(4, 224, "SEL+ST:Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
+        mia_host_draw_text(4, 224, usb_wifi_text()->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
         mia_host_present();
 
         /* wait for input */
