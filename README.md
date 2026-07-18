@@ -201,33 +201,6 @@ uv run tools/serial_sd_client.py put ./app.elf /MiaOS/Application/test.app/app.e
 Paths should not contain spaces. The launcher writes `VCP File Transfer` activity to
 `/MiaOS/logs/latest.log`.
 
-Build the migrated SD apps with:
-
-```sh
-pio run -d experiments/elf_apps/diagnostic
-pio run -d experiments/elf_apps/screen_test
-pio run -d experiments/elf_apps/flashlight
-pio run -d experiments/elf_apps/timer
-pio run -d experiments/elf_apps/wifi_scan
-pio run -d experiments/elf_apps/wifi_files
-pio run -d experiments/elf_apps/ftp_server
-```
-
-Copy each generated `.pio/build/esp32s3/app.elf` to the matching SD directory:
-
-```text
-/Settings/diagnostic.app/app.elf
-/Utils/screen_test.app/app.elf
-/Utils/flashlight.app/app.elf
-/Utils/timer.app/app.elf
-/Settings/wifi_scan.app/app.elf
-/Utils/wifi_files.app/app.elf
-/Utils/ftp_server.app/app.elf
-```
-
-ELF apps are not sandboxed. A bad or incompatible ELF can crash or corrupt the
-launcher. Keep the ABI versioned and rebuild apps against the matching host ABI.
-
 ---
 
 ## 开发者备忘录 — OTA App Manifest 与命名规则
