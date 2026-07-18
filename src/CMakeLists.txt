@@ -19,6 +19,7 @@ idf_component_register(
     "fonts/vera_bold_11.c"
     "fonts/vera_bold_14.c"
     "mia_i18n.cpp"
+    "mia_startup_menu.c"
     "rtc_clock.cpp"
     "audio_host.cpp"
     "ota_app_flash.cpp"

@@ -25,6 +25,8 @@
 #define VIDEO_FRAME_DIVISOR 2u
 #define GBA_DISPLAY_X 40
 #define GBA_DISPLAY_Y 40
+#define GBA_INTERNAL_MEMORY_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#define GBA_FRAMEBUFFER_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT)
 
 #if MBEDTLS_VERSION_MAJOR >= 3
 #define MIA_MD5_STARTS mbedtls_md5_starts
@@ -58,6 +60,17 @@ static QueueHandle_t audio_ready_blocks;
 static TaskHandle_t audio_task_handle;
 static volatile bool audio_running;
 static volatile bool audio_failed;
+
+static void free_gba_core_memory(void) {
+    free(gba_screen_pixels);
+    gba_screen_pixels = NULL;
+    if (gbsp_memory != NULL) {
+        free(memory_map_read);
+        free(iwram);
+        free(gbsp_memory);
+        gbsp_memory = NULL;
+    }
+}
 
 void netpacket_poll_receive(void) {}
 void netpacket_send(uint16_t port, const void *data, size_t size) {}
@@ -211,8 +224,17 @@ MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
     if (stat(runtime->selection.rom_path, &rom_stat) != 0 || !mia_gba_rom_size_valid((size_t)rom_stat.st_size)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA ROM exceeds 32 MiB or has an invalid header size");
     if (!validate_bios()) return mia_core_error(MIA_CORE_ERR_CALLBACK, "canonical GBA BIOS missing or corrupt");
     gbsp_memory = heap_caps_calloc(1, sizeof(*gbsp_memory), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    gba_screen_pixels = heap_caps_malloc(GBA_SCREEN_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (gbsp_memory == NULL || gba_screen_pixels == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA PSRAM allocation failed");
+    if (gbsp_memory != NULL) {
+        iwram = heap_caps_calloc(1, GBSP_IWRAM_SIZE, GBA_INTERNAL_MEMORY_CAPS);
+        memory_map_read = heap_caps_calloc(
+            GBSP_MEMORY_MAP_ENTRIES, sizeof(*memory_map_read), GBA_INTERNAL_MEMORY_CAPS);
+    }
+    gba_screen_pixels = heap_caps_malloc(GBA_SCREEN_BUFFER_SIZE, GBA_FRAMEBUFFER_CAPS);
+    if (gbsp_memory == NULL || iwram == NULL || memory_map_read == NULL ||
+        gba_screen_pixels == NULL) {
+        free_gba_core_memory();
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA memory allocation failed");
+    }
     if (load_bios((char *)MIA_GBA_BIOS_PATH) != 0) return mia_core_error(MIA_CORE_ERR_CALLBACK, "canonical GBA BIOS missing or corrupt");
     init_gamepak_buffer();
     if (!mia_gba_page_allocation_valid(gamepak_buffer_count)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA ROM page allocation failed");

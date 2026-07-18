@@ -49,7 +49,10 @@ class ClientConfig:
 class SerialServiceClient:
     def __init__(self, config: ClientConfig) -> None:
         self._prepare_port(config.port)
-        self._serial = serial.Serial(config.port, config.baud, timeout=config.timeout_seconds)
+        # Keep reads short so a single quiet interval cannot consume the whole
+        # command deadline. Bulk transfers still use the protocol-level timeout.
+        read_timeout = min(max(config.timeout_seconds, 0.1), 0.2)
+        self._serial = serial.Serial(config.port, config.baud, timeout=read_timeout)
         time.sleep(0.2)
         self._serial.reset_input_buffer()
         self._drain_startup_noise()
@@ -63,8 +66,8 @@ class SerialServiceClient:
         deadline = time.time() + 0.5
         while time.time() < deadline:
             line = self._serial.readline()
-            if not line:
-                break
+            if line:
+                deadline = time.time() + 0.1
 
     def close(self) -> None:
         self._serial.close()
@@ -151,6 +154,12 @@ class SerialServiceClient:
         finally:
             if partial_path.exists():
                 partial_path.unlink()
+
+    def launch(self, app_path: str, file_path: str | None = None) -> str:
+        command = f"RUN {app_path}"
+        if file_path is not None:
+            command += f"\t{file_path}"
+        return self.send_command(command)
 
 
 def with_client(port: str, baud: int, timeout_seconds: float) -> SerialServiceClient:
@@ -289,6 +298,26 @@ def get(
     client = with_client(port, baud, timeout_seconds)
     try:
         rprint(client.get(remote_path, local_path))
+    finally:
+        client.close()
+
+
+@app.command()
+def launch(
+    app_path: str,
+    file_path: str | None = None,
+    port: str = "/dev/ttyACM0",
+    baud: int = 115200,
+    timeout_seconds: float = 5.0,
+) -> None:
+    """Launch an SD OTA app, optionally passing it one SD file path."""
+    client = with_client(port, baud, timeout_seconds)
+    try:
+        response = client.enter_service()
+        if response != "SFS1 READY":
+            rprint(response)
+            return
+        rprint(client.launch(app_path, file_path))
     finally:
         client.close()
 

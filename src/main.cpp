@@ -8,6 +8,7 @@
 #include <esp_ota_ops.h>
 #include <esp_rom_crc.h>
 #include <esp_timer.h>
+#include <nvs_flash.h>
 #include <soc/rtc_cntl_reg.h>
 #include <soc/soc.h>
 
@@ -33,6 +34,7 @@
 #include "lava_text.h"
 #include "lava_native_display.h"
 #include "mia_i18n.h"
+#include "mia_startup_menu_api.h"
 #include "pins.h"
 #include "rtc_clock.h"
 #include "sd_app_loader.h"
@@ -63,7 +65,7 @@ static constexpr uint8_t INITIAL_DRAW_ITEM_LIMIT = 1;
 static uint8_t g_selectedApp = 0;
 static const LauncherApp *g_activeApp = nullptr;
 static SdAppLoaderResult g_sdScan = {SdAppLoaderStatus::SdUnavailable, 0, 0};
-static SdAppManifestSummary g_sdApps[32] = {};
+static SdAppManifestSummary g_sdApps[99] = {};
 static SdAppLoaderResult g_lastSdRun = {SdAppLoaderStatus::Ok, 0, 0};
 static constexpr uint8_t BUTTON_INDEX_START = 1;
 static constexpr uint8_t BUTTON_INDEX_SELECT = 5;
@@ -1089,6 +1091,87 @@ static void exitActiveApp() {
   drawLauncher();
 }
 
+static bool writeDirectLaunchContext(const char *appPath, const char *argument) {
+  SD.remove("/MiaOS/.launch");
+  if (appPath == nullptr || argument == nullptr || argument[0] == '\0') {
+    return true;
+  }
+
+  const char *base = strrchr(appPath, '/');
+  base = base == nullptr ? appPath : base + 1;
+  char appName[64] = {};
+  snprintf(appName, sizeof(appName), "%s", base);
+  const size_t nameLength = strlen(appName);
+  if (nameLength > 4 && strcmp(appName + nameLength - 4, ".bin") == 0) {
+    appName[nameLength - 4] = '\0';
+  }
+
+  File marker = SD.open("/MiaOS/.launch", FILE_WRITE);
+  if (!marker) {
+    return false;
+  }
+  marker.print(appName);
+  marker.print('\n');
+  marker.print(argument);
+  marker.print('\n');
+  marker.close();
+  return true;
+}
+
+static const LauncherApp *builtinAppByName(const char *name) {
+  if (name == nullptr) return nullptr;
+  if (strcmp(name, "vcp") == 0 || strcmp(name, "serial") == 0) {
+    return &serialTransferApp();
+  }
+  if (strcmp(name, "logs") == 0 || strcmp(name, "log") == 0) {
+    return &logViewerApp();
+  }
+  if (strcmp(name, "about") == 0) {
+    return &aboutApp();
+  }
+  return nullptr;
+}
+
+static void handleSerialLaunchRequest(const SerialLaunchRequest &request) {
+  if (request.builtin) {
+    const LauncherApp *app = builtinAppByName(request.target);
+    if (app == nullptr) {
+      launcherTracef("[vcp-run] unknown builtin '%s'", request.target);
+      exitActiveApp();
+      return;
+    }
+    exitActiveApp();
+    g_activeApp = app;
+    if (g_activeApp->begin != nullptr) g_activeApp->begin(g_context);
+    return;
+  }
+
+  if (!writeDirectLaunchContext(request.target, request.argument)) {
+    launcherTrace("[vcp-run] failed to write launch context");
+    exitActiveApp();
+    return;
+  }
+
+  for (uint8_t index = 0;
+       index < g_sdScan.appCount && index < sizeof(g_sdApps) / sizeof(g_sdApps[0]); ++index) {
+    if (strcmp(g_sdApps[index].path, request.target) == 0) {
+      miaLauncherReturnContextSave(g_sdApps[index].category, g_sdApps[index].name);
+      break;
+    }
+  }
+
+  launcherTracef("[vcp-run] launching '%s'%s%s", request.target,
+                 request.argument[0] == '\0' ? "" : " with ",
+                 request.argument[0] == '\0' ? "" : request.argument);
+  exitActiveApp();
+  g_lastSdRun = runSdAppByPath(request.target, g_context.sdReady, drawSdFlashProgress,
+                               nullptr);
+  SD.remove("/MiaOS/.launch");
+  launcherLogAppendf("vcp run path=%s status=%s code=%d", request.target,
+                     sdAppLoaderStatusText(g_lastSdRun.status), g_lastSdRun.errorCode);
+  drawLauncher();
+}
+
 static void tickLauncher(uint32_t nowMs) {
   if (g_bootLoaderHintVisible) {
     if (g_context.buttons[0].pressed || g_context.buttons[1].pressed || systemExitPressed()) {
@@ -1210,6 +1293,63 @@ static void printStartupInfo() {
                  BEEP_PIN, I2C_SCL_PIN, I2C_SDA_PIN);
 }
 
+static void startupMenuPollButtons(void *) { updateAllButtons(); }
+
+static uint8_t startupMenuButtonDown(uint8_t button, void *) {
+  return button < ALL_BUTTON_COUNT && g_allButtons[button].down ? 1 : 0;
+}
+
+static void startupMenuRender(uint8_t selected, const char *status, void *) {
+  lavaClear(LAVA_BLACK);
+  lavaDrawText(24, 24, "MiaOS Startup Menu", LAVA_WHITE, LAVA_BLACK);
+  for (uint8_t index = 0; index < 3; ++index) {
+    const bool active = index == selected;
+    lavaDrawText(28, 62 + index * 28, active ? ">" : " ",
+                 active ? LAVA_YELLOW : LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(44, 62 + index * 28, mia_startup_menu_item_label(index),
+                 active ? LAVA_YELLOW : LAVA_WHITE, LAVA_BLACK);
+  }
+  if (status != nullptr && std::strstr(status, "SELECT: cancel") != nullptr) {
+    lavaDrawText(8, 172, "UP/DOWN: select  START: confirm", LAVA_GRAY, LAVA_BLACK);
+    lavaDrawText(8, 190, "SELECT: cancel", LAVA_GRAY, LAVA_BLACK);
+  } else {
+    lavaDrawText(8, 172, status != nullptr ? status : "", LAVA_GRAY, LAVA_BLACK);
+  }
+  lavaPresent();
+}
+
+static void startupMenuDelay(uint32_t milliseconds, void *) { delay(milliseconds); }
+
+static int32_t startupMenuClearNvs(void *) {
+  esp_err_t error = nvs_flash_erase();
+  if (error == ESP_OK) error = nvs_flash_init();
+  return error == ESP_OK ? 0 : (int32_t)error;
+}
+
+static int32_t startupMenuSetBootSlot(uint8_t slot, void *) {
+  if (slot > 1) return -1;
+  const esp_partition_t *target = esp_partition_find_first(
+      ESP_PARTITION_TYPE_APP,
+      (esp_partition_subtype_t)(ESP_PARTITION_SUBTYPE_APP_OTA_0 + slot), nullptr);
+  return target != nullptr && miaForceOtaBoot(target) == ESP_OK ? 0 : -1;
+}
+
+static void startupMenuRestart(void *) { esp_restart(); }
+
+static void runLauncherStartupMenu() {
+  const MiaStartupMenuHost host = {
+      startupMenuPollButtons,
+      startupMenuButtonDown,
+      startupMenuRender,
+      startupMenuDelay,
+      startupMenuClearNvs,
+      startupMenuSetBootSlot,
+      startupMenuRestart,
+      nullptr,
+  };
+  (void)mia_startup_menu_run_if_requested(&host);
+}
+
 void setup() {
   const bool cpuAt240Mhz = setCpuFrequencyMhz(240);
   TaskHandle_t vcpInitTask = nullptr;
@@ -1240,6 +1380,7 @@ void setup() {
   printStartupInfo();
   initDisplay();
   launcherTrace("[setup] initDisplay done");
+  runLauncherStartupMenu();
   const LavaFontFace persistedFont = lavaFontFace();
   (void)persistedFont;
   initSdCard();
@@ -1267,6 +1408,13 @@ void loop() {
 
     if (g_activeApp->tick != nullptr) {
       g_activeApp->tick(g_context, now);
+    }
+    if (g_activeApp == &serialTransferApp()) {
+      SerialLaunchRequest request = {};
+      if (serialFileServiceTakeLaunchRequest(&request)) {
+        handleSerialLaunchRequest(request);
+        return;
+      }
     }
     if (g_activeApp == &serialTransferApp() && serialFileServiceTakeExitRequest()) {
       launcherTrace("[serial-control] host requested exit");

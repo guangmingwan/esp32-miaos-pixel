@@ -1,5 +1,6 @@
 #include "display_host.h"
 #include "mia_host_abi.h"
+#include "mia_startup_menu_api.h"
 
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
@@ -14,6 +15,8 @@
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_ota_ops.h>
+#include <esp_rom_crc.h>
 #include <esp_rom_sys.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -21,16 +24,20 @@
 #include <esp_chip_info.h>
 #include <esp_flash.h>
 #include <esp_heap_caps.h>
+#include <esp_partition.h>
+#include <esp_dlfcn.h>
 #include <driver/adc.h>
 #include <esp_private/esp_clk.h>
 #include <esp_vfs_fat.h>
 #include <esp_wifi.h>
+#include <soc/soc.h>
 #include <ff.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lwip/netdb.h>
 #include <lwip/sockets.h>
 #include <sdmmc_cmd.h>
+#include <stddef.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -164,6 +171,117 @@ static void update_buttons() {
     g_buttons[i].released = !down && g_last_buttons[i];
     g_last_buttons[i] = down;
   }
+}
+
+static void startup_menu_poll_buttons(void *) { update_buttons(); }
+
+static uint8_t startup_menu_button_down(uint8_t button, void *) {
+  return button < 14 && g_buttons[button].down ? 1 : 0;
+}
+
+static void startup_menu_render(uint8_t selected, const char *status, void *) {
+  static const char *const items[] = {"Clear NVRAM", "Boot ota_0", "Boot ota_1"};
+  display_host_clear(0);
+  display_host_draw_text(24, 24, "MiaOS Startup Menu", 1, 0);
+  for (uint8_t index = 0; index < 3; ++index) {
+    const uint8_t foreground = index == selected ? 0 : 1;
+    const uint8_t background = index == selected ? 2 : 0;
+    display_host_draw_text(32, 64 + index * 28, items[index], foreground, background);
+  }
+  if (status != nullptr && strstr(status, "SELECT: cancel") != nullptr) {
+    display_host_draw_text(8, 176, "UP/DOWN: select  START: confirm", 7, 0);
+    display_host_draw_text(8, 192, "SELECT: cancel", 7, 0);
+  } else {
+    display_host_draw_text(8, 176, status != nullptr ? status : "", 7, 0);
+  }
+  display_host_present();
+}
+
+static void startup_menu_delay(uint32_t milliseconds, void *) {
+  vTaskDelay(pdMS_TO_TICKS(milliseconds));
+}
+
+static int32_t startup_menu_clear_nvs(void *) {
+  esp_err_t error = nvs_flash_erase();
+  if (error == ESP_OK) error = nvs_flash_init();
+  return error == ESP_OK ? 0 : (int32_t)error;
+}
+
+static int32_t startup_menu_set_boot_slot(uint8_t slot, void *) {
+  if (slot > 1) return -1;
+  const esp_partition_t *ota_data = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, NULL);
+  const esp_partition_t *target = esp_partition_find_first(
+      ESP_PARTITION_TYPE_APP,
+      (esp_partition_subtype_t)(ESP_PARTITION_SUBTYPE_APP_OTA_0 + slot), NULL);
+  if (ota_data == NULL || target == NULL) return -1;
+
+  typedef struct __attribute__((packed)) {
+    uint32_t ota_seq;
+    uint8_t seq_label[20];
+    uint32_t ota_state;
+    uint32_t crc;
+  } StartupOtaEntry;
+  StartupOtaEntry entries[2] = {};
+  for (size_t index = 0; index < 2; ++index) {
+    entries[index].ota_seq = (uint32_t)slot + 1u + (uint32_t)index * 2u;
+    entries[index].ota_state = ESP_OTA_IMG_VALID;
+    entries[index].crc = esp_rom_crc32_le(UINT32_MAX,
+                                          (uint8_t *)&entries[index].ota_seq,
+                                          sizeof(entries[index].ota_seq));
+  }
+  esp_err_t error = esp_partition_erase_range(ota_data, 0, ota_data->size);
+  if (error == ESP_OK) error = esp_partition_write(ota_data, 0, &entries[0], sizeof(entries[0]));
+  if (error == ESP_OK) error = esp_partition_write(ota_data, 4096, &entries[1], sizeof(entries[1]));
+  return error == ESP_OK ? 0 : (int32_t)error;
+}
+
+static void startup_menu_restart(void *) { esp_restart(); }
+
+static void *startup_menu_executable_symbol(void *symbol) {
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(CONFIG_ELF_LOADER_CACHE_OFFSET)
+  const uintptr_t address = reinterpret_cast<uintptr_t>(symbol);
+  if (address >= SOC_DROM_LOW && address < SOC_DROM_HIGH) {
+    return reinterpret_cast<void *>(address + (SOC_IROM_LOW - SOC_DROM_LOW));
+  }
+#endif
+  return symbol;
+}
+
+static void run_shared_startup_menu_if_requested() {
+  if (!g_buttons[2].down) return;
+
+  void *handle = dlopen(MIA_STARTUP_MENU_LIBRARY_NAME, RTLD_NOW);
+  if (handle == nullptr) {
+    const char *error = dlerror();
+    ESP_LOGW(TAG, "Startup menu library unavailable: %s",
+             error != nullptr ? error : "unknown error");
+    return;
+  }
+  const MiaStartupMenuGetApiFn get_api = reinterpret_cast<MiaStartupMenuGetApiFn>(
+      startup_menu_executable_symbol(dlsym(handle, "mia_startup_menu_get_api")));
+  const MiaStartupMenuApi *api = get_api != nullptr ? get_api(MIA_STARTUP_MENU_ABI_VERSION) : nullptr;
+  if (api == nullptr || api->abi_version != MIA_STARTUP_MENU_ABI_VERSION ||
+      api->struct_size < offsetof(MiaStartupMenuApi, run_if_requested) +
+                             sizeof(api->run_if_requested) ||
+      api->run_if_requested == nullptr) {
+    ESP_LOGW(TAG, "Invalid startup menu library ABI");
+    dlclose(handle);
+    return;
+  }
+
+  const MiaStartupMenuHost host = {
+      startup_menu_poll_buttons,
+      startup_menu_button_down,
+      startup_menu_render,
+      startup_menu_delay,
+      startup_menu_clear_nvs,
+      startup_menu_set_boot_slot,
+      startup_menu_restart,
+      nullptr,
+  };
+  const int32_t result = api->run_if_requested(&host);
+  if (result != 2) dlclose(handle);
 }
 
 static esp_err_t mount_sd_card() {
@@ -504,6 +622,7 @@ extern "C" esp_err_t host_platform_init(void) {
   ESP_ERROR_CHECK(mount_sd_card());
 #endif
   update_buttons();
+  run_shared_startup_menu_if_requested();
   return ESP_OK;
 }
 

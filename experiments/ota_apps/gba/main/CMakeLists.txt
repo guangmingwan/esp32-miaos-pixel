@@ -71,4 +71,5 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_AUDIO_DMA_BUF_COUNT=10
     MIA_PICKER_COVERS=1
 )
-target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -fomit-frame-pointer -ffast-math -Wno-unused-variable -Wno-implicit-fallthrough -Wno-missing-field-initializers -Wno-unused-label -Wno-narrowing)
+target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -flto -fomit-frame-pointer -ffast-math -Wno-unused-variable -Wno-implicit-fallthrough -Wno-missing-field-initializers -Wno-unused-label -Wno-narrowing)
+idf_build_set_property(LINK_OPTIONS "-flto" APPEND)

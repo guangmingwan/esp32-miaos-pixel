@@ -15,7 +15,7 @@
 
 namespace {
 
-constexpr uint16_t COMMAND_BUFFER_SIZE = 160;
+constexpr uint16_t COMMAND_BUFFER_SIZE = 512;
 constexpr uint16_t CONTROL_BUFFER_SIZE = 32;
 constexpr size_t VCP_WINDOW_SIZE = 6144;
 constexpr size_t DOWNLOAD_CHUNK_SIZE = VCP_WINDOW_SIZE;
@@ -30,6 +30,8 @@ uint16_t g_controlLength = 0;
 bool g_controlOverflow = false;
 bool g_enterRequested = false;
 bool g_exitRequested = false;
+bool g_launchRequested = false;
+SerialLaunchRequest g_launchRequest = {};
 char g_status[48] = "Idle";
 char g_targetPath[96] = "/";
 bool g_sdReady = false;
@@ -53,6 +55,7 @@ SerialFileServiceSnapshot g_publishedSnapshot = {};
 
 HWCDC &vcp() { return Serial; }
 void copyText(char *dest, size_t destSize, const char *src);
+bool parsePathArgument(const char *raw, String &normalizedPath);
 
 void publishSnapshot() {
   SerialFileServiceSnapshot snapshot = {};
@@ -109,6 +112,68 @@ void sendError(const char *message) {
   char line[96];
   snprintf(line, sizeof(line), "ERR %s", message);
   sendLine(line);
+}
+
+bool parseLaunchRequest(char *rawArgs, SerialLaunchRequest *request) {
+  if (rawArgs == nullptr || request == nullptr) {
+    return false;
+  }
+
+  *request = {};
+  char *argument = nullptr;
+  char *separator = strchr(rawArgs, '\t');
+  if (separator != nullptr) {
+    *separator = '\0';
+    argument = separator + 1;
+  } else {
+    char *space = strchr(rawArgs, ' ');
+    if (space != nullptr) {
+      *space = '\0';
+      argument = space + 1;
+    }
+  }
+
+  while (argument != nullptr && *argument == ' ') ++argument;
+  if (strcmp(rawArgs, "BUILTIN") == 0) {
+    if (argument == nullptr || *argument == '\0' || strchr(argument, ' ') != nullptr ||
+        strchr(argument, '\t') != nullptr) {
+      return false;
+    }
+    request->builtin = true;
+    copyText(request->target, sizeof(request->target), argument);
+    return true;
+  }
+
+  if (rawArgs[0] == '\0' || (argument != nullptr && strchr(argument, ' ') != nullptr)) {
+    return false;
+  }
+
+  String normalizedApp;
+  if (!parsePathArgument(rawArgs, normalizedApp) ||
+      normalizedApp.length() >= sizeof(request->target)) {
+    return false;
+  }
+  File app = SD.open(normalizedApp, FILE_READ);
+  const bool appOk = app && !app.isDirectory();
+  if (app) app.close();
+  if (!appOk) return false;
+
+  request->builtin = false;
+  copyText(request->target, sizeof(request->target), normalizedApp.c_str());
+  if (argument != nullptr && *argument != '\0') {
+    String normalizedArgument;
+    if (!parsePathArgument(argument, normalizedArgument) ||
+        normalizedArgument.length() >= sizeof(request->argument)) return false;
+    copyText(request->argument, sizeof(request->argument), normalizedArgument.c_str());
+  }
+  return true;
+}
+
+void queueLaunchRequest(const SerialLaunchRequest &request) {
+  portENTER_CRITICAL(&g_serviceStateMux);
+  g_launchRequest = request;
+  g_launchRequested = true;
+  portEXIT_CRITICAL(&g_serviceStateMux);
 }
 
 bool parsePathArgument(const char *raw, String &normalizedPath) {
@@ -407,8 +472,20 @@ void processCommand() {
     return;
   }
   if (strcmp(command, "HELP") == 0) {
-    sendLine("OK COMMANDS PING INFO LIST MKDIR DELETE RENAME PUT GET HELP; CONTROL SFS1 EXIT");
+    sendLine("OK COMMANDS PING INFO LIST MKDIR DELETE RENAME PUT GET RUN HELP; CONTROL SFS1 EXIT");
     setStatus("Help shown");
+    return;
+  }
+  if (strcmp(command, "RUN") == 0) {
+    SerialLaunchRequest request = {};
+    if (!parseLaunchRequest(arg1, &request)) {
+      sendError("invalid launch request");
+      setStatus("Launch rejected");
+      return;
+    }
+    queueLaunchRequest(request);
+    sendLine("OK LAUNCH QUEUED");
+    setStatus("Launch queued");
     return;
   }
   if (strcmp(command, "LIST") == 0) {
@@ -632,6 +709,10 @@ void serialFileServiceBegin(bool sdReady) {
   g_sentBytes = 0;
   g_lastDownloadActivityMs = 0;
   g_exitRequested = false;
+  portENTER_CRITICAL(&g_serviceStateMux);
+  g_launchRequested = false;
+  g_launchRequest = {};
+  portEXIT_CRITICAL(&g_serviceStateMux);
   g_serviceStopRequested = false;
   copyText(g_targetPath, sizeof(g_targetPath), "/");
   setStatus(sdReady ? "Waiting for host" : "SD unavailable");
@@ -706,5 +787,18 @@ bool serialFileServiceTakeEnterRequest() {
 bool serialFileServiceTakeExitRequest() {
   const bool requested = g_exitRequested;
   g_exitRequested = false;
+  return requested;
+}
+
+bool serialFileServiceTakeLaunchRequest(SerialLaunchRequest *request) {
+  if (request == nullptr) return false;
+  portENTER_CRITICAL(&g_serviceStateMux);
+  const bool requested = g_launchRequested;
+  if (requested) {
+    *request = g_launchRequest;
+    g_launchRequested = false;
+    g_launchRequest = {};
+  }
+  portEXIT_CRITICAL(&g_serviceStateMux);
   return requested;
 }

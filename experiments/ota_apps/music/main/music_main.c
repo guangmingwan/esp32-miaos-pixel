@@ -1,4 +1,5 @@
 #include "mia_host_abi.h"
+#include "launch_context.h"
 #include "music_i18n.h"
 #include "music_player.h"
 
@@ -184,7 +185,12 @@ int music_main_impl(int argc, char *argv[]) {
   }
 
   scan_current_directory();
-  maybe_autoplay_first_file();
+  char direct_path[MIA_HOST_LAUNCH_ARG_SIZE];
+  if (mia_host_consume_launch_arg("music", direct_path, sizeof(direct_path))) {
+    music_play_file(direct_path, status_text, sizeof(status_text));
+  } else {
+    maybe_autoplay_first_file();
+  }
   draw_music_app();
   while (1) {
     mia_host_buttons_poll();

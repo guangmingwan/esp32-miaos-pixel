@@ -20,6 +20,8 @@
 #include "common.h"
 #include "streams/file_stream.h"
 
+#include <esp_heap_caps.h>
+
 /* Sound */
 #define gbc_sound_tone_control_low(channel, regn)                             \
 {                                                                             \
@@ -2217,7 +2219,7 @@ void init_gamepak_buffer(void)
   gamepak_buffer_count = 0;
   while (gamepak_buffer_count < ROM_BUFFER_SIZE)
   {
-    void *ptr = malloc(gamepak_buffer_blocksize);
+    void *ptr = heap_caps_malloc(gamepak_buffer_blocksize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!ptr)
       break;
     gamepak_buffers[gamepak_buffer_count++] = (u8*)ptr;
@@ -2586,5 +2588,3 @@ s32 load_bios(char *name)
   fclose(fd);
   return 0;
 }
-
-

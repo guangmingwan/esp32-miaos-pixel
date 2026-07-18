@@ -1,7 +1,10 @@
 #include "mia_emulator_runtime.h"
 #include "mia_host_abi.h"
+#include "launch_context.h"
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
 #ifndef MIA_EMULATOR_TARGET
 #error "MIA_EMULATOR_TARGET is required"
@@ -45,6 +48,9 @@ static const char *const extensions[] = {
 #ifdef MIA_EMULATOR_GBA
     "gba",
 #endif
+#ifdef MIA_EMULATOR_BBK
+    MIA_EMULATOR_EXTENSION,
+#endif
 };
 
 #ifdef MIA_EMULATOR_SECOND_ROM_ROOT
@@ -70,6 +76,31 @@ static bool allocate_runtime(MiaEmulatorRuntime *runtime) {
     return runtime->display != NULL && runtime->audio_queue != NULL && runtime->audio_drain != NULL;
 }
 
+static MiaStorageStatus direct_selection(const char *path, MiaAppPickerSelection *selection) {
+    char physical_path[MIA_APP_PATH_MAX];
+    const char *selected_path = path;
+    if (strncmp(path, "/sd/", 4) != 0 && strcmp(path, "/sd") != 0) {
+        if (snprintf(physical_path, sizeof(physical_path), "/sd%s", path) >=
+            (int)sizeof(physical_path)) {
+            return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "direct ROM path is too long");
+        }
+        selected_path = physical_path;
+    }
+
+    const char *base = strrchr(selected_path, '/');
+    base = base == NULL ? selected_path : base + 1;
+    const char *dot = strrchr(base, '.');
+    const size_t stem_length = dot == NULL ? strlen(base) : (size_t)(dot - base);
+    if (stem_length == 0 || stem_length + 5u > sizeof(selection->save_name) ||
+        snprintf(selection->rom_path, sizeof(selection->rom_path), "%s", selected_path) >=
+            (int)sizeof(selection->rom_path)) {
+        return mia_storage_error(MIA_STORAGE_ERR_INVALID_ARGUMENT, "direct ROM path is too long");
+    }
+    memcpy(selection->save_name, base, stem_length);
+    memcpy(selection->save_name + stem_length, ".sav", 5);
+    return mia_storage_ok();
+}
+
 int mia_emulator_main_impl(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -87,7 +118,16 @@ int mia_emulator_main_impl(int argc, char *argv[]) {
     runtime->video = (MiaAppVideoSink){runtime->display, MIA_DISPLAY_PIXELS, MIA_EMULATOR_SCALE_MODE};
     mia_app_input_init(&runtime->input, 250);
     (void)mia_app_audio_init(&runtime->audio, runtime->audio_queue, 2048);
-    MiaStorageStatus pick = mia_emulator_picker_run(&runtime->storage, &runtime->storage_target, &runtime->selection);
+    char direct_path[MIA_HOST_LAUNCH_ARG_SIZE];
+    MiaStorageStatus pick;
+    if (mia_host_consume_launch_arg(MIA_APP_NAME, direct_path, sizeof(direct_path))) {
+        char direct_log[MIA_HOST_LAUNCH_ARG_SIZE + 32];
+        snprintf(direct_log, sizeof(direct_log), "direct launch: %s", direct_path);
+        mia_host_log(direct_log);
+        pick = direct_selection(direct_path, &runtime->selection);
+    } else {
+        pick = mia_emulator_picker_run(&runtime->storage, &runtime->storage_target, &runtime->selection);
+    }
     if (pick.code != MIA_STORAGE_OK) return 1;
     const MiaRuntimeTarget target = {MIA_EMULATOR_TARGET, "Emulators", MIA_EMULATOR_TARGET, MIA_EMULATOR_TARGET, MIA_EMULATOR_ROM_ROOT, MIA_EMULATOR_SAVE_ROOT, {MIA_EMULATOR_WIDTH, MIA_EMULATOR_HEIGHT}, MIA_EMULATOR_SAMPLE_RATE, NULL, 0};
     MiaCoreStatus status = mia_core_adapter_init(&runtime->adapter, &target, mia_emulator_make_host(runtime));

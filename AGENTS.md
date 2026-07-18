@@ -38,6 +38,58 @@
 - `GET <path>` replies `DATA <size>`, followed by exactly that many raw bytes, followed by `OK sent`. The host must read the declared byte count before parsing the completion line.
 - A focused real-device check is: enter, wait for `SFS1 READY`, send `PING` and require `OK PONG`, perform the desired file operation, then exit and require `SFS1 EXITING`. For transfer changes, round-trip a multi-megabyte nonzero file and compare cryptographic hashes before deleting the device copy.
 
+### Common `serial_sd_client.py` commands
+
+- Default Linux port is `/dev/ttyACM0`; override it with `--port <port>`. Use one serial client at a time. Do not run `enter`, `put`, `get`, or `exit` concurrently on the same port.
+- Enter/exit VCP:
+  ```sh
+  uv run tools/serial_sd_client.py enter --port <port>
+  uv run tools/serial_sd_client.py exit --port <port>
+  ```
+- Check the protocol and device:
+  ```sh
+  uv run tools/serial_sd_client.py ping --port <port>
+  uv run tools/serial_sd_client.py info --port <port>
+  ```
+- List directories. The path is passed with `--remote-path`, not as a positional argument:
+  ```sh
+  uv run tools/serial_sd_client.py list-dir --remote-path /MiaOS/Library --port <port>
+  ```
+- Create/delete/rename remote paths:
+  ```sh
+  uv run tools/serial_sd_client.py mkdir /MiaOS/Library --port <port>
+  uv run tools/serial_sd_client.py delete /MiaOS/Library/file.bin --port <port>
+  uv run tools/serial_sd_client.py rename /old/name.bin /new/name.bin --port <port>
+  ```
+- Upload/download files. `put` and `get` use `LOCAL_PATH REMOTE_PATH` and `REMOTE_PATH LOCAL_PATH` order respectively:
+  ```sh
+  uv run tools/serial_sd_client.py put local.bin /MiaOS/Library/remote.bin --port <port>
+  uv run tools/serial_sd_client.py get /MiaOS/Library/remote.bin /tmp/remote.bin --port <port>
+  ```
+- Direct-launch an SD app with an optional file argument. The helper uses `--file-path` and waits for the launch response; the device then reboots, so the command does not return to VCP:
+  ```sh
+  uv run tools/serial_sd_client.py launch /MiaOS/Emulators/gba.app/gba.bin \
+      --file-path /roms/gba/game.gba --port <port>
+  ```
+- After `esptool.py`, `otatool.py`, or `launch`, USB Serial/JTAG may disappear briefly. Wait for `/dev/ttyACM*` to reappear before opening the next client. If a helper misses startup output, use a single foreground raw serial session to wait for `SFS1 READY`; never open a second client in parallel.
+- VCP paths are raw byte paths. Keep paths ASCII where possible. Launcher-side Chinese paths require GBK bytes; OTA app paths use UTF-8 as described in the filename encoding rules below.
+
+## SD Filename Encoding
+
+- The parent launcher is built with `CONFIG_FATFS_CODEPAGE_936=y` and `CONFIG_FATFS_API_ENCODING_ANSI_OEM=y`. Any Chinese path passed to launcher-side Arduino `SD.open`, `SD.remove`, `SD.rename`, or related APIs must be encoded as GBK bytes; sending UTF-8 bytes creates names that the launcher may list but UTF-8 OTA apps cannot open.
+- OTA apps under `experiments/ota_apps/` use `CONFIG_FATFS_API_ENCODING_UTF_8=y`. Their `readdir`, `fopen`, and storage-picker paths are UTF-8. Do not reuse launcher-side GBK conversion in an OTA app.
+- VCP commands carry raw bytes. ASCII paths are safe everywhere. For Chinese device filenames, use a GBK-aware host operation or an app compiled with the matching UTF-8 FATFS configuration; do not assume `tools/serial_sd_client.py rename` can safely encode a Chinese destination by itself.
+- `RUN <app>\t<file>` keeps its file argument in UTF-8 for the OTA app. The launcher validates the app path only and must pass the optional file argument through without calling its ANSI/OEM `SD.open` on that path.
+- The static web repository `experiments/ota_apps/bbk-games/roms/*.lib` is a separate source/data repository. Never rename or edit those local files to repair device SD names; device-side SD renames are an independent deployment operation.
+
+## VCP Direct Launch
+
+- The VCP service accepts `RUN` after the file-transfer commands. `RUN <app-bin-path>` queues an SD OTA app launch; `RUN <app-bin-path>\t<file-path>` additionally passes one SD file path to the app after reboot. The tab separator is required when either path may contain spaces.
+- Example: `RUN /MiaOS/Emulators/nes.app/nes.bin\t/roms/FC/game.nes`. The launcher validates the app path, preserves the optional UTF-8 file argument in a one-shot `/MiaOS/.launch` context, flashes the app to `ota_1`, selects `ota_1`, and reboots. The target app consumes and removes the context on startup.
+- `RUN BUILTIN\tabout`, `RUN BUILTIN\tlogs`, and `RUN BUILTIN\tvcp` switch directly between launcher built-in apps without rebooting. Built-in apps ignore the optional file argument.
+- The host helper supports this through `uv run tools/serial_sd_client.py launch <app-bin-path> [--file-path <file-path>]`; it enters VCP automatically, sends the request, and then the device reboots into the selected app.
+- The direct file argument is consumed by the shared emulator picker path and by `music`, so NES/FC and other emulator ROMs can bypass the on-device picker. Apps that do not consume an argument still launch normally.
+
 ## Firmware And Partition Gotchas
 
 - `partitions_dual.csv` defines `ota_0` at `0x20000` and `ota_1` at `0x720000`; keep USB MSC flashing and OTA switching aligned with those offsets.

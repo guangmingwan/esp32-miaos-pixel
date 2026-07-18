@@ -331,14 +331,16 @@ unsigned memory_write_savestate(u8 *dst);
 #ifdef RETRO_GO
 // We wrap certain globals to move them under a dynamic allocation, whilst still preserving the functionality
 // of any code treating them as fixed arrays. This results in very minimal code changes to the rest of gbSP.
+#define GBSP_IWRAM_SIZE (1024u * 32u * 2u)
+#define GBSP_MEMORY_MAP_ENTRIES (8u * 1024u)
 typedef struct
 {
-  // TODO: Evaluate what is best left in internal memory for performance reasons (for the few that could fit)
+  // Large emulated memory regions stay in PSRAM. Hot CPU state is allocated separately.
   u8 vram[1024 * 96];
   u8 bios_rom[1024 * 16];
   u8 ewram[1024 * 256 * 2];
-  u8 iwram[1024 * 32 * 2];
-  u8 *memory_map_read[8 * 1024];
+  u8 *iwram;
+  u8 **memory_map_read;
   u8 gamepak_backup[1024 * 128];
   // There's also stuff from video.cpp to consider:
   // u8 obj_priority_list[5][160][128];
