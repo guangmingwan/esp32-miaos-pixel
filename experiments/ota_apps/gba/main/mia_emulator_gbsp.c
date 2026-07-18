@@ -25,8 +25,7 @@
 #define VIDEO_FRAME_DIVISOR 2u
 #define GBA_DISPLAY_X 40
 #define GBA_DISPLAY_Y 40
-#define GBA_INTERNAL_MEMORY_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
-#define GBA_FRAMEBUFFER_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT)
+#define GBA_FRAMEBUFFER_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 
 #if MBEDTLS_VERSION_MAJOR >= 3
 #define MIA_MD5_STARTS mbedtls_md5_starts
@@ -225,9 +224,11 @@ MiaCoreStatus mia_emulator_core_boot(MiaEmulatorRuntime *runtime) {
     if (!validate_bios()) return mia_core_error(MIA_CORE_ERR_CALLBACK, "canonical GBA BIOS missing or corrupt");
     gbsp_memory = heap_caps_calloc(1, sizeof(*gbsp_memory), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (gbsp_memory != NULL) {
-        iwram = heap_caps_calloc(1, GBSP_IWRAM_SIZE, GBA_INTERNAL_MEMORY_CAPS);
+        iwram = heap_caps_calloc(
+            1, GBSP_IWRAM_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         memory_map_read = heap_caps_calloc(
-            GBSP_MEMORY_MAP_ENTRIES, sizeof(*memory_map_read), GBA_INTERNAL_MEMORY_CAPS);
+            GBSP_MEMORY_MAP_ENTRIES, sizeof(*memory_map_read),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
     gba_screen_pixels = heap_caps_malloc(GBA_SCREEN_BUFFER_SIZE, GBA_FRAMEBUFFER_CAPS);
     if (gbsp_memory == NULL || iwram == NULL || memory_map_read == NULL ||

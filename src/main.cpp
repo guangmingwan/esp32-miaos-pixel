@@ -1164,6 +1164,11 @@ static void handleSerialLaunchRequest(const SerialLaunchRequest &request) {
                  request.argument[0] == '\0' ? "" : " with ",
                  request.argument[0] == '\0' ? "" : request.argument);
   exitActiveApp();
+  if (sdManifestMatchesOta(request.target)) {
+    launcherTracef("[vcp-run] manifest matches ota_1, skipping flash for %s", request.target);
+    miaBootAppSlot();
+    return;
+  }
   g_lastSdRun = runSdAppByPath(request.target, g_context.sdReady, drawSdFlashProgress,
                                nullptr);
   SD.remove("/MiaOS/.launch");

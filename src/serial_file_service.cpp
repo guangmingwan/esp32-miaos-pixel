@@ -144,7 +144,7 @@ bool parseLaunchRequest(char *rawArgs, SerialLaunchRequest *request) {
     return true;
   }
 
-  if (rawArgs[0] == '\0' || (argument != nullptr && strchr(argument, ' ') != nullptr)) {
+  if (rawArgs[0] == '\0') {
     return false;
   }
 

@@ -72,8 +72,8 @@ class SerialServiceClient:
     def close(self) -> None:
         self._serial.close()
 
-    def send_command(self, command: str) -> str:
-        self._serial.write((command + "\n").encode("utf-8"))
+    def send_command(self, command: str, encoding: str = "utf-8") -> str:
+        self._serial.write((command + "\n").encode(encoding))
         self._serial.flush()
         return self.read_protocol_line()
 
@@ -155,11 +155,18 @@ class SerialServiceClient:
             if partial_path.exists():
                 partial_path.unlink()
 
-    def launch(self, app_path: str, file_path: str | None = None) -> str:
-        command = f"RUN {app_path}"
+    def launch(
+        self,
+        app_path: str,
+        file_path: str | None = None,
+        file_path_encoding: str = "utf-8",
+    ) -> str:
+        command = f"RUN {app_path}".encode("ascii")
         if file_path is not None:
-            command += f"\t{file_path}"
-        return self.send_command(command)
+            command += b"\t" + file_path.encode(file_path_encoding)
+        self._serial.write(command + b"\n")
+        self._serial.flush()
+        return self.read_protocol_line()
 
 
 def with_client(port: str, baud: int, timeout_seconds: float) -> SerialServiceClient:
@@ -261,13 +268,15 @@ def delete(
 def rename(
     old_remote_path: str,
     new_remote_path: str,
+    path_encoding: str = "gbk",
     port: str = "/dev/ttyACM0",
     baud: int = 115200,
     timeout_seconds: float = 2.0,
 ) -> None:
     client = with_client(port, baud, timeout_seconds)
     try:
-        rprint(client.send_command(f"RENAME {old_remote_path}\t{new_remote_path}"))
+        rprint(client.send_command(
+            f"RENAME {old_remote_path}\t{new_remote_path}", path_encoding))
     finally:
         client.close()
 
@@ -306,6 +315,7 @@ def get(
 def launch(
     app_path: str,
     file_path: str | None = None,
+    file_path_encoding: str = "utf-8",
     port: str = "/dev/ttyACM0",
     baud: int = 115200,
     timeout_seconds: float = 5.0,
@@ -317,7 +327,7 @@ def launch(
         if response != "SFS1 READY":
             rprint(response)
             return
-        rprint(client.launch(app_path, file_path))
+        rprint(client.launch(app_path, file_path, file_path_encoding))
     finally:
         client.close()
 
