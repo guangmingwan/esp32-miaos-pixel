@@ -1,6 +1,8 @@
 #ifndef MAIN_LAVA_SUPPORT_H
 #define MAIN_LAVA_SUPPORT_H
 
+#include "lava_audio.h"
+
 #define FILE char
 #define UINT long
 
@@ -4179,10 +4181,12 @@ void AUDIO_OpenDevice(void)
 {
    g_lava_music_enabled = 1;
    g_lava_sound_enabled = 1;
+   lava_audio_start((const char *)ExePath);
 }
 
 void AUDIO_CloseDevice(void)
 {
+   lava_audio_stop();
 }
 
 void AUDIO_PlayMusic(int num, BOOL loop, int fadeTime)
@@ -4190,11 +4194,13 @@ void AUDIO_PlayMusic(int num, BOOL loop, int fadeTime)
    g_lava_num_music = num;
    g_lava_last_music_loop = loop ? 1 : 0;
    g_lava_last_music_fade_time = fadeTime;
+   lava_audio_set_music(num, loop ? 1 : 0, fadeTime);
 }
 
 void AUDIO_PlaySound(int num)
 {
    g_lava_last_sound = num;
+   lava_audio_play_sound(num);
 }
 
 void PAL_LavaSetBackgroundMusic(int num, int mode)
@@ -4223,6 +4229,7 @@ void PAL_LavaPlaySoundEffect(int num)
 void PAL_LavaStopMusic(int fade)
 {
    g_lava_num_music = 0;
+   lava_audio_stop_music();
    if (!g_lava_fast_script_probe)
    {
       AUDIO_PlayMusic(0, FALSE, fade == 0 ? 2 : fade * 3);
@@ -4232,6 +4239,7 @@ void PAL_LavaStopMusic(int fade)
 void AUDIO_EnableMusic(BOOL fEnable)
 {
    g_lava_music_enabled = fEnable ? 1 : 0;
+   lava_audio_enable_music(fEnable ? 1 : 0);
 }
 
 BOOL AUDIO_MusicEnabled(void)
@@ -4242,6 +4250,7 @@ BOOL AUDIO_MusicEnabled(void)
 void AUDIO_EnableSound(BOOL fEnable)
 {
    g_lava_sound_enabled = fEnable ? 1 : 0;
+   lava_audio_enable_sound(fEnable ? 1 : 0);
 }
 
 BOOL AUDIO_SoundEnabled(void)

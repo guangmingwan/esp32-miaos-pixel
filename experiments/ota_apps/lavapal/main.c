@@ -219,6 +219,7 @@ PAL_SplashScreen(
        int frame;
 
     if (PAL_PlayAVI("2.avi")) return;
+    AUDIO_PlayMusic(NUM_RIX_TITLE, TRUE, 2);
     PAL_SetPalette(1, FALSE);
     ret_up = -999;
     ret_down = -999;

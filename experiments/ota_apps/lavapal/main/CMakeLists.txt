@@ -10,6 +10,14 @@ idf_component_register(
         "../main_lava_native.c"
         "../lava_mem.c"
         "../../common_host/lava_esp32_backend.c"
+        "../../common_host/lava_audio.c"
+        "../lava_rix.cpp"
+        "../vendor/rix_adplug/emuopl.cpp"
+        "../vendor/rix_adplug/fmopl.c"
+        "../vendor/rix_adplug/fprovide.cpp"
+        "../vendor/rix_adplug/rix.cpp"
+        "../vendor/rix_binio/binfile.cpp"
+        "../vendor/rix_binio/binio.cpp"
         "../../common_host/host_platform.cpp"
         "../../common_host/display_host.cpp"
     INCLUDE_DIRS
@@ -17,6 +25,8 @@ idf_component_register(
         ".."
         "../../common_host"
         "../../../../include"
+        "../vendor/rix_adplug"
+        "../vendor/rix_binio"
     REQUIRES
         app_update
         driver

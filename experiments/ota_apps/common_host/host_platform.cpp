@@ -25,7 +25,10 @@
 #include <esp_flash.h>
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
+#if __has_include(<esp_dlfcn.h>)
 #include <esp_dlfcn.h>
+#define MIA_HAS_ESP_DLOPEN 1
+#endif
 #include <driver/adc.h>
 #include <esp_private/esp_clk.h>
 #include <esp_vfs_fat.h>
@@ -238,6 +241,7 @@ static int32_t startup_menu_set_boot_slot(uint8_t slot, void *) {
 
 static void startup_menu_restart(void *) { esp_restart(); }
 
+#if defined(MIA_HAS_ESP_DLOPEN)
 static void *startup_menu_executable_symbol(void *symbol) {
 #if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(CONFIG_ELF_LOADER_CACHE_OFFSET)
   const uintptr_t address = reinterpret_cast<uintptr_t>(symbol);
@@ -283,6 +287,9 @@ static void run_shared_startup_menu_if_requested() {
   const int32_t result = api->run_if_requested(&host);
   if (result != 2) dlclose(handle);
 }
+#else
+static void run_shared_startup_menu_if_requested() {}
+#endif
 
 static esp_err_t mount_sd_card() {
   spi_bus_config_t bus_cfg = {};
