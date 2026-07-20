@@ -27,6 +27,7 @@ set(LAVAPAL_SDL_SOURCES
     ../play.c
     ../res.c
     ../resampler.c
+    ../rixplay.cpp
     ../rngplay.c
     ../scene.c
     ../script.c
@@ -39,6 +40,13 @@ set(LAVAPAL_SDL_SOURCES
     ../util.c
     ../video.c
     ../yj1.c
+    ../vendor/rix_adplug/emuopl.cpp
+    ../vendor/rix_adplug/fmopl.c
+    ../vendor/rix_adplug/fprovide.cpp
+    ../vendor/rix_adplug/player.cpp
+    ../vendor/rix_adplug/rix.cpp
+    ../vendor/rix_binio/binfile.cpp
+    ../vendor/rix_binio/binio.cpp
 )
 
 idf_component_register(

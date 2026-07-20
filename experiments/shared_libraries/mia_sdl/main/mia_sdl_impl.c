@@ -263,6 +263,9 @@ static SDL_Surface *mia_set_video_mode(int w, int h, int bpp, Uint32 flags) {
 	return g_screen_real;
 }
 
+/* Forward declaration — defined in the audio section below. */
+static void mia_sdl_audio_fill(void);
+
 /* Convert the 8bpp screen surface to RGB565 and hand it to the host. */
 static void mia_present_screen(void) {
 	if (!g_screen_real || !g_screen_real->format || !g_screen_real->format->palette || !g_present_buf) return;
@@ -285,6 +288,7 @@ static void mia_present_screen(void) {
 		}
 	}
 	mia_host_present_rgb565(g_present_buf, 320, 240, 640);
+	mia_sdl_audio_fill();
 }
 static void mia_update_rect(SDL_Surface *s, Sint32 x, Sint32 y, Uint32 w, Uint32 h) {
 	(void)s; (void)x; (void)y; (void)w; (void)h; if (s == g_screen_real) mia_present_screen();
@@ -399,23 +403,72 @@ static void *mia_load_object(const char *f) { (void)f; return NULL; }
 static void *mia_load_function(void *h, const char *n) { (void)h; (void)n; return NULL; }
 static void mia_unload_object(void *h) { (void)h; }
 
-/* ----------------------------------------------------------------- audio (stub) */
+/* ----------------------------------------------------------------- audio
+ * No separate audio thread exists in the ELF loader context.  The SDL
+ * callback registered via SDL_OpenAudio is invoked from mia_sdl_audio_fill(),
+ * which is called every frame from mia_present_screen().  The callback
+ * fills a PCM buffer; mia_sdl_audio_fill() then pushes it to I2S via the
+ * host ABI. */
+static SDL_AudioCallback g_audio_cb = NULL;
+static void              *g_audio_ud = NULL;
+static int                g_audio_paused = 1;
+static Uint8             *g_audio_buf = NULL;
+static int                g_audio_buf_bytes = 0;
+
 static int  mia_audio_init(const char *n) { (void)n; return 0; }
 static void mia_audio_quit(void) {}
 static int  mia_open_audio(SDL_AudioSpec *desired, SDL_AudioSpec *obtained) {
+	if (!desired) return -1;
 	if (obtained) *obtained = *desired;
+	g_audio_cb = desired->callback;
+	g_audio_ud = desired->userdata;
+	g_audio_buf_bytes = desired->size;
+	if (g_audio_buf) free(g_audio_buf);
+	g_audio_buf = (Uint8 *)malloc(g_audio_buf_bytes > 0 ? g_audio_buf_bytes : 4096);
+	if (!g_audio_buf) return -1;
 	mia_host_audio_open(desired->freq, desired->channels, 16);
 	return 0;
 }
-static void mia_close_audio(void) { mia_host_audio_stop(); mia_host_audio_close(); }
-static void mia_pause_audio(int p) { if (p) mia_host_audio_stop(); }
+static void mia_close_audio(void) {
+	g_audio_cb = NULL; g_audio_ud = NULL; g_audio_paused = 1;
+	if (g_audio_buf) { free(g_audio_buf); g_audio_buf = NULL; }
+	mia_host_audio_stop(); mia_host_audio_close();
+}
+static void mia_pause_audio(int p) {
+	g_audio_paused = p;
+	if (p) mia_host_audio_stop();
+}
 static void mia_lock_audio(void) {}
 static void mia_unlock_audio(void) {}
 static int  mia_build_audio_cvt(SDL_AudioCVT *c, SDL_AudioFormat sf, Uint8 sc, int sr, SDL_AudioFormat df, Uint8 dc, int dr) {
 	(void)c; (void)sf; (void)sc; (void)sr; (void)df; (void)dc; (void)dr; return 0;
 }
 static int  mia_convert_audio(SDL_AudioCVT *c) { (void)c; return 0; }
-static void mia_mix_audio(Uint8 *d, const Uint8 *s, Uint32 l, int v) { (void)d; (void)s; (void)l; (void)v; }
+static void mia_mix_audio(Uint8 *d, const Uint8 *s, Uint32 len, int volume) {
+	if (!d || !s || len < 2) return;
+	const Sint16 *src = (const Sint16 *)s;
+	Sint16       *dst = (Sint16 *)d;
+	int samples = (int)(len / sizeof(Sint16));
+	for (int i = 0; i < samples; i++) {
+		int32_t v = dst[i] + (src[i] * volume / SDL_MIX_MAXVOLUME);
+		if (v >  32767) v =  32767;
+		if (v < -32768) v = -32768;
+		dst[i] = (Sint16)v;
+	}
+}
+
+/* Called from mia_present_screen() once per video frame.  Pulls PCM from
+ * the registered SDL callback and pushes it to the I2S DAC via the host
+ * ABI.  The I2S DMA buffer provides ~30 ms of latency (6 x 256 frames
+ * at 44 100 Hz), which is acceptable. */
+static void mia_sdl_audio_fill(void) {
+	if (g_audio_paused || !g_audio_cb || !g_audio_buf || g_audio_buf_bytes <= 0) return;
+	memset(g_audio_buf, 0, (size_t)g_audio_buf_bytes);
+	g_audio_cb(g_audio_ud, g_audio_buf, g_audio_buf_bytes);
+	mia_host_audio_write_pcm16((const int16_t *)g_audio_buf,
+	                           (uint32_t)(g_audio_buf_bytes / (2 * sizeof(int16_t))),
+	                           2);
+}
 
 /* ----------------------------------------------------------------- mutex/thread (libc stubs — ELF loader has no FreeRTOS) */
 struct SDL_mutex { volatile int locked; };

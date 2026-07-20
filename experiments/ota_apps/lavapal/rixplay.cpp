@@ -186,7 +186,7 @@ RIX_FillBuffer(
 						}
 						return;
 					}
-					pRixPlayer->rix->rewindReInit(pRixPlayer->iMusic, false);
+					pRixPlayer->rix->rewind(pRixPlayer->iMusic);
 					if (!pRixPlayer->rix->update())
 					{
 						//

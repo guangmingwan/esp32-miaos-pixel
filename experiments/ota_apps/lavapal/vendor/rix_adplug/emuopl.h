@@ -23,15 +23,23 @@
 #define H_ADPLUG_EMUOPL
 
 #include "opl.h"
+#include "adplug/opltypes.h"
 extern "C" {
 #include "fmopl.h"
 }
+
+namespace OPLCORE { typedef ::OPLCORE_TYPE TYPE; }
 
 class CEmuopl: public Copl
 {
  public:
   CEmuopl(int rate, bool bit16, bool usestereo);	// rate = sample rate
   virtual ~CEmuopl();
+
+  static Copl *CreateEmuopl(OPLCORE::TYPE /*core*/, ChipType chip, int rate) {
+    (void)chip;
+    return new CEmuopl(rate, true, chip != TYPE_OPL2);
+  }
 
   void update(short *buf, int samples);			// fill buffer
   void write(int reg, int val);
