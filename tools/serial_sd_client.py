@@ -37,6 +37,7 @@ app = typer.Typer(
 VCP_WINDOW_SIZE = 6144
 UPLOAD_CHUNK_SIZE = VCP_WINDOW_SIZE
 DOWNLOAD_CHUNK_SIZE = 4096
+ENTER_RETRY_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,9 +50,10 @@ class ClientConfig:
 class SerialServiceClient:
     def __init__(self, config: ClientConfig) -> None:
         self._prepare_port(config.port)
+        self._timeout_seconds = max(config.timeout_seconds, 0.1)
         # Keep reads short so a single quiet interval cannot consume the whole
         # command deadline. Bulk transfers still use the protocol-level timeout.
-        read_timeout = min(max(config.timeout_seconds, 0.1), 0.2)
+        read_timeout = min(self._timeout_seconds, 0.2)
         self._serial = serial.Serial(config.port, config.baud, timeout=read_timeout)
         time.sleep(0.2)
         self._serial.reset_input_buffer()
@@ -78,9 +80,24 @@ class SerialServiceClient:
         return self.read_protocol_line()
 
     def enter_service(self) -> str:
-        self._serial.write(b"SFS1 ENTER\n")
-        self._serial.flush()
-        return self._wait_for_line("SFS1 READY")
+        deadline = time.monotonic() + self._timeout_seconds
+        next_attempt = 0.0
+        entering = False
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if not entering and now >= next_attempt:
+                self._serial.write(b"SFS1 ENTER\n")
+                self._serial.flush()
+                next_attempt = now + ENTER_RETRY_SECONDS
+
+            line = self.read_line()
+            if line == "SFS1 READY":
+                return line
+            if line == "SFS1 ENTERING":
+                entering = True
+            elif line.startswith("ERR"):
+                return line
+        return "ERR timeout"
 
     def exit_service(self) -> str:
         self._serial.write(b"SFS1 EXIT\n")
@@ -88,8 +105,8 @@ class SerialServiceClient:
         return self._wait_for_line("SFS1 EXITING")
 
     def _wait_for_line(self, expected: str) -> str:
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
+        deadline = time.monotonic() + self._timeout_seconds
+        while time.monotonic() < deadline:
             line = self.read_line()
             if line == expected:
                 return line
@@ -100,8 +117,8 @@ class SerialServiceClient:
         return line
 
     def read_protocol_line(self) -> str:
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
+        deadline = time.monotonic() + self._timeout_seconds
+        while time.monotonic() < deadline:
             line = self.read_line()
             if not line:
                 continue
@@ -195,7 +212,7 @@ def info(port: str = "/dev/ttyACM0", baud: int = 115200, timeout_seconds: float 
 def enter_service(
     port: str = "/dev/ttyACM0",
     baud: int = 115200,
-    timeout_seconds: float = 2.0,
+    timeout_seconds: float = 30.0,
 ) -> None:
     client = with_client(port, baud, timeout_seconds)
     try:
@@ -318,7 +335,7 @@ def launch(
     file_path_encoding: str = "utf-8",
     port: str = "/dev/ttyACM0",
     baud: int = 115200,
-    timeout_seconds: float = 5.0,
+    timeout_seconds: float = 30.0,
 ) -> None:
     """Launch an SD OTA app, optionally passing it one SD file path."""
     client = with_client(port, baud, timeout_seconds)

@@ -2,6 +2,10 @@
 #include "mia_host_abi.h"
 #include "mia_startup_menu_api.h"
 
+#ifndef MIA_SD_MAX_FILES
+#define MIA_SD_MAX_FILES 4
+#endif
+
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
 
@@ -313,7 +317,7 @@ static esp_err_t mount_sd_card() {
   slot.host_id = SPI3_HOST;
   slot.gpio_cs = SD_CS_PIN;
   mount_cfg.format_if_mount_failed = false;
-  mount_cfg.max_files = 4;
+  mount_cfg.max_files = MIA_SD_MAX_FILES;
   mount_cfg.allocation_unit_size = 0;
 
   ESP_ERROR_CHECK(esp_vfs_fat_sdspi_mount(ROOT_DIR, &host, &slot, &mount_cfg, &g_card));

@@ -120,6 +120,8 @@
 
 - Built-in launcher apps implement `LauncherApp` from `include/app.h`; add new built-ins by adding the module/header and registering it in the `BUILTIN_APPS` array in `src/main.cpp`.
 - App button context exposes six logical buttons `{A, B, UP, DN, LT, RT}` mapped from the full physical table in `include/pins.h`; use `g_allButtons` only for launcher/system-level controls.
+- The ESP-IDF OTA `common_host` HC165 scan is active-high on this board: real-device traces show idle raw state `0x00`, a pressed key sets its corresponding bit to `1`, and release returns it to `0`. OTA apps that compile `experiments/ota_apps/common_host/host_platform.cpp` must define `MIA_HC165_ACTIVE_HIGH=1`; omitting it treats every idle HC165 key as held and causes symptoms such as D-pad movement continuing after release.
+- HC165 bit assignments are `LEFT=0`, `DOWN=1`, `UP=2`, `RIGHT=3`, `Y=4`, `X=5`, `A=6`, `B=7`. When diagnosing input, log raw-state transitions only long enough to confirm both press and release, then remove the timing-changing trace.
 - SD apps are discovered from root category directories such as `/Games`, `/Utils`, `/Settings`, `/Emulators`, `/Media`, `/Application`, plus legacy `/MiaOS/{Games,Utils,Settings,Emulators,Media,Application}`; each app lives at `<category>/<name>.app/<name>.bin` (firmware filename matches app name, not `firmware.bin`).
 - Firmware binaries carry an `OtaAppManifest` trailer (see `include/ota_app_manifest.h`) containing `category[16]` + `name[32]` + CRC; use `tools/append_manifest.py` to attach it after `idf.py build`.
 - The System tab includes "Export OTA to SD" which reads the manifest from `ota_1` and auto-creates the SD directory and `<name>.bin` — bootstraps apps flashed directly to `ota_1`.
