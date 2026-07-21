@@ -75,6 +75,8 @@ bool installI2s(uint32_t sampleRate) {
   }
 
   digitalWrite(AMP_CTRL_PIN, HIGH);
+  ESP_LOGI("AUDIO_HOST", "I2S installed: amp GPIO %d set HIGH, level=%d",
+           AMP_CTRL_PIN, digitalRead(AMP_CTRL_PIN));
   return true;
 }
 
@@ -127,6 +129,15 @@ int32_t hostAudioWritePcm16(const int16_t *samples, uint32_t frameCount,
   ++g_writeCallCount;
   if (!g_audioStatus.open || samples == nullptr || frameCount == 0) {
     return -1;
+  }
+
+  if (g_writeCallCount <= 10) {
+    int32_t sum = 0;
+    uint32_t checkCount = frameCount * channels;
+    if (checkCount > 256) checkCount = 256;
+    for (uint32_t i = 0; i < checkCount; i++) sum += abs(samples[i]);
+    ESP_LOGI("AUDIO_HOST", "write #%u: frames=%u ch=%u sumAbs=%d",
+             g_writeCallCount, frameCount, channels, sum);
   }
 
   uint32_t expandedFrames = 0;
