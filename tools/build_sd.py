@@ -22,6 +22,8 @@ TEXT_LIBRARY = ROOT / "experiments" / "shared_libraries" / "mia_text" / "build" 
 TEXT_LIBRARY_ARCHIVE_PATH = "MiaOS/Library/libmia_text_v1.so"
 STARTUP_LIBRARY = ROOT / "experiments" / "shared_libraries" / "mia_startup" / "build" / "libmia_startup_v1.so"
 STARTUP_LIBRARY_ARCHIVE_PATH = "MiaOS/Library/libmia_startup_v1.so"
+SDL_LIBRARY = ROOT / "experiments" / "shared_libraries" / "mia_sdl" / "build" / "libmia_sdl_v1.so"
+SDL_LIBRARY_ARCHIVE_PATH = "MiaOS/Library/libmia_sdl_v1.so"
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,7 @@ APPS = (
     App("pce", "Emulators"),
     App("sms", "Emulators"),
     App("snes", "Emulators"),
-    App("lava_pal", "Games", "experiments/ota_apps/lavapal/build-idf5/lava_pal.bin"),
+    App("lava_pal", "Games", "experiments/ota_apps/lavapal/build/lava_pal.bin"),
     App("minesweeper", "Games"),
     App("music", "Media"),
     App("rtc_set", "Settings"),
@@ -141,6 +143,15 @@ def create_archive(output: Path, build_epoch: int) -> tuple[int, int]:
             startup_library_data = STARTUP_LIBRARY.read_bytes()
             archive.writestr(zip_info(STARTUP_LIBRARY_ARCHIVE_PATH, build_epoch), startup_library_data)
             print(f"Packed {STARTUP_LIBRARY_ARCHIVE_PATH} ({len(startup_library_data)} bytes)")
+            packed += 1
+            if not SDL_LIBRARY.is_file():
+                raise FileNotFoundError(
+                    f"missing {SDL_LIBRARY.relative_to(ROOT)}; build it with "
+                    "idf.py -C experiments/shared_libraries/mia_sdl so"
+                )
+            sdl_library_data = SDL_LIBRARY.read_bytes()
+            archive.writestr(zip_info(SDL_LIBRARY_ARCHIVE_PATH, build_epoch), sdl_library_data)
+            print(f"Packed {SDL_LIBRARY_ARCHIVE_PATH} ({len(sdl_library_data)} bytes)")
             packed += 1
             for app in APPS:
                 if not app.artifact.is_file():

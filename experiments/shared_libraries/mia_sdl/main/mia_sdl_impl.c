@@ -414,24 +414,42 @@ static void              *g_audio_ud = NULL;
 static int                g_audio_paused = 1;
 static Uint8             *g_audio_buf = NULL;
 static int                g_audio_buf_bytes = 0;
+static Uint8              g_audio_channels = 0;
 
 static int  mia_audio_init(const char *n) { (void)n; return 0; }
 static void mia_audio_quit(void) {}
 static int  mia_open_audio(SDL_AudioSpec *desired, SDL_AudioSpec *obtained) {
-	if (!desired) return -1;
-	if (obtained) *obtained = *desired;
+	if (!desired || desired->freq <= 0 ||
+	    (desired->channels != 1 && desired->channels != 2) ||
+	    desired->format != AUDIO_S16SYS || !desired->callback) return -1;
+	int buffer_bytes = desired->size > 0
+		? (int)desired->size
+		: (int)desired->samples * desired->channels * (int)sizeof(Sint16);
+	if (buffer_bytes <= 0) return -1;
+
 	g_audio_cb = desired->callback;
 	g_audio_ud = desired->userdata;
-	g_audio_buf_bytes = desired->size;
+	g_audio_buf_bytes = buffer_bytes;
+	g_audio_channels = desired->channels;
+	g_audio_paused = 1;
 	if (g_audio_buf) free(g_audio_buf);
-	g_audio_buf = (Uint8 *)malloc(g_audio_buf_bytes > 0 ? g_audio_buf_bytes : 4096);
-	if (!g_audio_buf) return -1;
-	mia_host_audio_open(desired->freq, desired->channels, 16);
+	g_audio_buf = (Uint8 *)malloc((size_t)g_audio_buf_bytes);
+	if (!g_audio_buf || !mia_host_audio_open(desired->freq, desired->channels, 16)) {
+		free(g_audio_buf);
+		g_audio_buf = NULL;
+		g_audio_cb = NULL;
+		g_audio_ud = NULL;
+		g_audio_buf_bytes = 0;
+		g_audio_channels = 0;
+		return -1;
+	}
+	if (obtained) *obtained = *desired;
 	return 0;
 }
 static void mia_close_audio(void) {
 	g_audio_cb = NULL; g_audio_ud = NULL; g_audio_paused = 1;
 	if (g_audio_buf) { free(g_audio_buf); g_audio_buf = NULL; }
+	g_audio_buf_bytes = 0; g_audio_channels = 0;
 	mia_host_audio_stop(); mia_host_audio_close();
 }
 static void mia_pause_audio(int p) {
@@ -457,17 +475,16 @@ static void mia_mix_audio(Uint8 *d, const Uint8 *s, Uint32 len, int volume) {
 	}
 }
 
-/* Called from mia_present_screen() once per video frame.  Pulls PCM from
- * the registered SDL callback and pushes it to the I2S DAC via the host
- * ABI.  The I2S DMA buffer provides ~30 ms of latency (6 x 256 frames
- * at 44 100 Hz), which is acceptable. */
+/* Dormant for lavapal, whose static audio task writes directly to I2S. */
 static void mia_sdl_audio_fill(void) {
-	if (g_audio_paused || !g_audio_cb || !g_audio_buf || g_audio_buf_bytes <= 0) return;
+	if (g_audio_paused || !g_audio_cb || !g_audio_buf ||
+	    g_audio_buf_bytes <= 0 || g_audio_channels == 0) return;
 	memset(g_audio_buf, 0, (size_t)g_audio_buf_bytes);
 	g_audio_cb(g_audio_ud, g_audio_buf, g_audio_buf_bytes);
 	mia_host_audio_write_pcm16((const int16_t *)g_audio_buf,
-	                           (uint32_t)(g_audio_buf_bytes / (2 * sizeof(int16_t))),
-	                           2);
+	                           (uint32_t)(g_audio_buf_bytes /
+	                                      (g_audio_channels * sizeof(int16_t))),
+	                           g_audio_channels);
 }
 
 /* ----------------------------------------------------------------- mutex/thread (libc stubs — ELF loader has no FreeRTOS) */

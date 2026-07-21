@@ -16,22 +16,54 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
-// ESP32-S3 port: no separate audio thread — the SDL callback stored
-// here is invoked from mia_sdl_audio_fill() inside mia_present_screen()
-// once per video frame (~50 fps).  The callback mixes music + sound
-// into an S16 stereo buffer, which the SDL layer pushes to I2S.
+// ESP32-S3 port: Core 0 continuously mixes music into I2S while the game
+// and SDL rendering remain on Core 1.
 //
 
 #include "audio.h"
+#include "palcfg.h"
 #include "util.h"
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+
+#include "mia_host_abi.h"
 
 AUDIODEVICE gAudioDevice;
 
 static AUDIOPLAYER *g_pSoundPlayer = NULL;
+static TaskHandle_t g_audioTask = NULL;
+static SemaphoreHandle_t g_audioMutex = NULL;
+static volatile BOOL g_audioRunning = FALSE;
+static Uint8 *g_audioBuffer = NULL;
+
+static void AUDIO_FillBuffer(void *userdata, Uint8 *stream, int len);
+
+static void
+AUDIO_Task(
+	void *userdata
+)
+{
+	(void)userdata;
+	UTIL_LogOutput(LOGLEVEL_INFO, "AUDIO task started on core %d\n", xPortGetCoreID());
+	while (g_audioRunning)
+	{
+		AUDIO_Lock();
+		AUDIO_FillBuffer(NULL, g_audioBuffer, gAudioDevice.spec.size);
+		AUDIO_Unlock();
+		if (mia_host_audio_write_pcm16((const int16_t *)g_audioBuffer,
+			gAudioDevice.spec.samples, gAudioDevice.spec.channels) < 0)
+		{
+			vTaskDelay(pdMS_TO_TICKS(1));
+		}
+	}
+	g_audioTask = NULL;
+	vTaskDelete(NULL);
+}
 
 //
-// The SDL audio callback.  Called from mia_sdl_audio_fill() every frame.
-// Mixes music and sound into the output buffer.
+// Mix music and sound into one signed 16-bit output buffer.
 //
 static void
 AUDIO_FillBuffer(
@@ -72,28 +104,35 @@ AUDIO_OpenDevice(
 )
 {
 	//
-	// Set up the desired audio spec: 44100 Hz, stereo, signed 16-bit LE
+	// Set up signed 16-bit PCM using the same rate and channel count as RIX.
 	//
 	memset(&gAudioDevice, 0, sizeof(gAudioDevice));
-	gAudioDevice.spec.freq     = 44100;
+	gAudioDevice.spec.freq     = gConfig.iSampleRate;
 	gAudioDevice.spec.format   = AUDIO_S16SYS;
-	gAudioDevice.spec.channels = 2;
-	gAudioDevice.spec.samples  = 1024;
+	gAudioDevice.spec.channels = gConfig.iAudioChannels;
+	gAudioDevice.spec.samples  = gConfig.wAudioBufferSize;
 	gAudioDevice.spec.size     = gAudioDevice.spec.samples * gAudioDevice.spec.channels * sizeof(Sint16);
 	gAudioDevice.spec.callback = AUDIO_FillBuffer;
 	gAudioDevice.spec.userdata = NULL;
 	gAudioDevice.iMusicVolume  = SDL_MIX_MAXVOLUME;
 	gAudioDevice.iSoundVolume  = SDL_MIX_MAXVOLUME;
-	gAudioDevice.fMusicEnabled = FALSE;
-	gAudioDevice.fSoundEnabled = FALSE;
+	gAudioDevice.fMusicEnabled = TRUE;
+	gAudioDevice.fSoundEnabled = TRUE;
 	gAudioDevice.fOpened       = FALSE;
 
 	//
-	// Open the SDL audio device (which opens I2S on ESP32)
+	// Open I2S directly; Core 0 continuously pumps audio independently of video.
 	//
-	if (SDL_OpenAudio(&gAudioDevice.spec, NULL) < 0)
+	g_audioBuffer = malloc(gAudioDevice.spec.size);
+	g_audioMutex = xSemaphoreCreateMutex();
+	if (g_audioBuffer == NULL || g_audioMutex == NULL ||
+		!mia_host_audio_open(gAudioDevice.spec.freq, gAudioDevice.spec.channels, 16))
 	{
-		UTIL_LogOutput(LOGLEVEL_WARNING, "SDL_OpenAudio failed\n");
+		free(g_audioBuffer);
+		g_audioBuffer = NULL;
+		if (g_audioMutex) vSemaphoreDelete(g_audioMutex);
+		g_audioMutex = NULL;
+		UTIL_LogOutput(LOGLEVEL_WARNING, "I2S audio open failed\n");
 		return -1;
 	}
 
@@ -104,12 +143,12 @@ AUDIO_OpenDevice(
 	//
 	{
 		char mus_path[PAL_MAX_PATH];
-		snprintf(mus_path, sizeof(mus_path), "%s/mus.mkf", PAL_PREFIX);
+		snprintf(mus_path, sizeof(mus_path), "%s/mus.mkf", gConfig.pszGamePath);
 		gAudioDevice.pMusPlayer = RIX_Init(mus_path);
 	}
 	if (gAudioDevice.pMusPlayer == NULL)
 	{
-		UTIL_LogOutput(LOGLEVEL_WARNING, "RIX_Init failed (mus.mkf not found?)\n");
+		UTIL_LogOutput(LOGLEVEL_WARNING, "RIX_Init failed (mus.mkf not found or load error)\n");
 	}
 
 	//
@@ -122,9 +161,21 @@ AUDIO_OpenDevice(
 	}
 
 	//
-	// Start audio playback (unpause)
+	// Start the independent audio task after all players are initialized.
 	//
-	SDL_PauseAudio(0);
+	g_audioRunning = TRUE;
+	if (xTaskCreatePinnedToCore(AUDIO_Task, "pal_audio", 8192, NULL, 6,
+		&g_audioTask, 0) != pdPASS)
+	{
+		g_audioRunning = FALSE;
+		mia_host_audio_close();
+		free(g_audioBuffer);
+		g_audioBuffer = NULL;
+		vSemaphoreDelete(g_audioMutex);
+		g_audioMutex = NULL;
+		gAudioDevice.fOpened = FALSE;
+		return -1;
+	}
 
 	UTIL_LogOutput(LOGLEVEL_INFO, "AUDIO_OpenDevice: %d Hz %d ch\n",
 		gAudioDevice.spec.freq, gAudioDevice.spec.channels);
@@ -142,7 +193,16 @@ AUDIO_CloseDevice(
 		return;
 	}
 
-	SDL_PauseAudio(1);
+	g_audioRunning = FALSE;
+	for (unsigned wait = 0; g_audioTask != NULL && wait < 300; ++wait)
+	{
+		vTaskDelay(pdMS_TO_TICKS(1));
+	}
+	if (g_audioTask != NULL)
+	{
+		vTaskDelete(g_audioTask);
+		g_audioTask = NULL;
+	}
 
 	//
 	// Shut down the music player
@@ -168,7 +228,11 @@ AUDIO_CloseDevice(
 		g_pSoundPlayer = NULL;
 	}
 
-	SDL_CloseAudio();
+	mia_host_audio_close();
+	free(g_audioBuffer);
+	g_audioBuffer = NULL;
+	if (g_audioMutex) vSemaphoreDelete(g_audioMutex);
+	g_audioMutex = NULL;
 
 	gAudioDevice.fOpened = FALSE;
 }
@@ -241,7 +305,9 @@ AUDIO_PlayMusic(
 
 	if (gAudioDevice.pMusPlayer && gAudioDevice.pMusPlayer->Play)
 	{
+		AUDIO_Lock();
 		gAudioDevice.pMusPlayer->Play(gAudioDevice.pMusPlayer, iNumRIX, fLoop, flFadeTime);
+		AUDIO_Unlock();
 	}
 }
 
@@ -291,7 +357,7 @@ AUDIO_Lock(
 	void
 )
 {
-	SDL_LockAudio();
+	if (g_audioMutex) xSemaphoreTake(g_audioMutex, portMAX_DELAY);
 }
 
 void
@@ -299,5 +365,5 @@ AUDIO_Unlock(
 	void
 )
 {
-	SDL_UnlockAudio();
+	if (g_audioMutex) xSemaphoreGive(g_audioMutex);
 }

@@ -8,7 +8,13 @@ public:
     CSurroundopl(int /*rate*/, double /*offset*/, Copl *opl)
         : realOpl(opl) {}
     ~CSurroundopl() { delete realOpl; }
-    void write(int reg, int val) override { realOpl->write(reg, val); }
+    void write(int reg, int val) override {
+        realOpl->setchip(0);
+        realOpl->write(reg, val);
+        realOpl->setchip(1);
+        realOpl->write(reg, val);
+        realOpl->setchip(0);
+    }
     void init() override { realOpl->init(); }
     void update(short *buf, int samples) override { realOpl->update(buf, samples); }
     Copl *getRealOpl() { return realOpl; }

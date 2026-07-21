@@ -27,10 +27,10 @@ enum { SINC_WIDTH = 16 };
 enum { SINC_SAMPLES = RESAMPLER_RESOLUTION * SINC_WIDTH };
 enum { CUBIC_SAMPLES = RESAMPLER_RESOLUTION * 4 };
 
-ALIGNED static float cubic_lut[CUBIC_SAMPLES];
-
-static float sinc_lut[SINC_SAMPLES + 1];
-static float window_lut[SINC_SAMPLES + 1];
+static float *cubic_lut = NULL;
+static float *sinc_lut = NULL;
+static float *window_lut = NULL;
+static int lookup_tables_initialized = 0;
 
 enum { resampler_buffer_size = SINC_WIDTH * 4 };
 
@@ -548,10 +548,31 @@ static resampler_run(resampler_run_blep) = resampler_run_blep_c;
 static resampler_run(resampler_run_cubic) = resampler_run_cubic_c;
 static resampler_run(resampler_run_sinc) = resampler_run_sinc_c;
 
-void resampler_init(void)
+int resampler_init(void)
 {
     unsigned i;
     double dx = (float)(SINC_WIDTH) / SINC_SAMPLES, x = 0.0;
+
+    if (lookup_tables_initialized)
+        return 1;
+
+    if (!sinc_lut)
+        sinc_lut = (float *)malloc((SINC_SAMPLES + 1) * sizeof(float));
+    if (!window_lut)
+        window_lut = (float *)malloc((SINC_SAMPLES + 1) * sizeof(float));
+    if (!cubic_lut)
+        cubic_lut = (float *)malloc(CUBIC_SAMPLES * sizeof(float));
+
+    if (!sinc_lut || !window_lut || !cubic_lut) {
+        free(sinc_lut);
+        free(window_lut);
+        free(cubic_lut);
+        sinc_lut = NULL;
+        window_lut = NULL;
+        cubic_lut = NULL;
+        return 0;
+    }
+
     for (i = 0; i < SINC_SAMPLES + 1; ++i, x += dx)
     {
         float y = x / SINC_WIDTH;
@@ -588,6 +609,9 @@ void resampler_init(void)
 		resampler_run_sinc = resampler_run_sinc_sse;
 	}
 #endif
+
+    lookup_tables_initialized = 1;
+    return 1;
 }
 
 void * resampler_create(void)

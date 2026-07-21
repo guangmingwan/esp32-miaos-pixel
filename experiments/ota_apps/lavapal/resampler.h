@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-void resampler_init(void);
+int resampler_init(void);
 
 void * resampler_create(void);
 void resampler_delete(void *);

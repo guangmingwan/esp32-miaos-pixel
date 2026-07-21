@@ -85,10 +85,12 @@ SDL shims:
 * `oggplay.c`, `opusplay.c`, `mp3play.c` — compressed music decoders.
 * `midi_timidity.c` — Timidity MIDI backend (midi_stubs.c + midi_tsf.c are
   linked instead).
-* `rixplay.cpp` + `vendor/rix_adplug/*` — RIX OPL music (needs upstream
-  libadplug headers not vendored here).
 
 These can be re-enabled incrementally as the matching SDL shims grow.
+
+RIX OPL music is enabled through `rixplay.cpp` and the vendored AdPlug
+implementation. A dedicated Core 0 task mixes signed 16-bit PCM and submits it
+through the host audio ABI while the game and SDL rendering run on Core 1.
 
 ## Notes
 

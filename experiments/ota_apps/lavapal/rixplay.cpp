@@ -384,6 +384,11 @@ RIX_Init(
 {
 	if (!szFileName) return NULL;
 
+	if (gConfig.iOPLSampleRate != gConfig.iSampleRate && !resampler_init())
+	{
+		return NULL;
+	}
+
 	LPRIXPLAYER pRixPlayer = new RIXPLAYER;
 	if (pRixPlayer == NULL)
 	{
@@ -455,6 +460,15 @@ RIX_Init(
 		for (int i = 0; i < gConfig.iAudioChannels; i++)
 		{
 			pRixPlayer->resampler[i] = resampler_create();
+			if (pRixPlayer->resampler[i] == NULL)
+			{
+				for (int j = 0; j < i; j++)
+					resampler_delete(pRixPlayer->resampler[j]);
+				delete pRixPlayer->rix;
+				delete pRixPlayer->opl;
+				delete pRixPlayer;
+				return NULL;
+			}
 			resampler_set_quality(pRixPlayer->resampler[i], AUDIO_IsIntegerConversion(gConfig.iOPLSampleRate) ? RESAMPLER_QUALITY_MIN : gConfig.iResampleQuality);
 			resampler_set_rate(pRixPlayer->resampler[i], (double)gConfig.iOPLSampleRate / (double)gConfig.iSampleRate);
 		}

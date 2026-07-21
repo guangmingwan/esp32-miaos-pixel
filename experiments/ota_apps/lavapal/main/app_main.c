@@ -52,8 +52,10 @@ static const struct esp_elfsym s_sdl_host_symbols[] = {
     ESP_ELFSYM_EXPORT(alphasort),
     ESP_ELFSYM_EXPORT(dlsym),
     ESP_ELFSYM_EXPORT(mia_host_audio_open),
+    ESP_ELFSYM_EXPORT(mia_host_audio_write_pcm16),
     ESP_ELFSYM_EXPORT(mia_host_audio_stop),
     ESP_ELFSYM_EXPORT(mia_host_audio_close),
+    ESP_ELFSYM_EXPORT(mia_host_audio_get_status),
     ESP_ELFSYM_EXPORT(mia_host_buttons_poll),
     ESP_ELFSYM_EXPORT(mia_host_button_down),
     ESP_ELFSYM_EXPORT(mia_host_present_rgb565),
@@ -127,6 +129,8 @@ static int select_game_directory(void) {
             fprintf(cfg, "WindowHeight=240\n");
             fprintf(cfg, "TextureWidth=320\n");
             fprintf(cfg, "TextureHeight=200\n");
+            fprintf(cfg, "SampleRate=44100\n");
+            fprintf(cfg, "OPLSampleRate=44100\n");
             fclose(cfg);
             ESP_LOGI("lava_pal", "wrote %s with GamePath=%s", config_path, candidates[i]);
         } else {
