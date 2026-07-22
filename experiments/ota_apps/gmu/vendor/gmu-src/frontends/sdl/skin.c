@@ -1,0 +1,644 @@
+/* 
+ * Gmu Music Player
+ *
+ * Copyright (c) 2006-2025 Johannes Heimansberg (wej.k.vu)
+ *
+ * File: skin.c  Created: 061107
+ *
+ * Description: Gmu theme engine
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; version 2 of
+ * the License. See the file COPYING in the Gmu's main directory
+ * for details.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "skin.h"
+#include "wejconfig.h"
+#include "core.h"
+#include "gmuwidget.h"
+#include "debug.h"
+#include "consts.h"
+
+static int skin_init_widget(
+	const char *skin_name,
+	ConfigFile *skinconf,
+	const char *prefix,
+	GmuWidget  *w
+)
+{
+	int   tmp_x1 = 0, tmp_y1 = 0, tmp_x2 = 0, tmp_y2 = 0;
+	char *tmp_img_prefix = NULL;
+	char *val, tmp[256];
+	int   result = 0;
+
+	snprintf(tmp, 255, "%s.PosX1", prefix);
+	tmp_x1 = cfg_get_int_value(skinconf, tmp);
+	snprintf(tmp, 255, "%s.PosY1", prefix);
+	tmp_y1 = cfg_get_int_value(skinconf, tmp);
+	snprintf(tmp, 255, "%s.PosX2", prefix);
+	tmp_x2 = cfg_get_int_value(skinconf, tmp);
+	snprintf(tmp, 255, "%s.PosY2", prefix);
+	tmp_y2 = cfg_get_int_value(skinconf, tmp);
+	snprintf(tmp, 255, "%s.ImagePrefix", prefix);
+	val = cfg_get_key_value(skinconf, tmp);
+	if (val) tmp_img_prefix = val;
+	if (tmp_img_prefix) {
+		snprintf(tmp, 255, "%s/themes/%s/%s", gmu_core_get_base_dir(), skin_name, tmp_img_prefix);
+		gmu_widget_new(w, tmp, tmp_x1, tmp_y1, tmp_x2, tmp_y2);
+		result = 1;
+	}
+	return result;
+}
+
+static int skin_config_load(Skin *skin, const char *skin_name)
+{
+	int         result = 1;
+	ConfigFile *skinconf;
+	char        skin_file[256];
+
+	memset(skin, 0, sizeof(Skin));
+	skin->version = 1;
+
+	skin->buffer = NULL;
+
+	skin->title_scroller_offset_x1 = -1;
+	skin->title_scroller_offset_x2 = -1;
+	skin->title_scroller_offset_y = -1;
+
+	skin->symbols_width = 0;
+	skin->symbols_height = 0;
+
+	skin->symbol_play_offset_x = -1;
+	skin->symbol_play_offset_y = -1;
+
+	skin->symbol_pause_offset_x = -1;
+	skin->symbol_pause_offset_y = -1;
+
+	skin->symbol_stereo_offset_x = -1;
+	skin->symbol_stereo_offset_y = -1;
+
+	skin->volume_offset_x = -1;
+	skin->volume_offset_y = -1;
+
+	skin->bitrate_offset_x = -1;
+	skin->bitrate_offset_y = -1;
+
+	skin->frequency_offset_x = -1;
+	skin->frequency_offset_y = -1;
+
+	skin->time_offset_x = -1;
+	skin->time_offset_y = -1;
+
+	skin->display_symbols = NULL;
+	skin->arrow_up = NULL;
+	skin->arrow_down = NULL;
+
+	skin->font1_type = BITMAP;
+	skin->font2_type = BITMAP;
+	skin->font_display_type = BITMAP;
+
+	skin->ttf_font1_size = 8;
+	skin->ttf_font2_size = 8;
+	skin->ttf_font_display_size = 8;
+	skin->ttf_font1_color_r = 255;
+	skin->ttf_font1_color_g = 255;
+	skin->ttf_font1_color_b = 255;
+	skin->ttf_font2_color_r = 0;
+	skin->ttf_font2_color_g = 50;
+	skin->ttf_font2_color_b = 200;
+
+	snprintf(skin_file, 255, "%s/themes/%s/theme.conf", gmu_core_get_base_dir(), skin_name);
+	skinconf = cfg_init();
+	if (cfg_read_config_file(skinconf, skin_file) != 0) {
+		wdprintf(V_ERROR, "skin", "Could not read skin config \"%s\".\n", skin_file);
+		result = 0;
+	} else {
+		char *val;
+
+		skin->version = cfg_get_int_value(skinconf, "FormatVersion");
+		strncpy(skin->name, skin_name, 127);
+
+		switch (skin->version) {
+			case 2: /* New theme format with support for a resizable window */
+				wdprintf(V_INFO, "skin", "Modern theme file format found.\n");
+
+				skin_init_widget(skin_name, skinconf, "Display",  &(skin->display));
+				skin_init_widget(skin_name, skinconf, "ListView", &(skin->lv));
+				skin_init_widget(skin_name, skinconf, "Header",   &(skin->header));
+				skin_init_widget(skin_name, skinconf, "Footer",   &(skin->footer));
+
+				skin->title_scroller_offset_x1 = cfg_get_int_value(skinconf, "Display.TitleScrollerOffsetX1");
+				skin->title_scroller_offset_x2 = cfg_get_int_value(skinconf, "Display.TitleScrollerOffsetX2");
+				skin->title_scroller_offset_y  = cfg_get_int_value(skinconf, "Display.TitleScrollerOffsetY");
+				skin->bitrate_offset_x         = cfg_get_int_value(skinconf, "Display.BitrateOffsetX");
+				skin->bitrate_offset_y         = cfg_get_int_value(skinconf, "Display.BitrateOffsetY");
+				skin->time_offset_x            = cfg_get_int_value(skinconf, "Display.TimeOffsetX");
+				skin->time_offset_y            = cfg_get_int_value(skinconf, "Display.TimeOffsetY");
+				skin->frequency_offset_x       = cfg_get_int_value(skinconf, "Display.FrequencyOffsetX");
+				skin->frequency_offset_y       = cfg_get_int_value(skinconf, "Display.FrequencyOffsetY");
+				skin->symbols_width            = cfg_get_int_value(skinconf, "Display.SymbolsWidth");
+				skin->symbols_height           = cfg_get_int_value(skinconf, "Display.SymbolsHeight");
+				skin->symbol_play_offset_x     = cfg_get_int_value(skinconf, "Display.Symbol.Play.OffsetX");
+				skin->symbol_play_offset_y     = cfg_get_int_value(skinconf, "Display.Symbol.Play.OffsetY");
+				skin->symbol_pause_offset_x    = cfg_get_int_value(skinconf, "Display.Symbol.Pause.OffsetX");
+				skin->symbol_pause_offset_y    = cfg_get_int_value(skinconf, "Display.Symbol.Pause.OffsetY");
+				skin->symbol_stereo_offset_x   = cfg_get_int_value(skinconf, "Display.Symbol.Stereo.OffsetX");
+				skin->symbol_stereo_offset_y   = cfg_get_int_value(skinconf, "Display.Symbol.Stereo.OffsetY");
+				/* fonts */
+				if (cfg_compare_value(skinconf, "Display.FontType", "truetype", 1))
+					skin->font_display_type = TRUETYPE;
+				val = cfg_get_key_value(skinconf, "Display.Font");
+				if (val) strncpy(skin->font_display_name, val, 127);
+				skin->font_display_char_width  = cfg_get_int_value(skinconf, "Display.FontCharWidth");
+				skin->font_display_char_height = cfg_get_int_value(skinconf, "Display.FontCharHeight");
+				skin->ttf_font_display_size    = cfg_get_int_value_or_default(skinconf, "Display.FontSize", 8);
+				if (cfg_compare_value(skinconf, "Font1Type", "truetype", 1))
+					skin->font1_type = TRUETYPE;
+				val = cfg_get_key_value(skinconf, "Font1");
+				if (val) strncpy(skin->font1_name, val, 127);
+				skin->font1_char_width         = cfg_get_int_value(skinconf, "Font1CharWidth");
+				skin->font1_char_height        = cfg_get_int_value(skinconf, "Font1CharHeight");
+				skin->ttf_font1_size           = cfg_get_int_value_or_default(skinconf, "Font1Size", 8);
+				if (cfg_compare_value(skinconf, "Font2Type", "truetype", 1))
+					skin->font2_type = TRUETYPE;
+				val = cfg_get_key_value(skinconf, "Font2");
+				if (val) strncpy(skin->font2_name, val, 127);
+				skin->font2_char_width         = cfg_get_int_value(skinconf, "Font2CharWidth");
+				skin->font2_char_height        = cfg_get_int_value(skinconf, "Font2CharHeight");
+				skin->ttf_font2_size           = cfg_get_int_value_or_default(skinconf, "Font2Size", 8);
+				result = 1;
+
+				/* Load font colors */
+				val = cfg_get_key_value(skinconf, "FontDisplayColor");
+				if (val && strlen(val) == 7) { /* String format: #FFFFFF */
+					int color = (int)strtol(val+1, NULL, 16);
+					skin->ttf_font_display_color_r = (color >> 16) & 0xFF;
+					skin->ttf_font_display_color_g = (color >> 8) & 0xFF;
+					skin->ttf_font_display_color_b = color & 0xFF;
+				}
+				val = cfg_get_key_value(skinconf, "Font1Color");
+				if (val && strlen(val) == 7) { /* String format: #FFFFFF */
+					int color = (int)strtol(val+1, NULL, 16);
+					skin->ttf_font1_color_r = (color >> 16) & 0xFF;
+					skin->ttf_font1_color_g = (color >> 8) & 0xFF;
+					skin->ttf_font1_color_b = color & 0xFF;
+				}
+				val = cfg_get_key_value(skinconf, "Font2Color");
+				if (val && strlen(val) == 7) { /* String format: #FFFFFF */
+					int color = (int)strtol(val+1, NULL, 16);
+					skin->ttf_font2_color_r = (color >> 16) & 0xFF;
+					skin->ttf_font2_color_g = (color >> 8) & 0xFF;
+					skin->ttf_font2_color_b = color & 0xFF;
+				}
+
+				/* load images (symbols, arrows) */
+				{
+					char         tmp[256];
+					SDL_Surface *tmp_sf;
+
+					val = cfg_get_key_value(skinconf, "Display.Symbols");
+					if (val) {
+						snprintf(tmp, 255, "%s/themes/%s/%s", gmu_core_get_base_dir(), skin->name, val);
+						if ((tmp_sf = IMG_Load(tmp))) {
+							skin->display_symbols = tmp_sf;
+						}
+					}
+					val = cfg_get_key_value(skinconf, "Icon.ArrowUp");
+					if (val) {
+						snprintf(tmp, 255, "%s/themes/%s/%s", gmu_core_get_base_dir(), skin->name, val);
+						if ((tmp_sf = IMG_Load(tmp))) {
+							skin->arrow_up = tmp_sf;
+						}
+					}
+					val = cfg_get_key_value(skinconf, "Icon.ArrowDown");
+					if (val) {
+						snprintf(tmp, 255, "%s/themes/%s/%s", gmu_core_get_base_dir(), skin->name, val);
+						if ((tmp_sf = IMG_Load(tmp))) {
+							skin->arrow_down = tmp_sf;
+						}
+					}
+				}
+
+				/* fonts */
+				{
+					int  a, b, c;
+					char tmp[PATH_LEN_MAX];
+
+					wdprintf(V_DEBUG, "skin", "Loading fonts...\n");
+					snprintf(tmp, PATH_LEN_MAX, "%s/themes/%s/%s", gmu_core_get_base_dir(), skin->name, skin->font_display_name);
+					wdprintf(V_DEBUG, "skin", "Loading %s\n", tmp);
+					if (skin->font_display_type == TRUETYPE) {
+						a = textrenderer_init_ttf(
+							&skin->font_display,
+							tmp,
+							skin->ttf_font_display_size,
+							(SDL_Color){ skin->ttf_font_display_color_r, skin->ttf_font_display_color_g, skin->ttf_font_display_color_b }
+						);
+					} else {
+						a = textrenderer_init(
+							&skin->font_display,
+							tmp,
+							skin->font_display_char_width,
+							skin->font_display_char_height
+						);
+					}
+					snprintf(tmp, PATH_LEN_MAX, "%s/themes/%s/%s", gmu_core_get_base_dir(), skin->name, skin->font1_name);
+					wdprintf(V_DEBUG, "skin", "Loading %s\n", tmp);
+					if (skin->font1_type == TRUETYPE) {
+						b = textrenderer_init_ttf(
+							&skin->font1,
+							tmp,
+							skin->ttf_font1_size,
+							(SDL_Color){ skin->ttf_font1_color_r, skin->ttf_font1_color_g, skin->ttf_font1_color_b }
+						);
+					} else {
+						b = textrenderer_init(
+							&skin->font1,
+							tmp,
+							skin->font1_char_width,
+							skin->font1_char_height
+						);
+					}
+					snprintf(tmp, PATH_LEN_MAX, "%s/themes/%s/%s", gmu_core_get_base_dir(), skin->name, skin->font2_name);
+					wdprintf(V_DEBUG, "skin", "Loading %s\n", tmp);
+					if (skin->font2_type == TRUETYPE) {
+						c = textrenderer_init_ttf(
+							&skin->font2,
+							tmp,
+							skin->ttf_font2_size,
+							(SDL_Color){ skin->ttf_font2_color_r, skin->ttf_font2_color_g, skin->ttf_font2_color_b }
+						);
+					} else {
+						c = textrenderer_init(
+							&skin->font2,
+							tmp,
+							skin->font2_char_width,
+							skin->font2_char_height
+						);
+					}
+					if (a && b && c)
+						wdprintf(V_INFO, "skin", "Skin data loaded successfully.\n");
+					else
+						result = 0;
+				}
+				break;
+			default:
+				wdprintf(V_ERROR, "skin", "Invalid file format version: %d.\n", skin->version);
+				skin->version = 0;
+				break;
+		}
+	}
+	cfg_free(skinconf);
+	return result;
+}
+
+int skin_init(Skin *skin, const char *skin_name)
+{
+	int res = skin_config_load(skin, skin_name);
+	if (!res && strncmp(skin_name, "default", 7) != 0) {
+		wdprintf(V_INFO, "skin", "Trying to load default skin...\n");
+		if (res) skin_free(skin);
+		res = skin_init(skin, "default");
+	}
+	skin->tex = NULL;
+	skin->buffer = NULL;
+	skin->display_mutex = SDL_CreateMutex();
+	if (!skin->display_mutex) {
+		wdprintf(V_ERROR, "skin", "ERROR: Could not create mutex.\n");
+		exit(-1);
+	}
+	return res;
+}
+
+void skin_set_target_surface(Skin *skin, SDL_Surface *target)
+{
+	skin->target = target;
+}
+
+void skin_set_renderer(Skin *skin, SDL_Renderer *renderer)
+{
+	skin->renderer = renderer;
+	wdprintf(
+		V_DEBUG, "skin", "skin_set_renderer(): renderer ok: %d\n",
+		skin->renderer == renderer ? 1 : 0
+	);
+}
+
+/* skin_unset_renderer removes the current renderer so it can be replaced.
+ * This must be called before destroying the renderer elsewhere. */
+void skin_unset_renderer(Skin *skin)
+{
+	if (skin->tex) {
+		SDL_DestroyTexture(skin->tex);
+		skin->tex = NULL;
+	}
+	skin->renderer = NULL;
+}
+
+void skin_free(Skin *skin)
+{
+	if (skin->display_symbols) SDL_FreeSurface(skin->display_symbols);
+	if (skin->arrow_up) SDL_FreeSurface(skin->arrow_up);
+	if (skin->arrow_down) SDL_FreeSurface(skin->arrow_down);
+	textrenderer_free(&skin->font1);
+	textrenderer_free(&skin->font2);
+	textrenderer_free(&skin->font_display);
+	gmu_widget_free(&(skin->display));
+	gmu_widget_free(&(skin->lv));
+	gmu_widget_free(&(skin->header));
+	gmu_widget_free(&(skin->footer));
+	SDL_FreeSurface(skin->buffer);
+	if (skin->renderer && skin->tex) SDL_DestroyTexture(skin->tex);
+	if (skin->display_mutex) SDL_DestroyMutex(skin->display_mutex);
+}
+
+static int skin_init_offscreen(Skin *skin)
+{
+	int initialized = 0;
+
+	SDL_LockMutex(skin->display_mutex);
+	if (!skin->buffer) { /* new surface */
+		skin->buffer = SDL_CreateRGBSurface(
+			SDL_SWSURFACE,
+			skin->target->w,
+			skin->target->h,
+			skin->target->format->BitsPerPixel,
+			0, 0, 0, 0
+		);
+		initialized = 1;
+	} else if (skin->buffer->w != skin->target->w || skin->buffer->h != skin->target->h) { /* reinit surface */
+		SDL_Surface *tmp = SDL_CreateRGBSurface(
+			SDL_SWSURFACE,
+			skin->target->w,
+			skin->target->h,
+			skin->target->format->BitsPerPixel,
+			0, 0, 0, 0
+		);
+		if (tmp) {
+			SDL_FreeSurface(skin->buffer);
+			skin->buffer = tmp;
+		}
+		initialized = 1;
+	}
+	SDL_UnlockMutex(skin->display_mutex);
+	return initialized;
+}
+
+static void skin_draw_widget(Skin *skin, GmuWidget *gw)
+{
+	SDL_Rect srect, drect;
+
+	/* if necessary, draw the widget to the offscreen */
+	if (skin_init_offscreen(skin)) {
+		gmu_widget_draw(&skin->display, skin->buffer);
+		gmu_widget_draw(&skin->header, skin->buffer);
+		gmu_widget_draw(&skin->lv, skin->buffer);
+		gmu_widget_draw(&skin->footer, skin->buffer);
+	}
+	srect.x = gmu_widget_get_pos_x(gw, 0);
+	srect.y = gmu_widget_get_pos_y(gw, 0);
+	srect.w = gmu_widget_get_width(gw, 0);
+	srect.h = gmu_widget_get_height(gw, 0);
+	drect.x = srect.x;
+	drect.y = srect.y;
+	SDL_LockMutex(skin->display_mutex);
+	SDL_BlitSurface(skin->buffer, &srect, skin->target, &drect);
+	SDL_UnlockMutex(skin->display_mutex);
+}
+
+/* skin_lock_renderer() is used to prevent skin_sdl_render() from
+ * accessing the renderer. Useful when replacing the renderer. The lock
+ * must be released with the skin_unlock_renderer() function as soon as
+ * possible. */
+int skin_lock_renderer(Skin *skin)
+{
+	return SDL_LockMutex(skin->display_mutex);
+}
+
+int skin_unlock_renderer(Skin *skin)
+{
+	return SDL_UnlockMutex(skin->display_mutex);
+}
+
+/* skin_sdl_render() renders everything onto the target surface */
+void skin_sdl_render(Skin *skin)
+{
+	int d = 1;
+	if (!skin->display_mutex) { /* skin data structure not initialized (yet) */
+		return;
+	}
+	if (SDL_LockMutex(skin->display_mutex) == 0) {
+		if (!skin->target || !skin->renderer) {
+			SDL_UnlockMutex(skin->display_mutex);
+			return;
+		}
+		if (skin->tex) SDL_DestroyTexture(skin->tex);
+		skin->tex = SDL_CreateTexture(
+			skin->renderer,
+			SDL_PIXELFORMAT_ARGB8888,
+			SDL_TEXTUREACCESS_STREAMING,
+			skin->target->w, skin->target->h
+		);
+		int a = SDL_UpdateTexture(skin->tex, NULL, skin->target->pixels, skin->target->w * sizeof(Uint32));
+		if (a) wdprintf(V_DEBUG, "skin", "%s\n", SDL_GetError());
+		SDL_SetRenderDrawColor(skin->renderer, 0, 0, 0, 255); /* black */
+		SDL_RenderClear(skin->renderer);
+		d = SDL_RenderCopy(skin->renderer, skin->tex, NULL, NULL);
+		if (d) wdprintf(V_DEBUG, "skin", "%s\n", SDL_GetError());
+		SDL_RenderPresent(skin->renderer);
+		SDL_UnlockMutex(skin->display_mutex);
+	}
+}
+
+static void skin_update_widget(Skin *skin, GmuWidget *gw)
+{
+	SDL_Rect srect, drect;
+
+	srect.x = gmu_widget_get_pos_x(gw, 0);
+	srect.y = gmu_widget_get_pos_y(gw, 0);
+	srect.w = gmu_widget_get_width(gw, 0);
+	srect.h = gmu_widget_get_height(gw, 0);
+	drect.x = srect.x;
+	drect.y = srect.y;
+	if (SDL_LockMutex(skin->display_mutex) == 0) {
+		SDL_BlitSurface(skin->buffer, &srect, skin->target, &drect);
+		SDL_UnlockMutex(skin->display_mutex);
+	}
+}
+
+void skin_update_display(Skin *skin)
+{
+	skin_update_widget(skin, &skin->display);
+}
+
+void skin_draw_display_bg(Skin *skin)
+{
+	skin_draw_widget(skin, &skin->display);
+}
+
+void skin_update_header(Skin *skin)
+{
+	skin_update_widget(skin, &skin->header);
+}
+
+void skin_draw_header_bg(Skin *skin)
+{
+	skin_draw_widget(skin, &skin->header);
+}
+
+void skin_update_textarea(Skin *skin)
+{
+	skin_update_widget(skin, &skin->lv);
+}
+
+void skin_draw_textarea_bg(Skin *skin)
+{
+	skin_draw_widget(skin, &skin->lv);
+}
+
+void skin_update_footer(Skin *skin)
+{
+	skin_update_widget(skin, &skin->footer);
+}
+
+void skin_draw_footer_bg(Skin *skin)
+{
+	skin_draw_widget(skin, &skin->footer);
+}
+
+void skin_update_bg(const Skin *skin)
+{
+	if (SDL_LockMutex(skin->display_mutex) == 0) {
+		SDL_BlitSurface(skin->buffer, NULL, skin->target, NULL);
+		SDL_UnlockMutex(skin->display_mutex);
+	}
+}
+
+int skin_textarea_get_number_of_lines(const Skin *skin)
+{
+	return gmu_widget_get_height(&skin->lv, 1) / textrenderer_get_line_height(&skin->font2);
+}
+
+int skin_textarea_get_characters_per_line(const Skin *skin)
+{
+	return gmu_widget_get_width(&skin->lv, 1) / (skin->font2_char_width+1);
+}
+
+void skin_draw_header_text(const Skin *skin, const char *text)
+{
+	SDL_LockMutex(skin->display_mutex);
+	textrenderer_draw_string(
+		&skin->font1,
+		text,
+		skin->target,
+		gmu_widget_get_pos_x(&skin->header, 1),
+		gmu_widget_get_pos_y(&skin->header, 0) +
+		(gmu_widget_get_height(&skin->header, 0) - textrenderer_get_line_height(&skin->font1)) / 2
+	);
+	SDL_UnlockMutex(skin->display_mutex);
+}
+
+void skin_draw_footer_text(const Skin *skin, const char *text)
+{
+	int len = skin_textarea_get_characters_per_line(skin);
+	SDL_LockMutex(skin->display_mutex);
+	textrenderer_draw_string_with_highlight(
+		&skin->font1,
+		&skin->font2,
+		text,
+		0,
+		skin->target,
+		gmu_widget_get_pos_x(&skin->footer, 1),
+		gmu_widget_get_pos_y(&skin->footer, 0) +
+		(gmu_widget_get_height(&skin->footer, 0) - textrenderer_get_line_height(&skin->font1)) / 2,
+		len,
+		RENDER_CROP
+	);
+	SDL_UnlockMutex(skin->display_mutex);
+}
+
+void skin_draw_scroll_arrow_up(const Skin *skin)
+{
+	SDL_Rect srect, drect;
+	int ox = gmu_widget_get_pos_x(&skin->lv, 1);
+	int oy = gmu_widget_get_pos_y(&skin->lv, 1);
+
+	srect.w = skin->arrow_up->w;
+	srect.h = skin->arrow_up->h;
+	srect.x = 0;
+	srect.y = 0;
+	drect.x = ox + gmu_widget_get_width(&skin->lv, 1) - skin->arrow_up->w;
+	drect.y = oy;
+	drect.w = 1;
+	drect.h = 1;
+	if (skin->arrow_up) {
+		SDL_LockMutex(skin->display_mutex);
+		SDL_BlitSurface(skin->arrow_up, &srect, skin->target, &drect);
+		SDL_UnlockMutex(skin->display_mutex);
+	}
+}
+
+void skin_draw_scroll_arrow_down(const Skin *skin)
+{
+	SDL_Rect srect, drect;
+	int ox = gmu_widget_get_pos_x(&skin->lv, 1);
+	int oy = gmu_widget_get_pos_y(&skin->lv, 1);
+
+	srect.w = skin->arrow_down->w;
+	srect.h = skin->arrow_down->h;
+	srect.x = 0;
+	srect.y = 0;
+	drect.x = ox + gmu_widget_get_width(&skin->lv, 1) - skin->arrow_down->w;
+	drect.y = oy + gmu_widget_get_height(&skin->lv, 1) - skin->arrow_down->h;
+	drect.w = 1;
+	drect.h = 1;
+	if (skin->arrow_down) {
+		SDL_LockMutex(skin->display_mutex);
+		SDL_BlitSurface(skin->arrow_down, &srect, skin->target, &drect);
+		SDL_UnlockMutex(skin->display_mutex);
+	}
+}
+
+void skin_draw_display_symbol(const Skin *skin, SkinDisplaySymbol symbol)
+{
+	SDL_Rect srect, drect;
+	int ox = gmu_widget_get_pos_x(&skin->display, 0);
+	int oy = gmu_widget_get_pos_y(&skin->display, 0);
+
+	srect.w = skin->symbols_width;
+	srect.h = skin->symbols_height;
+	srect.y = 0;
+	switch (symbol) {
+		default:
+		case SYMBOL_PLAY:
+			srect.x = 0;
+			drect.x = ox + skin->symbol_play_offset_x;
+			drect.y = oy + skin->symbol_play_offset_y;
+			drect.w = 1;
+			drect.h = 1;
+			break;
+		case SYMBOL_PAUSE:
+			srect.x = 1 * skin->symbols_width;
+			drect.x = ox + skin->symbol_pause_offset_x;
+			drect.y = oy + skin->symbol_pause_offset_y;
+			drect.w = 1;
+			drect.h = 1;
+			break;
+		case SYMBOL_STEREO:
+			srect.x = 2 * skin->symbols_width;
+			drect.x = ox + skin->symbol_stereo_offset_x;
+			drect.y = oy + skin->symbol_stereo_offset_y;
+			drect.w = 1;
+			drect.h = 1;
+			break;
+	}
+	if (skin->display_symbols && drect.x - ox >= 0 && drect.y - oy >= 0) {
+		SDL_LockMutex(skin->display_mutex);
+		SDL_BlitSurface(skin->display_symbols, &srect, skin->target, &drect);
+		SDL_UnlockMutex(skin->display_mutex);
+	}
+}
