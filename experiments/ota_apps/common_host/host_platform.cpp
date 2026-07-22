@@ -191,8 +191,8 @@ static void startup_menu_render(uint8_t selected, const char *status, void *) {
   display_host_clear(0);
   display_host_draw_text(24, 24, "MiaOS Startup Menu", 1, 0);
   for (uint8_t index = 0; index < 3; ++index) {
-    const uint8_t foreground = index == selected ? 0 : 1;
-    const uint8_t background = index == selected ? 2 : 0;
+    const uint8_t foreground = index == selected ? 5 : 1;
+    const uint8_t background = 0;
     display_host_draw_text(32, 64 + index * 28, items[index], foreground, background);
   }
   if (status != nullptr && strstr(status, "SELECT: cancel") != nullptr) {
