@@ -20,8 +20,6 @@ OTA_ROOT = ROOT / "experiments" / "ota_apps"
 CATEGORIES = ("Application", "Emulators", "Games", "Media", "Settings", "System", "Utils")
 TEXT_LIBRARY = ROOT / "experiments" / "shared_libraries" / "mia_text" / "build" / "libmia_text_v1.so"
 TEXT_LIBRARY_ARCHIVE_PATH = "MiaOS/Library/libmia_text_v1.so"
-STARTUP_LIBRARY = ROOT / "experiments" / "shared_libraries" / "mia_startup" / "build" / "libmia_startup_v1.so"
-STARTUP_LIBRARY_ARCHIVE_PATH = "MiaOS/Library/libmia_startup_v1.so"
 SDL_LIBRARY = ROOT / "experiments" / "shared_libraries" / "mia_sdl" / "build" / "libmia_sdl_v1.so"
 SDL_LIBRARY_ARCHIVE_PATH = "MiaOS/Library/libmia_sdl_v1.so"
 
@@ -134,15 +132,6 @@ def create_archive(output: Path, build_epoch: int) -> tuple[int, int]:
             library_data = TEXT_LIBRARY.read_bytes()
             archive.writestr(zip_info(TEXT_LIBRARY_ARCHIVE_PATH, build_epoch), library_data)
             print(f"Packed {TEXT_LIBRARY_ARCHIVE_PATH} ({len(library_data)} bytes)")
-            packed += 1
-            if not STARTUP_LIBRARY.is_file():
-                raise FileNotFoundError(
-                    f"missing {STARTUP_LIBRARY.relative_to(ROOT)}; build it with "
-                    "idf.py -C experiments/shared_libraries/mia_startup so"
-                )
-            startup_library_data = STARTUP_LIBRARY.read_bytes()
-            archive.writestr(zip_info(STARTUP_LIBRARY_ARCHIVE_PATH, build_epoch), startup_library_data)
-            print(f"Packed {STARTUP_LIBRARY_ARCHIVE_PATH} ({len(startup_library_data)} bytes)")
             packed += 1
             if not SDL_LIBRARY.is_file():
                 raise FileNotFoundError(

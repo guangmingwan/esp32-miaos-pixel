@@ -15,10 +15,12 @@
 - Monitor serial at 115200: `pio device monitor --port <port> -b 115200`
 - Build USB MSC firmware: `pio run -e esp32s3-usbmsc`
 - Flash USB MSC firmware to `ota_1`: `esptool.py --chip esp32s3 --port <port> -b 921600 write_flash 0x720000 .pio/build/esp32s3-usbmsc/firmware.bin`
-- Build a single release image: build both `esp32s3` and `esp32s3-usbmsc`, then merge with fixed offsets from `partitions_dual.csv`:
-  `python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin -o esp32-miaos-pixel_<short-git-hash>[-dirty]_esp32-s3-devkit.img --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 .pio/build/esp32s3/bootloader.bin 0x8000 .pio/build/esp32s3/partitions.bin 0x10000 .pio/build/esp32s3/ota_data_initial.bin 0x20000 .pio/build/esp32s3/firmware.bin 0x720000 .pio/build/esp32s3-usbmsc/firmware.bin`
+- Build a single release image: build `esp32s3`, `esp32s3-usbmsc`, and `experiments/startup_menu`, then merge with fixed offsets from `partitions_dual.csv`:
+  `python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin -o esp32-miaos-pixel_<short-git-hash>[-dirty]_esp32-s3-devkit.img --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 .pio/build/esp32s3/bootloader.bin 0x8000 .pio/build/esp32s3/partitions.bin 0x10000 .pio/build/esp32s3/ota_data_initial.bin 0x20000 .pio/build/esp32s3/firmware.bin 0x720000 .pio/build/esp32s3-usbmsc/firmware.bin 0xE30000 experiments/startup_menu/build/startup_menu.bin`
 - Flash the merged release image: `python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 --port <port> -b 921600 write_flash 0x0 esp32-miaos-pixel_<short-git-hash>[-dirty]_esp32-s3-devkit.img`.
 - Build OTA test firmware: `pio run -e esp32s3-otatest`
+- Build the bootloader-resident startup-menu firmware (pure ESP-IDF, ~188KB): `idf.py build -C experiments/startup_menu`; the binary is `experiments/startup_menu/build/startup_menu.bin`. It runs from the `startup` (test) partition at `0xE30000` and is entered by holding the M key (GPIO8) for ~1s during boot via the ESP-IDF `CONFIG_BOOTLOADER_APP_TEST` GPIO trigger configured in `sdkconfig.defaults`.
+- Flash the startup-menu firmware to the test partition: `esptool.py --chip esp32s3 --port <port> -b 921600 write_flash 0xE30000 experiments/startup_menu/build/startup_menu.bin`
 - Build OTA apps with `idf.py build -C experiments/ota_apps/<name>`; the app binary is `experiments/ota_apps/<name>/build/<name>.bin`. Append manifest and copy to the matching SD folder as `<name>.bin`, e.g.:
   ```sh
   python tools/append_manifest.py --input experiments/ota_apps/hello/build/hello.bin --category Application --name hello
@@ -92,7 +94,7 @@
 
 ## Firmware And Partition Gotchas
 
-- `partitions_dual.csv` defines `ota_0` at `0x20000`, `ota_1` at `0x720000`, and a `coredump` data partition at `0xE20000` (64KB); keep USB MSC flashing and OTA switching aligned with the app offsets.
+- `partitions_dual.csv` defines `ota_0` at `0x20000`, `ota_1` at `0x720000`, a `coredump` data partition at `0xE20000` (64KB), and a `startup` (test) app partition at `0xE30000` (256KB); keep USB MSC flashing and OTA switching aligned with the app offsets.
 - For merged release images, do not trust generated `flash_args` if it places the app at `0x10000`; explicitly place launcher `firmware.bin` at `ota_0` (`0x20000`) and USB MSC `firmware.bin` at `ota_1` (`0x720000`). Name release images like `esp32-miaos-pixel_2739f43-dirty_esp32-s3-devkit.img`, using `-dirty` when `git status --porcelain` is non-empty.
 - Launcher and USB MSC code manually writes `otadata` instead of using `esp_ota_set_boot_partition()` because image verification previously triggered TG1 WDT on this ESP32-S3 setup.
 - Do not restore `otadata` by blindly flashing the all-`0xFF` `ota_data_initial.bin`. On a device that still has an older partition table, `0x10000` may be a factory app rather than `otadata`; writing there destroys the app header and causes a boot loop in bootloader `unpack_load_app()`. Before offset-based recovery, read the device table from `0x8000` and decode it with `gen_esp32part.py`, or synchronize the complete dual-OTA layout as described below.

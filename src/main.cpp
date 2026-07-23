@@ -34,7 +34,6 @@
 #include "lava_text.h"
 #include "lava_native_display.h"
 #include "mia_i18n.h"
-#include "mia_startup_menu_api.h"
 #include "pins.h"
 #include "rtc_clock.h"
 #include "sd_app_loader.h"
@@ -1298,63 +1297,6 @@ static void printStartupInfo() {
                  BEEP_PIN, I2C_SCL_PIN, I2C_SDA_PIN);
 }
 
-static void startupMenuPollButtons(void *) { updateAllButtons(); }
-
-static uint8_t startupMenuButtonDown(uint8_t button, void *) {
-  return button < ALL_BUTTON_COUNT && g_allButtons[button].down ? 1 : 0;
-}
-
-static void startupMenuRender(uint8_t selected, const char *status, void *) {
-  lavaClear(LAVA_BLACK);
-  lavaDrawText(24, 24, "MiaOS Startup Menu", LAVA_WHITE, LAVA_BLACK);
-  for (uint8_t index = 0; index < 3; ++index) {
-    const bool active = index == selected;
-    lavaDrawText(28, 62 + index * 28, active ? ">" : " ",
-                 active ? LAVA_YELLOW : LAVA_GRAY, LAVA_BLACK);
-    lavaDrawText(44, 62 + index * 28, mia_startup_menu_item_label(index),
-                 active ? LAVA_YELLOW : LAVA_WHITE, LAVA_BLACK);
-  }
-  if (status != nullptr && std::strstr(status, "SELECT: cancel") != nullptr) {
-    lavaDrawText(8, 172, "UP/DOWN: select  START: confirm", LAVA_GRAY, LAVA_BLACK);
-    lavaDrawText(8, 190, "SELECT: cancel", LAVA_GRAY, LAVA_BLACK);
-  } else {
-    lavaDrawText(8, 172, status != nullptr ? status : "", LAVA_GRAY, LAVA_BLACK);
-  }
-  lavaPresent();
-}
-
-static void startupMenuDelay(uint32_t milliseconds, void *) { delay(milliseconds); }
-
-static int32_t startupMenuClearNvs(void *) {
-  esp_err_t error = nvs_flash_erase();
-  if (error == ESP_OK) error = nvs_flash_init();
-  return error == ESP_OK ? 0 : (int32_t)error;
-}
-
-static int32_t startupMenuSetBootSlot(uint8_t slot, void *) {
-  if (slot > 1) return -1;
-  const esp_partition_t *target = esp_partition_find_first(
-      ESP_PARTITION_TYPE_APP,
-      (esp_partition_subtype_t)(ESP_PARTITION_SUBTYPE_APP_OTA_0 + slot), nullptr);
-  return target != nullptr && miaForceOtaBoot(target) == ESP_OK ? 0 : -1;
-}
-
-static void startupMenuRestart(void *) { esp_restart(); }
-
-static void runLauncherStartupMenu() {
-  const MiaStartupMenuHost host = {
-      startupMenuPollButtons,
-      startupMenuButtonDown,
-      startupMenuRender,
-      startupMenuDelay,
-      startupMenuClearNvs,
-      startupMenuSetBootSlot,
-      startupMenuRestart,
-      nullptr,
-  };
-  (void)mia_startup_menu_run_if_requested(&host);
-}
-
 void setup() {
   const bool cpuAt240Mhz = setCpuFrequencyMhz(240);
   TaskHandle_t vcpInitTask = nullptr;
@@ -1385,7 +1327,6 @@ void setup() {
   printStartupInfo();
   initDisplay();
   launcherTrace("[setup] initDisplay done");
-  runLauncherStartupMenu();
   const LavaFontFace persistedFont = lavaFontFace();
   (void)persistedFont;
   initSdCard();

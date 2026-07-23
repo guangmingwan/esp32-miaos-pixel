@@ -35,5 +35,12 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ARDUINO_RUN_CORE1=y
 CONFIG_ARDUINO_EVENT_RUN_CORE1=y
 
+# Bootloader startup menu: hold M key (GPIO8) to boot the startup-menu app
+# from the "startup" (test) partition. See experiments/startup_menu/.
+CONFIG_BOOTLOADER_APP_TEST=y
+CONFIG_BOOTLOADER_NUM_PIN_APP_TEST=8
+CONFIG_BOOTLOADER_APP_TEST_PIN_LOW=y
+CONFIG_BOOTLOADER_HOLD_TIME_GPIO=1
+
 # ELF loader is no longer used; apps are deployed via OTA partition
 # CONFIG_ELF_LOADER is not set
