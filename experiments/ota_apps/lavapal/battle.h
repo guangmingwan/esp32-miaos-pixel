@@ -314,6 +314,11 @@ PAL_BattleFadeScene(
 );
 
 VOID
+PAL_BattleFadeSceneFast(
+   VOID
+);
+
+VOID
 PAL_BattleEnemyEscape(
    VOID
 );

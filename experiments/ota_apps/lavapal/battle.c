@@ -20,6 +20,7 @@
 //
 
 #include "main.h"
+#include <string.h>
 
 BATTLE          g_Battle;
 
@@ -49,35 +50,37 @@ PAL_BattleDrawBackground(
 
 --*/
 {
-   int          i;
-   LPBYTE       pSrc;
-   LPBYTE       pDst;
-   BYTE         b;
-
    //
    // Draw the background
    //
-   pSrc = g_Battle.lpBackground->pixels;
-   pDst = g_Battle.lpSceneBuf->pixels;
-
-   for (i = 0; i < g_Battle.lpSceneBuf->pitch * g_Battle.lpSceneBuf->h; i++)
    {
-      b = (*pSrc & 0x0F);
-      b += g_Battle.sBackgroundColorShift;
+      int   total = g_Battle.lpSceneBuf->pitch * g_Battle.lpSceneBuf->h;
+      SHORT shift = g_Battle.sBackgroundColorShift;
 
-      if (b & 0x80)
+      if (shift == 0)
       {
-         b = 0;
+         memcpy(g_Battle.lpSceneBuf->pixels, g_Battle.lpBackground->pixels, total);
       }
-      else if (b & 0x70)
+      else
       {
-         b = 0x0F;
+         BYTE  lut[16];
+         LPBYTE pSrc = (LPBYTE)g_Battle.lpBackground->pixels;
+         LPBYTE pDst = (LPBYTE)g_Battle.lpSceneBuf->pixels;
+         int   c;
+
+         for (c = 0; c < 16; c++)
+         {
+            int b = c + shift;
+            if (b & 0x80) b = 0;
+            else if (b & 0x70) b = 0x0F;
+            lut[c] = (BYTE)b;
+         }
+         for (c = 0; c < total; c++)
+         {
+            *pDst = lut[*pSrc & 0x0F] | (*pSrc & 0xF0);
+            pSrc++; pDst++;
+         }
       }
-
-      *pDst = (b | (*pSrc & 0xF0));
-
-      ++pSrc;
-      ++pDst;
    }
 
    PAL_ApplyWave(g_Battle.lpSceneBuf);
@@ -613,9 +616,9 @@ PAL_BattleMakeScene(
    PAL_BattleDrawAllSprites();
 }
 
-VOID
-PAL_BattleFadeScene(
-   VOID
+static VOID
+PAL_BattleFadeSceneWithGroupSize(
+   int               groupSize
 )
 /*++
   Purpose:
@@ -641,7 +644,7 @@ PAL_BattleFadeScene(
 
    for (i = 0; i < 12; i++)
    {
-      for (j = 0; j < 6; j++)
+      for (j = 0; j < 6; j += groupSize)
       {
          PAL_DelayUntil(time);
          time = SDL_GetTicks() + 16;
@@ -650,24 +653,28 @@ PAL_BattleFadeScene(
          // Blend the pixels in the 2 buffers, and put the result into the
          // backup buffer
          //
-         for (k = rgIndex[j]; k < gpScreen->pitch * gpScreen->h; k += 6)
+         int group;
+         for (group = 0; group < groupSize && j + group < 6; group++)
          {
-            a = ((LPBYTE)(g_Battle.lpSceneBuf->pixels))[k];
-            b = ((LPBYTE)(gpScreenBak->pixels))[k];
-
-            if (i > 0)
+            for (k = rgIndex[j + group]; k < gpScreen->pitch * gpScreen->h; k += 6)
             {
-               if ((a & 0x0F) > (b & 0x0F))
-               {
-                  b++;
-               }
-               else if ((a & 0x0F) < (b & 0x0F))
-               {
-                  b--;
-               }
-            }
+               a = ((LPBYTE)(g_Battle.lpSceneBuf->pixels))[k];
+               b = ((LPBYTE)(gpScreenBak->pixels))[k];
 
-            ((LPBYTE)(gpScreenBak->pixels))[k] = ((a & 0xF0) | (b & 0x0F));
+               if (i > 0)
+               {
+                  if ((a & 0x0F) > (b & 0x0F))
+                  {
+                     b++;
+                  }
+                  else if ((a & 0x0F) < (b & 0x0F))
+                  {
+                     b--;
+                  }
+               }
+
+               ((LPBYTE)(gpScreenBak->pixels))[k] = ((a & 0xF0) | (b & 0x0F));
+            }
          }
 
          //
@@ -687,6 +694,22 @@ PAL_BattleFadeScene(
    PAL_BattleUIUpdate();
 
    VIDEO_UpdateScreen(NULL);
+}
+
+VOID
+PAL_BattleFadeScene(
+   VOID
+)
+{
+   PAL_BattleFadeSceneWithGroupSize(1);
+}
+
+VOID
+PAL_BattleFadeSceneFast(
+   VOID
+)
+{
+   PAL_BattleFadeSceneWithGroupSize(2);
 }
 
 static BATTLERESULT

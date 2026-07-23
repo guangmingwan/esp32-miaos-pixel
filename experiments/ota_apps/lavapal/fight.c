@@ -890,7 +890,7 @@ end:
    {
       VIDEO_BackupScreen(g_Battle.lpSceneBuf);
       PAL_BattleMakeScene();
-      PAL_BattleFadeScene();
+      PAL_BattleFadeSceneFast();
    }
 
    //
@@ -908,7 +908,7 @@ end:
 
       VIDEO_BackupScreen(g_Battle.lpSceneBuf);
       PAL_BattleMakeScene();
-      PAL_BattleFadeScene();
+      PAL_BattleFadeSceneFast();
    }
 }
 
@@ -3217,6 +3217,7 @@ PAL_BattleShowPlayerSummonMagicAnim(
    WORD          wMagicNum = gpGlobals->g.rgObject[wObjectID].magic.wMagicNumber;
    WORD          wEffectMagicID = 0;
    DWORD         dwTime = SDL_GetTicks();
+   DWORD         dwFrameTime;
 
    for (wEffectMagicID = 0; wEffectMagicID < MAX_OBJECTS; wEffectMagicID++)
    {
@@ -3240,7 +3241,7 @@ PAL_BattleShowPlayerSummonMagicAnim(
    //
    // Brighten the players
    //
-   for (i = 1; i <= 10; i++)
+   for (i = 2; i <= 10; i += 2)
    {
       for (j = 0; j <= gpGlobals->wMaxPartyMemberIndex; j++)
       {
@@ -3272,7 +3273,7 @@ PAL_BattleShowPlayerSummonMagicAnim(
    // Fade in the summoned god
    //
    PAL_BattleMakeScene();
-   PAL_BattleFadeScene();
+   PAL_BattleFadeSceneFast();
 
    g_Battle.fSummonColorShift = FALSE;
 
@@ -3280,6 +3281,7 @@ PAL_BattleShowPlayerSummonMagicAnim(
    // Show the animation of the summoned god
    // TODO: There is still something missing here compared to the original game.
    //
+   dwFrameTime = (gpGlobals->g.lprgMagic[wMagicNum].wSpeed + 5) * 10;
    while (g_Battle.iSummonFrame < PAL_SpriteGetNumFrames(g_Battle.lpSummonSprite) - 1)
    {
       //
@@ -3290,8 +3292,7 @@ PAL_BattleShowPlayerSummonMagicAnim(
       //
       // Set the time of the next frame.
       //
-      dwTime = SDL_GetTicks() +
-         (gpGlobals->g.lprgMagic[wMagicNum].wSpeed + 5) * 10;
+      dwTime += dwFrameTime;
 
       PAL_BattleMakeScene();
       VIDEO_CopyEntireSurface(g_Battle.lpSceneBuf, gpScreen);
@@ -3301,6 +3302,12 @@ PAL_BattleShowPlayerSummonMagicAnim(
       VIDEO_UpdateScreen(NULL);
 
       g_Battle.iSummonFrame++;
+      while (g_Battle.iSummonFrame < PAL_SpriteGetNumFrames(g_Battle.lpSummonSprite) - 1 &&
+         SDL_TICKS_PASSED(SDL_GetTicks(), dwTime))
+      {
+         g_Battle.iSummonFrame++;
+         dwTime += dwFrameTime;
+      }
    }
 
    //
