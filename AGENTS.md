@@ -92,7 +92,7 @@
 
 ## Firmware And Partition Gotchas
 
-- `partitions_dual.csv` defines `ota_0` at `0x20000` and `ota_1` at `0x720000`; keep USB MSC flashing and OTA switching aligned with those offsets.
+- `partitions_dual.csv` defines `ota_0` at `0x20000`, `ota_1` at `0x720000`, and a `coredump` data partition at `0xE20000` (64KB); keep USB MSC flashing and OTA switching aligned with the app offsets.
 - For merged release images, do not trust generated `flash_args` if it places the app at `0x10000`; explicitly place launcher `firmware.bin` at `ota_0` (`0x20000`) and USB MSC `firmware.bin` at `ota_1` (`0x720000`). Name release images like `esp32-miaos-pixel_2739f43-dirty_esp32-s3-devkit.img`, using `-dirty` when `git status --porcelain` is non-empty.
 - Launcher and USB MSC code manually writes `otadata` instead of using `esp_ota_set_boot_partition()` because image verification previously triggered TG1 WDT on this ESP32-S3 setup.
 - Do not restore `otadata` by blindly flashing the all-`0xFF` `ota_data_initial.bin`. On a device that still has an older partition table, `0x10000` may be a factory app rather than `otadata`; writing there destroys the app header and causes a boot loop in bootloader `unpack_load_app()`. Before offset-based recovery, read the device table from `0x8000` and decode it with `gen_esp32part.py`, or synchronize the complete dual-OTA layout as described below.
@@ -106,6 +106,23 @@
 - USB MSC must keep `ARDUINO_USB_MODE=1` so TinyUSB owns CDC+MSC on the single USB D+/D- pair; switching it back can cause USB protocol conflicts.
 - USB MSC exits back to launcher with `SELECT + START` and writes `seq=1, seq=3` for `ota_0`; launcher writes the matching `ota_1` entries before rebooting to USB Disk.
 - `sdkconfig.defaults` disables task WDT and previously enabled ELF loader options (now disabled — OTA partition mode replaces ELF loader); `sdkconfig.esp32s3` and `dependencies.lock` are generated/ignored locally, so avoid treating local diffs there as source edits.
+
+## Core Dump Capture
+
+- `experiments/ota_apps/lavapal/sdkconfig.defaults` enables coredump-to-flash (`CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`, ELF format, CRC32 checksum). The `coredump` partition in `partitions_dual.csv` is required for this; do not build lavapal without it or panic dumps will be silently dropped.
+- After a crash, the panic handler writes an ELF core file to the `coredump` partition; it persists across reboot and is overwritten by the next crash. Capture it before reproducing again.
+- Read the coredump partition from flash (device must be stopped, not running an app):
+  ```sh
+  python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 --port <port> -b 921600 read_flash 0xE20000 0x10000 /tmp/coredump.bin
+  ```
+- Parse it against the matching ELF (keep the exact build that crashed; `lava_pal.elf` is at `experiments/ota_apps/lavapal/build/lava_pal.elf`):
+  ```sh
+  source /opt/esp-idf/export.sh
+  espcoredump.py info_corefile -c /tmp/coredump.bin -t esp32s3 \
+      -e experiments/ota_apps/lavapal/build/lava_pal.elf
+  ```
+- OTA apps other than lavapal currently have coredump disabled; enable the same three Kconfig options in their `sdkconfig.defaults` if post-mortem analysis is needed there.
+- coredump-to-UART is intentionally disabled; the panic backtrace already prints to the USB Serial/JTAG CDC, and dumping the full core over UART is slow and noisy. Prefer the flash capture flow above.
 
 ## Droid GBK Font Rendering Gotchas
 

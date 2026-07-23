@@ -24,6 +24,7 @@
 #include "global.h"
 #include "palcfg.h"
 #include <errno.h>
+#include <stdlib.h>
 #include <dlfcn.h>
 
 static char internal_buffer[PAL_MAX_GLOBAL_BUFFERS + 1][PAL_GLOBAL_BUFFER_SIZE];
@@ -310,6 +311,10 @@ TerminateOnError(
    va_end(argptr);
 
    fprintf(stderr, "\nFATAL ERROR: %s\n", string);
+
+#ifdef ESP_PLATFORM
+   abort();
+#endif
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
    {

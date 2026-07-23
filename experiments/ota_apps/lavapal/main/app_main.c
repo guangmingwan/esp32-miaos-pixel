@@ -129,8 +129,10 @@ static int select_game_directory(void) {
             fprintf(cfg, "WindowHeight=240\n");
             fprintf(cfg, "TextureWidth=320\n");
             fprintf(cfg, "TextureHeight=200\n");
-            fprintf(cfg, "SampleRate=44100\n");
-            fprintf(cfg, "OPLSampleRate=44100\n");
+            fprintf(cfg, "SampleRate=22050\n");
+            fprintf(cfg, "OPLSampleRate=22050\n");
+            fprintf(cfg, "UseSurroundOPL=FALSE\n");
+            fprintf(cfg, "Stereo=TRUE\n");
             fclose(cfg);
             ESP_LOGI("lava_pal", "wrote %s with GamePath=%s", config_path, candidates[i]);
         } else {
