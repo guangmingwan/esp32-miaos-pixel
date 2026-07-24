@@ -56,6 +56,14 @@ typedef enum {
 } AppState;
 
 typedef struct {
+    uint32_t ip;
+    uint32_t mask;
+    uint32_t router;
+    uint32_t dns;
+    bool valid;
+} DhcpLeaseInfo;
+
+typedef struct {
     AppState state;
     /* WiFi scan results */
     MiaHostWifiNetwork networks[MAX_NETWORKS];
@@ -75,10 +83,13 @@ typedef struct {
     volatile bool wifi_connected;
     char usb_status[40];
     char wifi_status[48];
+    uint8_t mac_addr[6];
+    DhcpLeaseInfo lease;
 } UsbWifiState;
 
 static UsbWifiState g;
 static MiaHostWifiNetwork g_scan_results[MAX_NETWORKS];
+static portMUX_TYPE g_lease_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* ── Drawing helpers ─────────────────────────────────────────────── */
 
@@ -94,6 +105,115 @@ static void draw_title(const char *title) {
 static bool exit_pressed(void) {
     return mia_host_button_down(MIA_HOST_BUTTON_SELECT) &&
            mia_host_button_down(MIA_HOST_BUTTON_START);
+}
+
+static uint16_t read_be16(const uint8_t *data) {
+    return (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
+}
+
+static uint32_t read_ipv4(const uint8_t *data) {
+    return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
+           ((uint32_t)data[2] << 8) | data[3];
+}
+
+static void format_ipv4(uint32_t address, char output[16]) {
+    if (address == 0) {
+        snprintf(output, 16, "--");
+        return;
+    }
+    snprintf(output, 16, "%lu.%lu.%lu.%lu",
+             (unsigned long)((address >> 24) & 0xff),
+             (unsigned long)((address >> 16) & 0xff),
+             (unsigned long)((address >> 8) & 0xff),
+             (unsigned long)(address & 0xff));
+}
+
+static void clear_dhcp_lease(void) {
+    portENTER_CRITICAL(&g_lease_lock);
+    memset(&g.lease, 0, sizeof(g.lease));
+    portEXIT_CRITICAL(&g_lease_lock);
+}
+
+static DhcpLeaseInfo get_dhcp_lease(void) {
+    DhcpLeaseInfo lease;
+    portENTER_CRITICAL(&g_lease_lock);
+    lease = g.lease;
+    portEXIT_CRITICAL(&g_lease_lock);
+    return lease;
+}
+
+static void inspect_dhcp_reply(const void *buffer, uint16_t len) {
+    const uint8_t *frame = (const uint8_t *)buffer;
+    if (len < 14) return;
+
+    size_t l2_header_len = 14;
+    uint16_t ether_type = read_be16(frame + 12);
+    for (int tags = 0; tags < 2 && (ether_type == 0x8100 || ether_type == 0x88a8);
+         ++tags) {
+        if (len < l2_header_len + 4) return;
+        ether_type = read_be16(frame + l2_header_len + 2);
+        l2_header_len += 4;
+    }
+    if (ether_type != 0x0800 || len < l2_header_len + 20 + 8 + 240) return;
+
+    const uint8_t *ip = frame + l2_header_len;
+    size_t ip_header_len = (size_t)(ip[0] & 0x0f) * 4;
+    if ((ip[0] >> 4) != 4 || ip_header_len < 20 ||
+        len < l2_header_len + ip_header_len + 8 + 240 || ip[9] != 17 ||
+        (read_be16(ip + 6) & 0x1fff) != 0) return;
+
+    uint16_t ip_total_len = read_be16(ip + 2);
+    const uint8_t *udp = ip + ip_header_len;
+    uint16_t udp_len = read_be16(udp + 4);
+    if (read_be16(udp) != 67 || read_be16(udp + 2) != 68 ||
+        udp_len < 8 + 240 || ip_total_len < ip_header_len + udp_len ||
+        len < l2_header_len + ip_header_len + udp_len) return;
+
+    const uint8_t *dhcp = udp + 8;
+    size_t dhcp_len = udp_len - 8;
+    if (dhcp[0] != 2 || dhcp[236] != 0x63 || dhcp[237] != 0x82 ||
+        dhcp[238] != 0x53 || dhcp[239] != 0x63) return;
+
+    DhcpLeaseInfo lease = get_dhcp_lease();
+    uint32_t reply_ip = read_ipv4(dhcp + 16);
+    if (reply_ip == 0) reply_ip = read_ipv4(dhcp + 12);
+    if (reply_ip == 0) {
+        uint32_t destination = read_ipv4(ip + 16);
+        if (destination != 0 && destination != 0xffffffff) reply_ip = destination;
+    }
+    if (reply_ip != 0) lease.ip = reply_ip;
+    uint8_t message_type = 0;
+    size_t offset = 240;
+    while (offset < dhcp_len) {
+        uint8_t option = dhcp[offset++];
+        if (option == 0) continue;
+        if (option == 255) break;
+        if (offset >= dhcp_len) return;
+        uint8_t option_len = dhcp[offset++];
+        if (option_len > dhcp_len - offset) return;
+
+        if (option == 1 && option_len >= 4) {
+            lease.mask = read_ipv4(dhcp + offset);
+        } else if (option == 3 && option_len >= 4) {
+            lease.router = read_ipv4(dhcp + offset);
+        } else if (option == 6 && option_len >= 4) {
+            lease.dns = read_ipv4(dhcp + offset);
+        } else if (option == 53 && option_len == 1) {
+            message_type = dhcp[offset];
+        }
+        offset += option_len;
+    }
+
+    if ((message_type != 2 && message_type != 5) || lease.ip == 0) return;
+    lease.valid = true;
+    portENTER_CRITICAL(&g_lease_lock);
+    g.lease = lease;
+    portEXIT_CRITICAL(&g_lease_lock);
+
+    char ip_text[16];
+    format_ipv4(lease.ip, ip_text);
+    ESP_LOGI(TAG, "DHCP %s for USB host: %s",
+             message_type == 5 ? "ACK" : "OFFER", ip_text);
 }
 
 /* ── Credential file I/O ─────────────────────────────────────────── */
@@ -152,6 +272,7 @@ static void wifi_pkt_free(void *eb, void *ctx) {
 }
 
 static esp_err_t pkt_wifi2usb(void *buffer, uint16_t len, void *eb) {
+    inspect_dhcp_reply(buffer, len);
     if (tinyusb_net_send_sync(buffer, len, eb, portMAX_DELAY) != ESP_OK) {
         esp_wifi_internal_free_rx_buffer(eb);
     }
@@ -165,6 +286,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
     if (id == WIFI_EVENT_STA_DISCONNECTED) {
         g.wifi_connected = false;
+        clear_dhcp_lease();
         snprintf(g.wifi_status, sizeof(g.wifi_status), "%s", usb_wifi_text()->disconnected);
         esp_wifi_internal_reg_rxcb(ESP_IF_WIFI_STA, NULL);
         esp_wifi_connect();
@@ -189,6 +311,7 @@ static esp_err_t start_usb_ncm(void) {
         .user_context = NULL,
     };
     esp_read_mac(net_config.mac_addr, ESP_MAC_WIFI_STA);
+    memcpy(g.mac_addr, net_config.mac_addr, sizeof(g.mac_addr));
     ESP_RETURN_ON_ERROR(tinyusb_net_init(&net_config), TAG, "tinyusb_net_init");
 
     g.usb_ready = true;
@@ -231,6 +354,7 @@ static void stop_wifi(void) {
     esp_wifi_deinit();
     g.wifi_connected = false;
     g.wifi_started = false;
+    clear_dhcp_lease();
 }
 
 /* ── State: SCAN ─────────────────────────────────────────────────── */
@@ -262,7 +386,8 @@ static void draw_list(void) {
 
     if (g.network_count == 0) {
         mia_host_draw_text(100, 110, usb_wifi_text()->no_networks, MIA_HOST_RED, MIA_HOST_BLACK);
-        mia_host_draw_text(80, 222, "A:Rescan  SEL+ST:Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
+        mia_host_draw_text(80, 222, usb_wifi_text()->rescan_exit_hint,
+                           MIA_HOST_GRAY, MIA_HOST_BLACK);
         mia_host_present();
         return;
     }
@@ -284,7 +409,7 @@ static void draw_list(void) {
     }
 
     char bot[48];
-    snprintf(bot, sizeof(bot), "%ld found  A:Select B:Rescan", (long)g.network_count);
+    snprintf(bot, sizeof(bot), usb_wifi_text()->list_hint, (long)g.network_count);
     mia_host_draw_text(4, 224, bot, MIA_HOST_GRAY, MIA_HOST_BLACK);
     mia_host_present();
 }
@@ -341,6 +466,7 @@ static void tick_list(void) {
 /* ── State: KEYBOARD ─────────────────────────────────────────────── */
 
 static void draw_keyboard(void) {
+    const UsbWifiText *text = usb_wifi_text();
     mia_host_clear(MIA_HOST_BLACK);
 
     /* Title: SSID */
@@ -375,15 +501,15 @@ static void draw_keyboard(void) {
                 label[0] = KB_ROWS[r][c];
                 label[1] = '\0';
             } else {
-                if (c == KB_DONE)      strcpy(label, "done");
-                else if (c == KB_DEL)  strcpy(label, "del");
-                else                   strcpy(label, "cancel");
+                if (c == KB_DONE)      snprintf(label, sizeof(label), "%s", text->key_done);
+                else if (c == KB_DEL)  snprintf(label, sizeof(label), "%s", text->key_delete);
+                else                   snprintf(label, sizeof(label), "%s", text->key_cancel);
             }
-            mia_host_draw_text(x + 8, y + 4, label, fg, bg);
+            mia_host_draw_text(x + (r < KB_ROW_COUNT ? 8 : 2), y + 4, label, fg, bg);
         }
     }
 
-    mia_host_draw_text(4, 224, "A:Type B:Del SEL+ST:Exit", MIA_HOST_GRAY, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 224, text->kb_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
     mia_host_present();
 }
 
@@ -512,12 +638,14 @@ static void tick_connecting(void) {
     /* Init USB NCM first, then WiFi */
     esp_err_t err = start_usb_ncm();
     if (err != ESP_OK) {
-        snprintf(g.usb_status, sizeof(g.usb_status), "USB Error %d", (int)err);
+        snprintf(g.usb_status, sizeof(g.usb_status), usb_wifi_text()->usb_error_fmt,
+                 (int)err);
     }
 
     err = start_wifi_sta(g.ssid, g.password);
     if (err != ESP_OK) {
-        snprintf(g.wifi_status, sizeof(g.wifi_status), "Error %d", (int)err);
+        snprintf(g.wifi_status, sizeof(g.wifi_status), usb_wifi_text()->error_fmt,
+                 (int)err);
     }
 
     uint32_t start_ms = mia_host_millis();
@@ -541,9 +669,11 @@ static void tick_connecting(void) {
         if (elapsed > 15000) {
             /* timeout */
             mia_host_clear(MIA_HOST_BLACK);
-            draw_title("Connect Failed");
-            mia_host_draw_text(4, 100, "WiFi connection timeout", MIA_HOST_RED, MIA_HOST_BLACK);
-            mia_host_draw_text(4, 120, "A:Retry  B:Back to list", MIA_HOST_YELLOW, MIA_HOST_BLACK);
+            draw_title(usb_wifi_text()->connect_failed);
+            mia_host_draw_text(4, 100, usb_wifi_text()->wifi_timeout,
+                               MIA_HOST_RED, MIA_HOST_BLACK);
+            mia_host_draw_text(4, 120, usb_wifi_text()->retry_back_hint,
+                               MIA_HOST_YELLOW, MIA_HOST_BLACK);
             mia_host_present();
 
             /* wait for input */
@@ -584,25 +714,62 @@ static void tick_connecting(void) {
 /* ── State: RUNNING ──────────────────────────────────────────────── */
 
 static void draw_running(void) {
+    const UsbWifiText *text = usb_wifi_text();
+    DhcpLeaseInfo lease = get_dhcp_lease();
+    wifi_ap_record_t ap_info = {0};
+    bool have_ap_info = esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
+    char ip[16], router[16], mask[16], dns[16], mac[18];
     char line[64];
+    format_ipv4(lease.valid ? lease.ip : 0, ip);
+    format_ipv4(lease.valid ? lease.router : 0, router);
+    format_ipv4(lease.valid ? lease.mask : 0, mask);
+    format_ipv4(lease.valid ? lease.dns : 0, dns);
+    snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+             g.mac_addr[0], g.mac_addr[1], g.mac_addr[2],
+             g.mac_addr[3], g.mac_addr[4], g.mac_addr[5]);
+
     mia_host_clear(MIA_HOST_BLACK);
-    draw_title("USB WiFi Bridge");
+    draw_title(text->bridge_title);
 
     snprintf(line, sizeof(line), "USB:  %s", g.usb_status);
-    mia_host_draw_text(4, 36, line,
+    mia_host_draw_text(4, 20, line,
                        g.usb_ready ? MIA_HOST_GREEN : MIA_HOST_RED, MIA_HOST_BLACK);
 
     uint8_t wifi_color = g.wifi_connected ? MIA_HOST_GREEN : MIA_HOST_YELLOW;
     snprintf(line, sizeof(line), "WiFi: %s", g.wifi_status);
-    mia_host_draw_text(4, 52, line, wifi_color, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 36, line, wifi_color, MIA_HOST_BLACK);
 
     snprintf(line, sizeof(line), "SSID: %s", g.ssid);
-    mia_host_draw_text(4, 68, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 52, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
 
-    mia_host_draw_text(4, 100, "USB NCM network adapter", MIA_HOST_CYAN, MIA_HOST_BLACK);
-    mia_host_draw_text(4, 116, "Check PC for new NIC.", MIA_HOST_GRAY, MIA_HOST_BLACK);
+    if (have_ap_info) {
+        snprintf(line, sizeof(line), text->signal_fmt, ap_info.rssi);
+    } else {
+        snprintf(line, sizeof(line), "%s", text->signal_unavailable);
+    }
+    uint8_t signal_color = !have_ap_info ? MIA_HOST_GRAY :
+                           (ap_info.rssi >= -67 ? MIA_HOST_GREEN :
+                            (ap_info.rssi >= -75 ? MIA_HOST_YELLOW : MIA_HOST_RED));
+    mia_host_draw_text(4, 74, line, signal_color, MIA_HOST_BLACK);
 
-    mia_host_draw_text(4, 224, usb_wifi_text()->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
+    snprintf(line, sizeof(line), text->ip_fmt, ip);
+    mia_host_draw_text(4, 92, line, lease.valid ? MIA_HOST_WHITE : MIA_HOST_GRAY,
+                       MIA_HOST_BLACK);
+    snprintf(line, sizeof(line), text->gateway_fmt, router);
+    mia_host_draw_text(4, 110, line, lease.router ? MIA_HOST_WHITE : MIA_HOST_GRAY,
+                       MIA_HOST_BLACK);
+    snprintf(line, sizeof(line), text->mask_fmt, mask);
+    mia_host_draw_text(4, 128, line, lease.mask ? MIA_HOST_WHITE : MIA_HOST_GRAY,
+                       MIA_HOST_BLACK);
+    snprintf(line, sizeof(line), text->mac_fmt, mac);
+    mia_host_draw_text(4, 146, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
+    mia_host_draw_text(4, 164, text->link_speed, MIA_HOST_CYAN, MIA_HOST_BLACK);
+    snprintf(line, sizeof(line), text->dns_fmt, dns);
+    mia_host_draw_text(4, 182, line, lease.dns ? MIA_HOST_WHITE : MIA_HOST_GRAY,
+                       MIA_HOST_BLACK);
+
+    mia_host_draw_text(4, 224, text->running_hint,
+                       MIA_HOST_GRAY, MIA_HOST_BLACK);
     mia_host_present();
 }
 
@@ -629,13 +796,19 @@ int usb_wifi_main_impl(int argc, char *argv[]) {
         mia_host_clear(MIA_HOST_BLACK);
         draw_title(usb_wifi_text()->title_usb_wifi);
         char line[48];
-        snprintf(line, sizeof(line), "Saved: %.*s", 42, saved_ssid);
+        snprintf(line, sizeof(line), usb_wifi_text()->saved_fmt, 42, saved_ssid);
         mia_host_draw_text(4, 80, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
-        mia_host_draw_text(4, 110, "A:Connect  B:Rescan", MIA_HOST_YELLOW, MIA_HOST_BLACK);
+        mia_host_draw_text(4, 110, usb_wifi_text()->saved_controls,
+                           MIA_HOST_YELLOW, MIA_HOST_BLACK);
+        mia_host_draw_text(4, 146, usb_wifi_text()->win10_tips, MIA_HOST_YELLOW, MIA_HOST_BLACK);
+        mia_host_draw_text(4, 164, usb_wifi_text()->win10_step1, MIA_HOST_WHITE, MIA_HOST_BLACK);
+        mia_host_draw_text(4, 182, usb_wifi_text()->win10_step2, MIA_HOST_WHITE, MIA_HOST_BLACK);
+        mia_host_draw_text(4, 200, usb_wifi_text()->win10_step3, MIA_HOST_WHITE, MIA_HOST_BLACK);
         mia_host_draw_text(4, 224, usb_wifi_text()->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
         mia_host_present();
 
-        /* wait for input */
+        /* Give the instructions time to appear, then try saved credentials once. */
+        uint32_t saved_screen_ms = mia_host_millis();
         bool decided = false;
         while (!decided) {
             mia_host_buttons_poll();
@@ -644,14 +817,14 @@ int usb_wifi_main_impl(int argc, char *argv[]) {
                 mia_host_present();
                 return 0;
             }
-            if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
+            if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
+                decided = true;  /* fall through to scan */
+            } else if (mia_host_button_pressed(MIA_HOST_BUTTON_A) ||
+                       mia_host_millis() - saved_screen_ms >= 2000) {
                 snprintf(g.ssid, sizeof(g.ssid), "%s", saved_ssid);
                 snprintf(g.password, sizeof(g.password), "%s", saved_pass);
                 g.state = STATE_CONNECTING;
                 decided = true;
-            }
-            if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
-                decided = true;  /* fall through to scan */
             }
             mia_host_delay_ms(20);
         }
