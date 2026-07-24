@@ -1,309 +1,316 @@
 # ESP32-S3 Retro-Pixel Launcher
 
-PlatformIO project for the **ESP32-S3-WROOM-1-N16R8** board (16MB Flash + 8MB PSRAM).
+面向 **ESP32-S3-WROOM-1-N16R8**（16MB Flash + 8MB PSRAM）掌机的启动器与 SD 卡应用平台。硬件使用 2.31 英寸 320x240 IPS 屏（HD231005C10 / ILI9342）、独立 SPI SD 卡、PCF8563 RTC、NS4168 I2S 功放、USB OTG、方向键、ABXY 和肩键/系统键。
 
-The firmware drives the onboard **HD231005C10** LCD module (2.31" IPS, 320×240,
-driver IC **ILI9342**, SPI) and starts a simple launcher. The first built-in app
-is the hardware diagnostic screen with chip info, TFT/SD status, ADC values,
-buttons, uptime, and frame count. It also prints the same status to the serial
-monitor.
+Launcher 提供中英文界面、可切换位图字体、RTC 时钟、日志、USB CDC 文件传输，并可将 SD 卡上的独立 ESP-IDF 固件写入 `ota_1` 后启动。SD 应用不是 ELF 插件，也没有沙箱；它们是拥有完整硬件权限的固件镜像，只应安装可信来源的构建产物。
 
-See [`retro-pixel-datasheet.md`](./retro-pixel-datasheet.md) for the full
-schematic-derived peripheral map.
+硬件原理图见 [`SCH_2.31寸彩屏掌机320_240_2026-07-02.pdf`](./SCH_2.31寸彩屏掌机320_240_2026-07-02.pdf)，界面约定见 [`DESIGN.md`](./DESIGN.md)。
 
-## Detected Device
+## 主要特性
 
-Detected with `esptool v5.3.1` on Windows `COM10` (`TinyUSB CDC`, USB VID:PID
-`303A:1001`):
+- 320x240 索引帧缓冲 Launcher，支持 English / 中文和 9 套可持久化字体。
+- 从 `/MiaOS/<category>/<name>.app/<name>.bin` 动态发现最多 99 个 SD 应用，并按分类生成标签页。
+- 双 OTA 分区：`ota_0` 固定运行 Launcher，`ota_1` 运行当前 SD 应用或 USB Disk 固件。
+- MIA2 固件 Manifest：包含分类、名称、构建时间、镜像大小及双重 CRC32；相同固件可跳过重复擦写。
+- Launcher 启动时可将 `ota_1` 中较新的 MIA2 应用安全同步回 SD 卡，也可手动执行 `Export OTA to SD`。
+- USB Serial/JTAG CDC 文件服务：上传、下载、列表、创建、删除、重命名和直接启动 SD 应用。
+- USB Mass Storage 固件：把 SD 卡作为 USB 磁盘暴露给电脑。
+- USB NCM 网卡应用：扫描并连接 WiFi，将网络桥接为电脑的 USB 网卡。
+- WiFi HTTP 文件管理和 FTP 文件服务。
+- 启动阶段恢复菜单：清除 NVS，或手动选择 `ota_0` / `ota_1`。
+- OTA 应用共用 Launcher 提供的显示、输入、SD、网络、音频和系统 Host ABI；大型字库与 SDL 兼容层可从 SD 动态加载。
 
-- **Chip**: ESP32-S3 (QFN56), revision v0.2
-- **CPU**: dual core + LP core, up to 240MHz
-- **Wireless**: Wi-Fi + Bluetooth 5 LE
-- **Crystal**: 40MHz
-- **On-chip memory**: 384KB ROM, 512KB SRAM, 16KB RTC SRAM
-- **Flash**: 16MB SPI flash, quad I/O, 3.3V, JEDEC `46:4018`
-- **PSRAM**: 8MB embedded PSRAM, vendor `AP_3v3`, 85C rating
-- **USB mode during detection**: USB-Serial/JTAG ROM loader
-- **MAC**: `a4:cb:8f:c1:c0:00`
-- **Security fuses**: Secure Boot disabled, Flash Encryption disabled, JTAG and
-  USB download modes not permanently disabled
+## Flash 架构
 
-## Launcher Model
+[`partitions_dual.csv`](./partitions_dual.csv) 的关键分区如下：
 
-The launcher uses one firmware image with built-in apps linked at compile time.
-It can also discover OTA partition apps on the SD card and flash them to the
-`ota_1` partition, then reboot into the selected app.
+| 分区 | 偏移 | 大小 | 用途 |
+| --- | ---: | ---: | --- |
+| `otadata` | `0x10000` | 8KB | OTA 启动选择 |
+| `ota_0` | `0x20000` | 7MB | Launcher |
+| `ota_1` | `0x720000` | 7MB | 当前 SD OTA 应用 / USB Disk |
+| `coredump` | `0xE20000` | 64KB | Flash core dump（目前由 `lava_pal` 启用） |
+| `startup` | `0xE30000` | 256KB | 启动恢复菜单 |
 
-- `A` starts the selected app.
-- `B` exits the active app and returns to the launcher.
-- `UP` / `DOWN` move through the items in the current tab.
-- `LEFT` / `RIGHT` switch between `System` and SD category tabs.
+Launcher 和 USB Disk 会直接写入带 CRC 的 `otadata` 条目来切换分区，因为本硬件上调用常规镜像验证路径曾触发 TG1 interrupt WDT。
 
-`About` remains the only informational built-in launcher app. The launcher now exposes a
-`System` tab for `VCP File Transfer`, `Logs`, `About`, `USB Disk`, and `Boot Loader`, while SD-loaded ELF
-apps are grouped into tabs by their SD category directory.
+## 操作
 
-## WiFi SD File Server
+Launcher 中：
 
-The `WiFi Files` app publishes the SD card over guest HTTP access. It provides a
-browser page for listing directories, downloading files, uploading files,
-creating folders, and deleting files or empty folders.
+- `UP` / `DOWN`：移动当前标签页中的选择。
+- `LEFT` / `RIGHT`：切换 `System` 和 SD 分类标签页。
+- `A`：打开内置项或启动 SD 应用。
+- `SELECT`：打开 SD 应用操作菜单，可选择运行或把当前 `ota_1` 内容上传到该 SD 文件。
+- `SELECT + START`：退出当前内置应用；OTA 应用和 USB Disk 也统一使用该组合返回 Launcher。
 
-On start, the app reads optional WiFi settings from `/wifi.txt` on the SD card:
+`System` 标签页固定包含：
+
+- `VCP File Transfer`
+- `Logs`
+- `About`
+- `Language`
+- `Font`
+- `Boot Loader`
+- `Export OTA to SD`
+
+SD 卡中的 `System` 类应用（例如 `usb disk`、`usb_wifi`）会追加在这些固定项目之后。`Boot Loader` 只显示进入 ROM 下载模式的说明：按住 `ST` 再按 `RESET`；单按 `RESET` 正常启动。
+
+语言和字体保存在 NVS。若设置异常，可在 Launcher 启动时按住 `M` 跳过已保存设置。
+
+### 启动恢复菜单
+
+设备复位或上电时按住 `M`（GPIO8）约 1 秒，bootloader 会从 `startup` test 分区进入恢复菜单。松开 `M` 后可选择：
+
+- `Clear NVRAM`：清除 NVS，选择 `ota_0` 并重启。
+- `Boot ota_0`：启动 Launcher。
+- `Boot ota_1`：启动当前应用分区。
+
+菜单中使用 `UP` / `DOWN` 移动，`A` 或 `START` 确认，`B` 或 `SELECT` 取消并重启。此功能要求 `startup_menu.bin` 已烧录到 `0xE30000`；仅构建 Launcher 不会自动写入该分区。
+
+## SD OTA 应用
+
+Launcher 当前只扫描 `/MiaOS` 下的一级分类目录。分类名是动态的，但标准发布包使用：`Application`、`Emulators`、`Games`、`Media`、`Settings`、`System` 和 `Utils`。
+
+每个应用必须使用以下结构，目录名、固件名和 Manifest 中的 `name` 应一致：
+
+```text
+/MiaOS/<category>/<name>.app/<name>.bin
+```
+
+例如：
+
+```text
+/MiaOS/Utils/calculator.app/calculator.bin
+/MiaOS/Emulators/gba.app/gba.bin
+/MiaOS/System/usb disk.app/usb disk.bin
+```
+
+旧的 `<name>.app/firmware.bin` 不会被识别；SD 根目录下的 `/Games`、`/Utils` 等分类也不再扫描。
+
+### 当前应用
+
+[`tools/build_sd.py`](./tools/build_sd.py) 的默认发布清单包括：
+
+| 分类 | 应用 |
+| --- | --- |
+| `Application` | `hello` |
+| `Emulators` | `coleco`, `gb`, `gba`, `gbc`, `gg`, `gw`, `lynx`, `megadrive`, `msx`, `nes`, `pce`, `sms`, `snes` |
+| `Games` | `lava_pal`, `minesweeper` |
+| `Media` | `music`（MP3 / WAV / FLAC / OGG） |
+| `Settings` | `rtc_set` |
+| `System` | `usb disk`, `usb_wifi` |
+| `Utils` | `calculator`, `flashlight`, `wifi_scan`, `diagnostic`, `ftp_server`, `screen_test`, `sd_browser`, `timer`, `wifi_files` |
+
+源码树还包含尚未加入默认发布清单的应用或测试项目，例如 `gmu`（当前支持 MP3 / MP2）、`lava_cch`、`mia_test` 和 `psram_test`。它们可以单独构建并按相同目录规则安装。
+
+模拟器可通过应用内文件选择器打开 ROM。VCP 的 `launch` 命令还可传入文件路径，直接绕过选择器；该能力也适用于 `music`。
+
+### MIA2 Manifest
+
+当前固件尾部附加 72 字节 `MIA2` Manifest，而不是旧版 56 字节 `MIA1`。MIA2 增加了 `build_epoch`、`image_size` 和 `image_crc`：
+
+- SD 固件与 `ota_1` Manifest 相同时，Launcher 跳过 Flash 擦写并直接启动。
+- `ota_1` 版本较新或 SD 文件没有有效 MIA2 时，Launcher 在启动阶段把它同步到 `/MiaOS/<category>/<name>.app/<name>.bin`。
+- 导出前会校验镜像 CRC，并通过临时文件和备份文件避免留下不完整固件。
+- MIA1 仍可读取和启动，但不能可靠参与版本同步和镜像完整性校验。
+
+格式、兼容性和安全边界见 [`docs/ota-app-manifest.md`](./docs/ota-app-manifest.md)。
+
+构建单个 OTA 应用并附加 Manifest：
+
+```sh
+idf.py build -C experiments/ota_apps/calculator
+python tools/append_manifest.py \
+    --input experiments/ota_apps/calculator/build/calculator.bin \
+    --category Utils --name calculator
+```
+
+然后安装为 `/MiaOS/Utils/calculator.app/calculator.bin`。`append_manifest.py` 会先移除已有的有效 MIA1/MIA2 尾部，避免重复追加。
+
+### 共享库
+
+发布包在 `/MiaOS/Library` 中包含：
+
+- `libmia_text_v1.so`：Droid GBK 字库、Unicode/GBK 映射和文本渲染。
+- `libmia_sdl_v1.so`：OTA 游戏使用的 SDL 兼容层。
+
+构建命令：
+
+```sh
+idf.py -C experiments/shared_libraries/mia_text so
+idf.py -C experiments/shared_libraries/mia_sdl so
+```
+
+这些 `.so` 是 OTA 应用运行时加载的共享组件，不表示 Launcher 又恢复为 ELF 应用加载架构。
+
+## 文件服务
+
+### VCP File Transfer
+
+Launcher 空闲时，主机可通过 ESP32-S3 USB Serial/JTAG CDC 虚拟串口进入文件服务，无需先在设备上手动打开菜单：
+
+```sh
+uv run tools/serial_sd_client.py enter --port /dev/ttyACM0
+uv run tools/serial_sd_client.py ping --port /dev/ttyACM0
+uv run tools/serial_sd_client.py info --port /dev/ttyACM0
+uv run tools/serial_sd_client.py list-dir --remote-path /MiaOS --port /dev/ttyACM0
+```
+
+文件操作：
+
+```sh
+uv run tools/serial_sd_client.py mkdir /MiaOS/Test --port /dev/ttyACM0
+uv run tools/serial_sd_client.py put local.bin /MiaOS/Test/remote.bin --port /dev/ttyACM0
+uv run tools/serial_sd_client.py get /MiaOS/Test/remote.bin ./download.bin --port /dev/ttyACM0
+uv run tools/serial_sd_client.py rename /MiaOS/Test/remote.bin /MiaOS/Test/new.bin --port /dev/ttyACM0
+uv run tools/serial_sd_client.py delete /MiaOS/Test/new.bin --port /dev/ttyACM0
+```
+
+直接启动应用并传入文件：
+
+```sh
+uv run tools/serial_sd_client.py launch /MiaOS/Emulators/gba.app/gba.bin \
+    --file-path /roms/gba/game.gba --port /dev/ttyACM0
+```
+
+结束服务并回到 Launcher：
+
+```sh
+uv run tools/serial_sd_client.py exit --port /dev/ttyACM0
+```
+
+底层协议支持 `PING`、`INFO`、`LIST`、`MKDIR`、`DELETE`、`RENAME`、`PUT`、`GET`、`RUN` 和 `HELP`。上传采用 6144 字节流控窗口；请使用仓库自带客户端，不要在收到 `ACK` 前持续写入，否则 USB CDC RX 队列可能溢出。一个串口同一时间只能运行一个客户端。
+
+VCP 路径是原始字节路径。当前 Launcher FatFs 配置使用 UTF-8，仍建议应用目录和固件名保持 ASCII，以兼容 Manifest 固定字段、主机 shell 和不同应用的路径处理。
+
+### WiFi Files
+
+`wifi_files` 在 SD 卡根目录读取可选的 `/wifi.txt`：
 
 ```ini
 ssid=YourRouterWifiName
 password=YourRouterWifiPassword
-ap_ssid=MiaOS-SD
+ap_ssid=MiaOS
 ap_password=
 ```
 
-If `ssid` is set, the ESP32 first tries to join that router. A PC connected to
-the same router by Ethernet can then open the URL shown on the TFT, for example
-`http://192.168.1.23/`. If the file is missing or router connection fails, the
-ESP32 starts an open fallback hotspot named `MiaOS-SD`; connect a phone or WiFi
-client to it and open `http://192.168.4.1/`.
+配置了 `ssid` 时会先尝试连接路由器；失败或未配置时创建 `MiaOS` 热点。TFT 会显示 HTTP 地址。网页支持目录浏览、下载、上传、创建目录以及删除文件或空目录。
 
-Access is intentionally unauthenticated. Use it only on a trusted LAN or while
-connected directly to the fallback hotspot.
+HTTP 服务不做身份认证，只应在可信局域网或设备直连热点中临时使用。
 
-## FTP SD Server
+### FTP Server
 
-The `FTP Server` app starts a dedicated open WiFi access point and publishes the
-SD card through FTP. It is useful for standard FTP clients such as FileZilla or
-WinSCP.
+`ftp_server` 创建开放热点并共享 SD 卡：
 
-- WiFi SSID: `MiaOS-FTP`
-- FTP host: `192.168.4.1`
-- FTP port: `21`
-- FTP user: `guest`
-- FTP password: `guest`
+- WiFi SSID：`MiaOS`
+- FTP 地址：`ftp://192.168.4.1:21`
+- 用户名：`miaos`
+- 密码：`miaos`
+- 连接模式：被动模式（PASV）
 
-Use passive mode (`PASV`) in the FTP client. The app is intended for direct,
-temporary access while you are connected to the device hotspot.
+### USB Disk 与 USB WiFi
 
-## SD OTA Apps
+`usb disk` 使用 TinyUSB CDC + MSC 复合设备把 SD 卡暴露为 USB Mass Storage。进入后 SD 卡由电脑直接访问，不应同时由其他固件读写；按 `SELECT + START` 返回 Launcher。
 
-`include/sd_app_loader.h` discovers OTA partition apps on the already-mounted
-Arduino SD card without remounting it. Apps are listed from category folders at
-the SD root plus the legacy MiaOS path:
+`usb_wifi` 使用 USB NCM 把 ESP32-S3 作为电脑的 USB 网卡。设备端可扫描 SSID、用屏幕键盘输入密码并保存连接配置。主机需要支持 USB NCM。
 
-```text
-/Games/*.app/<name>.bin
-/Utils/*.app/<name>.bin
-/Settings/*.app/<name>.bin
-/Emulators/*.app/<name>.bin
-/Media/*.app/<name>.bin
-/Application/*.app/<name>.bin
-/MiaOS/Games/*.app/<name>.bin
-/MiaOS/Utils/*.app/<name>.bin
-/MiaOS/Settings/*.app/<name>.bin
-/MiaOS/Emulators/*.app/<name>.bin
-/MiaOS/Media/*.app/<name>.bin
-/MiaOS/Application/*.app/<name>.bin
-```
+## 构建与发布
 
-Where `<name>` matches the directory name without the `.app` suffix.
-For example, `calculator.app/calculator.bin`, `minesweeper.app/minesweeper.bin`.
+需要 PlatformIO；OTA 应用、共享库和恢复菜单还需要可用的 ESP-IDF 环境。
 
-Selecting an SD app calls `runSdAppByPath()`, which reads the firmware binary
-from the SD card, flashes it to the `ota_1` partition using the OTA app flash
-helpers (`include/ota_app_flash.h`), sets the OTA boot data, and reboots into
-the flashed app.
-
-On returning to the launcher (by re-flashing the launcher to `ota_0`), the
-action menu also supports "Upload to SD": exporting the current `ota_1` content
-back to the SD card as a firmware binary.
-
-Build each OTA app as a standalone ESP-IDF project and copy its binary to the SD
-card with the app name:
+构建、烧录和监控 Launcher：
 
 ```sh
-idf.py build -C experiments/ota_apps/hello
-python tools/append_manifest.py \
-    --input experiments/ota_apps/hello/build/hello.bin \
-    --category Application --name hello
+pio run -e esp32s3
+pio run -e esp32s3 -t upload --upload-port /dev/ttyACM0
+pio device monitor --port /dev/ttyACM0 -b 115200
 ```
 
-Generated artifact:
-
-```text
-experiments/ota_apps/hello/build/hello.bin  (with manifest appended)
-```
-
-SD card target path:
-
-```text
-/MiaOS/Application/hello.app/hello.bin
-```
-
-Expected SD card layout for the OTA apps:
-
-```text
-SD card root/
-├── Emulators/
-├── Games/
-│   └── minesweeper.app/minesweeper.bin
-├── Media/
-├── Settings/
-│   ├── diagnostic.app/diagnostic.bin
-│   ├── rtc_set.app/rtc_set.bin
-│   └── wifi_scan.app/wifi_scan.bin
-├── Utils/
-│   ├── calculator.app/calculator.bin
-│   ├── flashlight.app/flashlight.bin
-│   ├── ftp_server.app/ftp_server.bin
-│   ├── screen_test.app/screen_test.bin
-│   ├── sd_browser.app/sd_browser.bin
-│   ├── timer.app/timer.bin
-│   └── wifi_files.app/wifi_files.bin
-└── Application/
-    └── hello.app/hello.bin
-```
-
-On the launcher, use `LEFT` / `RIGHT` to switch tabs. `Boot Loader` now shows a
-manual instruction dialog instead of forcing ROM download mode; hold `ST` and
-press `RESET` to enter the boot loader, and press `RESET` alone to boot normally.
-
-The `Logs` entry in the `System` tab reads `/MiaOS/logs/latest.log` from the SD
-card. The launcher overwrites this file on startup and records the current boot
-summary plus the most recent SD OTA app launch result and error code. The file
-also includes launcher-owned serial traces from startup, SD scanning, USB Disk,
-and OTA app flash execution; it does not automatically capture every third-party
-library message written directly to `Serial`.
-
-## VCP File Transfer
-
-The `VCP File Transfer` entry in the `System` tab starts a file service over the
-ESP32-S3 USB Serial/JTAG CDC virtual COM port (`/dev/ttyACM*` on Linux), not the
-GPIO UART. It uses a simple command protocol rather than a network FTP stack.
-
-Supported commands:
-
-```text
-PING
-INFO
-LIST <path>
-MKDIR <path>
-DELETE <path>
-PUT <path> <size>
-```
-
-Use the host helper script:
+构建 USB Disk、OTA 测试固件和恢复菜单：
 
 ```sh
-uv run tools/serial_sd_client.py ping
-uv run tools/serial_sd_client.py list-dir --remote-path /MiaOS/Application
-uv run tools/serial_sd_client.py mkdir /MiaOS/Test
-uv run tools/serial_sd_client.py put ./app.elf /MiaOS/Application/test.app/app.elf
+pio run -e esp32s3-usbmsc
+pio run -e esp32s3-otatest
+idf.py build -C experiments/startup_menu
 ```
 
-Paths should not contain spaces. The launcher writes `VCP File Transfer` activity to
-`/MiaOS/logs/latest.log`.
-
----
-
-## 开发者备忘录 — OTA App Manifest 与命名规则
-
-本文档记录 OTA app 的 manifest 机制、SD 卡固件命名规则、以及 launcher 的运行/导出优化逻辑。
-
-### 1. Manifest 尾随数据（Trailer）格式
-
-每个 OTA app 的 firmware binary 尾部附加一个 56 字节的 `OtaAppManifest` 结构：
-
-| 偏移 | 大小 | 字段 | 说明 |
-|------|------|------|------|
-| 0 | 4 | `magic` | `0x3141494D`（ASCII `"MIA1"`） |
-| 4 | 16 | `category` | 分类，例如 `"Utils"`，不足用 `\0` 填充 |
-| 20 | 32 | `name` | 名称，例如 `"calculator"`，不足用 `\0` 填充 |
-| 52 | 4 | `crc` | CRC32(magic + category + name) |
-
-该 trailer 位于 ESP-IDF 有效 image 之后。ESP-IDF bootloader 只读 `image_len` 字节，不会访问 trailer，因此对正常启动和 OTA 更新无影响。
-
-定义见 `include/ota_app_manifest.h`。
-
-### 2. 固件文件命名规则
-
-SD 卡上每个 app 目录的固件文件从 `firmware.bin` 改为 `<appname>.bin`：
-
-- 目录名：`<name>.app`（不变）
-- 固件文件：`<name>.bin`（例如 `calculator.app/calculator.bin`）
-- Launcher 扫描时自动从目录名剥离 `.app` 后缀作为文件名
-
-### 3. 构建 OTA App 并附加 Manifest
+将 USB Disk 或恢复菜单单独写入固定分区：
 
 ```sh
-# 1. 正常构建
-idf.py build -C experiments/ota_apps/calculator
-
-# 2. 附加 manifest
-python tools/append_manifest.py \
-    --input experiments/ota_apps/calculator/build/calculator.bin \
-    --category Utils --name calculator
-
-# 3. 复制到 SD 卡
-cp experiments/ota_apps/calculator/build/calculator.bin \
-   /sd/Utils/calculator.app/calculator.bin
+esptool.py --chip esp32s3 --port /dev/ttyACM0 -b 921600 \
+    write_flash 0x720000 .pio/build/esp32s3-usbmsc/firmware.bin
+esptool.py --chip esp32s3 --port /dev/ttyACM0 -b 921600 \
+    write_flash 0xE30000 experiments/startup_menu/build/startup_menu.bin
 ```
 
-分类值对照：
-- `Utils` — calculator, flashlight, ftp_server, screen_test, sd_browser, timer, wifi_files
-- `Settings` — diagnostic, rtc_set, wifi_scan
-- `Games` — minesweeper
-- `Application` — hello
-- `Media` — music
+### SD 发布包
 
-### 4. Launcher 运行优化（Manifest 比对）
+先构建所需 OTA 应用、USB Disk 和两套共享库，再把已有产物打包：
 
-当用户在 SD app 上按 A 选择 "Download and run" 时：
+```sh
+python tools/build_sd.py
+```
 
-1. 读取 SD 卡上 `<appname>.bin` 尾部的 manifest
-2. 读取 `ota_1` 分区 `image_len` 偏移处的 manifest
-3. 如果两者都存在且 `category + name + crc` 完全一致，跳过 flash 阶段
-4. 直接调用 `miaBootAppSlot()`：写入 otadata → reboot
+默认输出为 `dist/esp32-miaos-pixel_<git-revision>[-dirty]_sd.zip`。脚本会为每个应用重新生成 MIA2 Manifest，并跳过尚未构建的应用；缺少任一共享库时会停止并报告对应构建命令。
 
-此优化使相同 app 的重复启动时间从 ~5 秒（擦除 + flash）降至 ~0.5 秒。
+### 单文件 Flash 镜像
 
-实现见 `src/main.cpp` 中 `enterSelectedApp()` 的 `sdManifestMatchesOta()` 分支。
+完整发布镜像必须显式按 [`partitions_dual.csv`](./partitions_dual.csv) 的偏移合并，不能使用把主应用放在 `0x10000` 的默认 flash 参数：
 
-### 5. Export OTA to SD（System 标签）
+```sh
+python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin \
+    -o esp32-miaos-pixel_<revision>_esp32-s3-devkit.img \
+    --flash_mode dio --flash_freq 80m --flash_size 16MB \
+    0x0 .pio/build/esp32s3/bootloader.bin \
+    0x8000 .pio/build/esp32s3/partitions.bin \
+    0x10000 .pio/build/esp32s3/ota_data_initial.bin \
+    0x20000 .pio/build/esp32s3/firmware.bin \
+    0x720000 .pio/build/esp32s3-usbmsc/firmware.bin \
+    0xE30000 experiments/startup_menu/build/startup_menu.bin
+```
 
-在 System 标签页新增 "Export OTA to SD" 系统项：
+烧录：
 
-1. 读取 `ota_1` 分区的 manifest trailer
-2. 自动构造路径 `/MiaOS/<category>/<name>.app/<name>.bin`
-3. 自动创建目录并写入固件（含 manifest trailer）
-4. 如果 `ota_1` 没有 manifest（旧格式），返回错误
+```sh
+python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 \
+    --port /dev/ttyACM0 -b 921600 write_flash 0x0 \
+    esp32-miaos-pixel_<revision>_esp32-s3-devkit.img
+```
 
-此功能解决"直接 flash ota_1 后 SD 卡上没有 app 文件"的循环依赖问题。
+不要在不了解设备当前分区表时单独把全 `0xFF` 的 `ota_data_initial.bin` 写到 `0x10000`；旧分区布局可能在该地址放置应用镜像。迁移旧设备时应一次写入匹配的 bootloader、分区表、otadata 和两个 OTA 槽。
 
-### 6. 导出/导入 Manifest 保留
+## 日志与调试
 
-- **SD → ota_1**（Download and run）：`miaFlashAppToSlot()` 直接按字节写入，manifest trailer 自动保留
-- **ota_1 → SD**（Upload to SD / Export OTA）：`miaExportAppSlotToSd()` 在写完 `image_len` 字节后检查 trailer 并追加写入，确保 round-trip 不丢失 manifest
+Launcher 启动时覆盖 `/MiaOS/logs/latest.log`，记录启动摘要、SD 扫描、OTA 同步/刷写、USB Disk 和 VCP 操作。第三方库直接写到 `Serial` 的内容不保证进入该文件。
 
-### 7. 兼容性
+`lava_pal` 启用了写入 `coredump` 分区的 Flash core dump。崩溃后可在再次复现前读取：
 
-- 旧版 `firmware.bin`（无 manifest trailer）：launcher 仍可运行和导出，但不支持优化跳过 flash
-- 旧版 `*.app/firmware.bin` 目录：launcher 扫描 `calculator.app/` 时只找 `calculator.bin`，旧 `firmware.bin` 不会被识别。需要按新命名复制一份或重命名。
+```sh
+python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 \
+    --port /dev/ttyACM0 -b 921600 read_flash 0xE20000 0x10000 /tmp/coredump.bin
+source /opt/esp-idf/export.sh
+espcoredump.py info_corefile -c /tmp/coredump.bin -t esp32s3 \
+    -e experiments/ota_apps/lavapal/build/lava_pal.elf
+```
+
+必须使用与崩溃固件完全匹配的 ELF。其他 OTA 应用默认没有启用 core dump。
 
 ## Hardware
 
-- **SoC Module**：ESP32-S3-WROOM-1-N16R8（实测 ESP32-S3 QFN56 rev v0.2，16MB Flash + 8MB PSRAM）
-- **On-chip Memory**：384KB ROM + 512KB SRAM + 16KB RTC SRAM
-- **LCD**：HD231005C10，2.31" IPS，320×240，ILI9342，SPI
+- **SoC Module**：ESP32-S3-WROOM-1-N16R8，16MB Flash + 8MB OPI PSRAM
+- **LCD**：HD231005C10，2.31 英寸 IPS，320x240，ILI9342，SPI
 - **SD Card**：独立 SPI 总线
-- **Audio**：I2S 功放输出 + 蜂鸣器
-- **Input**：KEY_L / KEY_R / KEY_M / KEY_SELECT / KEY_START / BOOT
-- **External Keyboard Scan**：K_PL / K_CLK / K_DAT
-- **Expansion Bus**：I2C（X 前缀，用于传感器 / 外设）
-- **USB**：原生 USB-OTG（D-/D+）
-- **Power**：电池供电（VBAT_VOLTAGE 电压采样）+ USB
+- **RTC / Expansion**：PCF8563 与扩展 I2C 总线
+- **Audio**：NS4168 I2S 功放 + 蜂鸣器
+- **Input**：直连 GPIO 肩键/系统键 + 74HC165 扫描的方向键和 ABXY
+- **USB**：原生 USB OTG（GPIO19 / GPIO20）
+- **Power**：电池电压 ADC 采样 + USB 供电
 
 ## IO Mapping
 
 | Function | Net | GPIO |
-| --- | --- | --- |
+| --- | --- | ---: |
 | LCD RST | LCD_RST | 3 |
 | LCD DC | LCD_DC | 9 |
 | LCD CS | LCD_CS | 10 |
@@ -322,43 +329,21 @@ cp experiments/ota_apps/calculator/build/calculator.bin \
 | USB D- | DN | 19 |
 | USB D+ | DP | 20 |
 | Battery Voltage | VBAT_VOLTAGE | 1 |
-| CTRL (amp / enable) | CTRL | 46 |
+| Audio Amp Enable | CTRL | 46 |
 | Beep | BEEP | 14 |
-| Key BOOT | KEY_BOOT | 0 |
+| Key BOOT / START | KEY_BOOT | 0 |
 | Key L | KEY_L | 17 |
 | Key R | KEY_R | 18 |
 | Key M | KEY_M | 8 |
 | Key SELECT | KEY_SELECT | 21 |
-| Key Scan PL | K_PL | 2 |
-| Key Scan CLK | K_CLK | 39 |
-| Key Scan DAT | K_DAT | 38 |
+| HC165 PL | K_PL | 2 |
+| HC165 CLK | K_CLK | 39 |
+| HC165 DAT | K_DAT | 38 |
 
-NC / 可扩展：GPIO35、GPIO36、GPIO37、GPIO43（TXD0）、GPIO44（RXD0）、GPIO45、GPIO47、GPIO48。
+74HC165 位分配为 `LEFT=0`、`DOWN=1`、`UP=2`、`RIGHT=3`、`Y=4`、`X=5`、`A=6`、`B=7`。LCD 的 MISO 使用未连接的 GPIO48 作为占位，避免 Arduino SPI 默认占用背光 GPIO13。
 
-## Commands
+NC / 可扩展 GPIO：35、36、37、43（TXD0）、44（RXD0）、45、47、48。
 
-构建 / 烧录 / 监控（PlatformIO，环境名 `esp32s3`）：
+## License
 
-```sh
-pio run                          # 构建
-pio run -t upload                # 烧录
-pio device monitor               # 串口监控
-```
-
-ESP32-S3 在 Linux 上通常以 USB 串口或原生 USB CDC 形式出现，端口路径形如：
-
-```sh
-ls /dev/ttyUSB* /dev/ttyACM*
-ls /dev/serial/by-id
-```
-
-然后通过 `--upload-port` / `--port` 覆盖默认端口，无需改 `platformio.ini`：
-
-```sh
-pio run -t upload --upload-port /dev/ttyACM0
-pio device monitor --port /dev/ttyACM0 -b 115200
-```
-
-> 当前 `platformio.ini` 与实测硬件一致：ESP32-S3-WROOM-1-N16R8，16MB Flash，
-> 8MB PSRAM。`src/` 下显示驱动、帧缓冲尺寸、SPI 引脚常量和按键映射已按
-> HD231005C10 / ILI9342（320×240）迁移。
+项目许可证见 [`LICENSE`](./LICENSE)。模拟器、游戏移植和第三方库各自保留上游许可证；制作分发包时应同时包含相应许可证文件。
