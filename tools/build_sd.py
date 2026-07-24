@@ -29,6 +29,7 @@ class App:
     name: str
     category: str
     source: str | None = None
+    data_files: tuple[tuple[str, str], ...] = ()
 
     @property
     def project_dir(self) -> Path:
@@ -43,6 +44,10 @@ class App:
     @property
     def archive_path(self) -> str:
         return f"MiaOS/{self.category}/{self.name}.app/{self.name}.bin"
+
+    @property
+    def archive_dir(self) -> str:
+        return f"MiaOS/{self.category}/{self.name}.app"
 
 
 APPS = (
@@ -60,8 +65,11 @@ APPS = (
     App("pce", "Emulators"),
     App("sms", "Emulators"),
     App("snes", "Emulators"),
+    App("lava_cch", "Games", data_files=((
+        "experiments/ota_apps/lava_cch/LavaData/BOOK.DAT", "LavaData/BOOK.DAT"),)),
     App("lava_pal", "Games", "experiments/ota_apps/lavapal/build/lava_pal.bin"),
     App("minesweeper", "Games"),
+    App("gmu", "Media"),
     App("music", "Media"),
     App("rtc_set", "Settings"),
     App("usb disk", "System", ".pio/build/esp32s3-usbmsc/firmware.bin"),
@@ -151,6 +159,15 @@ def create_archive(output: Path, build_epoch: int) -> tuple[int, int]:
                 archive.writestr(zip_info(app.archive_path, build_epoch), data)
                 print(f"Packed {app.archive_path} ({len(data)} bytes)")
                 packed += 1
+                for source, relative_path in app.data_files:
+                    source_path = ROOT / source
+                    if not source_path.is_file():
+                        raise FileNotFoundError(f"missing runtime data for {app.name}: {source}")
+                    archive_path = f"{app.archive_dir}/{relative_path}"
+                    file_data = source_path.read_bytes()
+                    archive.writestr(zip_info(archive_path, build_epoch), file_data)
+                    print(f"Packed {archive_path} ({len(file_data)} bytes)")
+                    packed += 1
         temporary.replace(output)
     except Exception:
         temporary.unlink(missing_ok=True)

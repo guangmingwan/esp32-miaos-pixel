@@ -12,21 +12,38 @@ sys.modules[SPEC.name] = build_sd
 SPEC.loader.exec_module(build_sd)
 
 
+def use_shared_libraries(tmp_path, monkeypatch):
+    text_library = tmp_path / "libmia_text_v1.so"
+    sdl_library = tmp_path / "libmia_sdl_v1.so"
+    text_library.write_bytes(b"text library")
+    sdl_library.write_bytes(b"sdl library")
+    monkeypatch.setattr(build_sd, "TEXT_LIBRARY", text_library)
+    monkeypatch.setattr(build_sd, "SDL_LIBRARY", sdl_library)
+
+
 def test_distribution_registry_is_valid():
     names = [app.name for app in build_sd.APPS]
     assert len(names) == len(set(names))
     assert set(app.category for app in build_sd.APPS) <= set(build_sd.CATEGORIES)
     assert not {"mia_test", "psram_test"} & set(names)
+    assert {"lava_cch", "gmu"} <= set(names)
     assert {"usb disk", "usb_wifi"} <= set(names)
     for app in build_sd.APPS:
         if app.source is None:
             assert app.project_dir.is_dir()
+        for source, relative_path in app.data_files:
+            assert (build_sd.ROOT / source).is_file()
+            assert not Path(relative_path).is_absolute()
+            assert ".." not in Path(relative_path).parts
 
 
 def test_create_archive_uses_miaos_layout_and_fresh_manifest(tmp_path, monkeypatch):
+    use_shared_libraries(tmp_path, monkeypatch)
     source = tmp_path / "sample.bin"
     source.write_bytes(b"firmware")
-    app = build_sd.App("sample", "Utils")
+    runtime_data = tmp_path / "BOOK.DAT"
+    runtime_data.write_bytes(b"book")
+    app = build_sd.App("sample", "Utils", data_files=((str(runtime_data), "Data/BOOK.DAT"),))
     monkeypatch.setattr(build_sd, "APPS", (app,))
     monkeypatch.setattr(build_sd.App, "artifact", property(lambda self: source))
 
@@ -37,15 +54,17 @@ def test_create_archive_uses_miaos_layout_and_fresh_manifest(tmp_path, monkeypat
         path = "MiaOS/Utils/sample.app/sample.bin"
         assert path in archive.namelist()
         data = archive.read(path)
+        assert archive.read("MiaOS/Utils/sample.app/Data/BOOK.DAT") == b"book"
     manifest = build_sd.parse_trailer(data)
     assert manifest["category"] == "Utils"
     assert manifest["name"] == "sample"
     assert manifest["build_epoch"] == 1234567890
     assert data[:manifest["image_size"]] == b"firmware"
-    assert (packed, skipped) == (1, 0)
+    assert (packed, skipped) == (4, 0)
 
 
 def test_create_archive_skips_missing_artifact(tmp_path, monkeypatch):
+    use_shared_libraries(tmp_path, monkeypatch)
     monkeypatch.setattr(build_sd, "APPS", (build_sd.App("missing", "Games"),))
     output = tmp_path / "sd.zip"
 
@@ -54,4 +73,4 @@ def test_create_archive_skips_missing_artifact(tmp_path, monkeypatch):
     with ZipFile(output) as archive:
         assert "MiaOS/Games/" in archive.namelist()
         assert not any(name.endswith(".bin") for name in archive.namelist())
-    assert (packed, skipped) == (0, 1)
+    assert (packed, skipped) == (2, 1)

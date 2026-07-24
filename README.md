@@ -96,13 +96,13 @@ Launcher 当前只扫描 `/MiaOS` 下的一级分类目录。分类名是动态�
 | --- | --- |
 | `Application` | `hello` |
 | `Emulators` | `coleco`, `gb`, `gba`, `gbc`, `gg`, `gw`, `lynx`, `megadrive`, `msx`, `nes`, `pce`, `sms`, `snes` |
-| `Games` | `lava_pal`, `minesweeper` |
-| `Media` | `music`（MP3 / WAV / FLAC / OGG） |
+| `Games` | `lava_cch`, `lava_pal`, `minesweeper` |
+| `Media` | `gmu`（MP3 / MP2）, `music`（MP3 / WAV / FLAC / OGG） |
 | `Settings` | `rtc_set` |
 | `System` | `usb disk`, `usb_wifi` |
 | `Utils` | `calculator`, `flashlight`, `wifi_scan`, `diagnostic`, `ftp_server`, `screen_test`, `sd_browser`, `timer`, `wifi_files` |
 
-源码树还包含尚未加入默认发布清单的应用或测试项目，例如 `gmu`（当前支持 MP3 / MP2）、`lava_cch`、`mia_test` 和 `psram_test`。它们可以单独构建并按相同目录规则安装。
+`mia_test` 和 `psram_test` 是开发测试项目，不进入默认发布包；需要时可单独构建并按相同目录规则安装。
 
 模拟器可通过应用内文件选择器打开 ROM。VCP 的 `launch` 命令还可传入文件路径，直接绕过选择器；该能力也适用于 `music`。
 
@@ -217,7 +217,7 @@ HTTP 服务不做身份认证，只应在可信局域网或设备直连热点中
 
 ## 构建与发布
 
-需要 PlatformIO；OTA 应用、共享库和恢复菜单还需要可用的 ESP-IDF 环境。
+项目使用 PIO44、IDF44 和 IDF52 三套固定工具链。完整版本、目标分组、产物路径和推荐顺序见 [`docs/build-manifest.md`](./docs/build-manifest.md)；不要在同一构建目录中混用 ESP-IDF 4.4 与 5.2。
 
 构建、烧录和监控 Launcher：
 
@@ -227,7 +227,7 @@ pio run -e esp32s3 -t upload --upload-port /dev/ttyACM0
 pio device monitor --port /dev/ttyACM0 -b 115200
 ```
 
-构建 USB Disk、OTA 测试固件和恢复菜单：
+构建 USB Disk、OTA 测试固件和恢复菜单（恢复菜单使用 IDF44）：
 
 ```sh
 pio run -e esp32s3-usbmsc
@@ -246,13 +246,13 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 -b 921600 \
 
 ### SD 发布包
 
-先构建所需 OTA 应用、USB Disk 和两套共享库，再把已有产物打包：
+先按构建清单生成全部 OTA 应用、USB Disk 和两套共享库，再把已有产物打包：
 
 ```sh
 python tools/build_sd.py
 ```
 
-默认输出为 `dist/esp32-miaos-pixel_<git-revision>[-dirty]_sd.zip`。脚本会为每个应用重新生成 MIA2 Manifest，并跳过尚未构建的应用；缺少任一共享库时会停止并报告对应构建命令。
+默认输出为 `dist/esp32-miaos-pixel_<git-revision>[-dirty]_sd.zip`。脚本会为每个应用重新生成 MIA2 Manifest，并跳过尚未构建的应用；缺少共享库或已登记的运行时数据时会停止。`lava_cch` 的 `LavaData/BOOK.DAT` 会随应用一起打包。
 
 ### 单文件 Flash 镜像
 
