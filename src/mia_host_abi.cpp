@@ -82,6 +82,8 @@ void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
 
 int32_t mia_host_text_height(void) { return lavaFontHeight(); }
 
+int32_t mia_host_text_width(const char *text) { return lavaTextWidth(text); }
+
 void mia_host_present(void) {
   if (lavaDisplayReady()) {
     lavaPresent();

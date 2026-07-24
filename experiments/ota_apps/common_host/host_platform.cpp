@@ -537,6 +537,9 @@ extern "C" void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8
   display_host_draw_text(x, y, text, fg, bg);
 }
 extern "C" int32_t mia_host_text_height(void) { return display_host_text_height(); }
+extern "C" int32_t mia_host_text_width(const char *text) {
+  return display_host_text_width(text);
+}
 extern "C" void mia_host_present(void) { display_host_present(); }
 extern "C" int32_t mia_host_present_rgb565(const uint16_t *pixels, uint32_t width,
                                              uint32_t height, uint32_t pitch_bytes) {

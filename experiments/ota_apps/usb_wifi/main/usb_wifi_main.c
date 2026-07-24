@@ -29,6 +29,7 @@ static const char *TAG = "usb_wifi";
 #define MAX_NETWORKS 16
 #define PASS_MAXLEN 63
 #define LIST_VISIBLE 8
+#define MAX_SAVED 8
 
 /* ── Keyboard layout ─────────────────────────────────────────────── */
 static const char *KB_ROWS[] = {
@@ -64,6 +65,11 @@ typedef struct {
 } DhcpLeaseInfo;
 
 typedef struct {
+    char ssid[33];
+    char password[PASS_MAXLEN + 1];
+} SavedCred;
+
+typedef struct {
     AppState state;
     /* WiFi scan results */
     MiaHostWifiNetwork networks[MAX_NETWORKS];
@@ -77,6 +83,9 @@ typedef struct {
     int32_t kb_col;
     /* Selected SSID */
     char ssid[33];
+    /* Saved credentials */
+    SavedCred saved[MAX_SAVED];
+    int32_t saved_count;
     /* Bridge runtime */
     bool usb_ready;
     bool wifi_started;
@@ -218,42 +227,80 @@ static void inspect_dhcp_reply(const void *buffer, uint16_t len) {
 
 /* ── Credential file I/O ─────────────────────────────────────────── */
 
-static bool load_credentials(char *ssid, size_t ssid_sz, char *pass, size_t pass_sz) {
-    ssid[0] = '\0';
-    pass[0] = '\0';
+static const char *find_saved_password(const char *ssid) {
+    for (int32_t i = 0; i < g.saved_count; ++i) {
+        if (strcmp(g.saved[i].ssid, ssid) == 0) {
+            return g.saved[i].password;
+        }
+    }
+    return NULL;
+}
+
+static void load_all_credentials(void) {
+    g.saved_count = 0;
     FILE *f = fopen("/sd/wifi.txt", "r");
-    if (!f) return false;
+    if (!f) return;
 
     char line[128];
+    SavedCred pending = {0};
     while (fgets(line, sizeof(line), f)) {
         char *eq = strchr(line, '=');
         if (!eq) continue;
         *eq = '\0';
+        char *key = line;
         char *val = eq + 1;
         size_t vlen = strlen(val);
-        while (vlen > 0 && (val[vlen-1] == '\n' || val[vlen-1] == '\r'))
+        while (vlen > 0 && (val[vlen - 1] == '\n' || val[vlen - 1] == '\r'))
             val[--vlen] = '\0';
 
-        if (strcmp(line, "ssid") == 0 && vlen > 0) {
-            snprintf(ssid, ssid_sz, "%.*s", (int)(ssid_sz - 1), val);
-        } else if (strcmp(line, "password") == 0) {
-            snprintf(pass, pass_sz, "%.*s", (int)(pass_sz - 1), val);
+        if (strcmp(key, "ssid") == 0) {
+            if (pending.ssid[0] != '\0' && g.saved_count < MAX_SAVED) {
+                g.saved[g.saved_count++] = pending;
+            }
+            memset(&pending, 0, sizeof(pending));
+            snprintf(pending.ssid, sizeof(pending.ssid), "%s", val);
+        } else if (strcmp(key, "password") == 0 && pending.ssid[0] != '\0') {
+            snprintf(pending.password, sizeof(pending.password), "%s", val);
         }
     }
+    if (pending.ssid[0] != '\0' && g.saved_count < MAX_SAVED) {
+        g.saved[g.saved_count++] = pending;
+    }
     fclose(f);
-    return ssid[0] != '\0';
 }
 
-static void save_credentials(const char *ssid, const char *password) {
+static void save_all_credentials(void) {
     FILE *f = fopen("/sd/wifi.txt", "w");
     if (!f) {
         ESP_LOGE(TAG, "Failed to write /sd/wifi.txt");
         return;
     }
-    fprintf(f, "ssid=%s\n", ssid);
-    fprintf(f, "password=%s\n", password);
+    for (int32_t i = 0; i < g.saved_count; ++i) {
+        fprintf(f, "ssid=%s\n", g.saved[i].ssid);
+        fprintf(f, "password=%s\n", g.saved[i].password);
+    }
     fclose(f);
-    ESP_LOGI(TAG, "Saved credentials ssid='%s'", ssid);
+    ESP_LOGI(TAG, "Saved %ld credentials", (long)g.saved_count);
+}
+
+static void save_credential(const char *ssid, const char *password) {
+    int32_t existing = -1;
+    for (int32_t i = 0; i < g.saved_count; ++i) {
+        if (strcmp(g.saved[i].ssid, ssid) == 0) {
+            existing = i;
+            break;
+        }
+    }
+
+    int32_t end = existing >= 0 ? existing : g.saved_count;
+    if (end >= MAX_SAVED) end = MAX_SAVED - 1;
+    for (int32_t i = end; i > 0; --i) {
+        g.saved[i] = g.saved[i - 1];
+    }
+    snprintf(g.saved[0].ssid, sizeof(g.saved[0].ssid), "%s", ssid);
+    snprintf(g.saved[0].password, sizeof(g.saved[0].password), "%s", password);
+    if (existing < 0 && g.saved_count < MAX_SAVED) ++g.saved_count;
+    save_all_credentials();
 }
 
 /* ── USB NCM + WiFi bridge (from official ESP-IDF tusb_ncm example) ── */
@@ -399,12 +446,14 @@ static void draw_list(void) {
         int32_t row = i - g.list_scroll;
         int32_t y = 26 + row * 14;
         bool sel = (i == g.list_sel);
+        bool saved = (find_saved_password(g_scan_results[i].ssid) != NULL);
         uint8_t bg = sel ? MIA_HOST_BLUE : MIA_HOST_BLACK;
         uint8_t fg = sel ? MIA_HOST_YELLOW : MIA_HOST_WHITE;
         mia_host_fill_rect(0, y - 1, mia_host_screen_width(), 13, bg);
         char line[48];
-        snprintf(line, sizeof(line), "%3ld %.*s",
-                 (long)g_scan_results[i].rssi, 36, g_scan_results[i].ssid);
+        snprintf(line, sizeof(line), "%3ld %.*s%s",
+                 (long)g_scan_results[i].rssi, 32, g_scan_results[i].ssid,
+                 saved ? " *" : "");
         mia_host_draw_text(4, y, line, fg, bg);
     }
 
@@ -448,8 +497,14 @@ static void tick_list(void) {
         }
         if (mia_host_button_pressed(MIA_HOST_BUTTON_A) && g.network_count > 0) {
             snprintf(g.ssid, sizeof(g.ssid), "%s", g_scan_results[g.list_sel].ssid);
-            g.pass_len = 0;
-            g.password[0] = '\0';
+            const char *saved = find_saved_password(g.ssid);
+            if (saved) {
+                snprintf(g.password, sizeof(g.password), "%s", saved);
+                g.pass_len = strlen(g.password);
+            } else {
+                g.pass_len = 0;
+                g.password[0] = '\0';
+            }
             g.kb_row = 0;
             g.kb_col = 0;
             g.state = STATE_KEYBOARD;
@@ -480,20 +535,30 @@ static void draw_keyboard(void) {
     mia_host_fill_rect(0, 20, mia_host_screen_width(), 14, MIA_HOST_BLACK);
     mia_host_draw_text(4, 22, g.password + show_start, MIA_HOST_GREEN, MIA_HOST_BLACK);
 
-    /* Keyboard grid: 5 rows, 10 cols, each cell 30px wide */
-    int32_t cell_w = 30;
-    int32_t cell_h = 16;
-    int32_t kb_y0 = 40;
+    /* Keep every row and every label centered for the active font. */
+    const int32_t gap = 2;
+    const int32_t regular_cell_w = 29;
+    const int32_t cell_h = 16;
+    const int32_t kb_y0 = 40;
+    const int32_t text_h = mia_host_text_height();
+    const int32_t grid_w = KB_ROW_LEN * regular_cell_w +
+                           (KB_ROW_LEN - 1) * gap;
 
     for (int32_t r = 0; r < KB_TOTAL_ROWS; ++r) {
         int32_t y = kb_y0 + r * (cell_h + 2);
         int32_t cols = (r < KB_ROW_COUNT) ? KB_ROW_LEN : KB_SPECIAL_COUNT;
+        int32_t cell_w = r < KB_ROW_COUNT
+                             ? regular_cell_w
+                             : (grid_w - (KB_SPECIAL_COUNT - 1) * gap) /
+                                   KB_SPECIAL_COUNT;
+        int32_t row_w = cols * cell_w + (cols - 1) * gap;
+        int32_t row_x = (mia_host_screen_width() - row_w) / 2;
 
         for (int32_t c = 0; c < cols; ++c) {
-            int32_t x = c * (cell_w + 2) + 4;
+            int32_t x = row_x + c * (cell_w + gap);
             bool sel = (r == g.kb_row && c == g.kb_col);
             uint8_t bg = sel ? MIA_HOST_BLUE : MIA_HOST_GRAY;
-            uint8_t fg = sel ? MIA_HOST_YELLOW : MIA_HOST_WHITE;
+            uint8_t fg = MIA_HOST_BLACK;
             mia_host_fill_rect(x, y, cell_w, cell_h, bg);
 
             char label[8];
@@ -505,7 +570,10 @@ static void draw_keyboard(void) {
                 else if (c == KB_DEL)  snprintf(label, sizeof(label), "%s", text->key_delete);
                 else                   snprintf(label, sizeof(label), "%s", text->key_cancel);
             }
-            mia_host_draw_text(x + (r < KB_ROW_COUNT ? 8 : 2), y + 4, label, fg, bg);
+            int32_t tw = mia_host_text_width(label);
+            int32_t tx = x + (cell_w - tw) / 2;
+            int32_t ty = y + (cell_h - text_h) / 2;
+            mia_host_draw_text(tx, ty, label, fg, bg);
         }
     }
 
@@ -582,7 +650,7 @@ static void tick_keyboard(void) {
             } else {
                 if (g.kb_col == KB_DONE) {
                     /* save + proceed */
-                    save_credentials(g.ssid, g.password);
+                    save_credential(g.ssid, g.password);
                     g.state = STATE_CONNECTING;
                     return;
                 } else if (g.kb_col == KB_DEL) {
@@ -786,17 +854,14 @@ int usb_wifi_main_impl(int argc, char *argv[]) {
     memset(&g, 0, sizeof(g));
     g.state = STATE_SCAN;
 
-    /* Quick-start: if credentials already saved, ask user */
-    char saved_ssid[33];
-    char saved_pass[PASS_MAXLEN + 1];
-    bool have_creds = load_credentials(saved_ssid, sizeof(saved_ssid),
-                                       saved_pass, sizeof(saved_pass));
+    load_all_credentials();
 
-    if (have_creds) {
+    if (g.saved_count > 0) {
+        SavedCred *recent = &g.saved[0];
         mia_host_clear(MIA_HOST_BLACK);
         draw_title(usb_wifi_text()->title_usb_wifi);
         char line[48];
-        snprintf(line, sizeof(line), usb_wifi_text()->saved_fmt, 42, saved_ssid);
+        snprintf(line, sizeof(line), usb_wifi_text()->saved_fmt, 42, recent->ssid);
         mia_host_draw_text(4, 80, line, MIA_HOST_WHITE, MIA_HOST_BLACK);
         mia_host_draw_text(4, 110, usb_wifi_text()->saved_controls,
                            MIA_HOST_YELLOW, MIA_HOST_BLACK);
@@ -807,7 +872,6 @@ int usb_wifi_main_impl(int argc, char *argv[]) {
         mia_host_draw_text(4, 224, usb_wifi_text()->exit_hint, MIA_HOST_GRAY, MIA_HOST_BLACK);
         mia_host_present();
 
-        /* Give the instructions time to appear, then try saved credentials once. */
         uint32_t saved_screen_ms = mia_host_millis();
         bool decided = false;
         while (!decided) {
@@ -821,8 +885,8 @@ int usb_wifi_main_impl(int argc, char *argv[]) {
                 decided = true;  /* fall through to scan */
             } else if (mia_host_button_pressed(MIA_HOST_BUTTON_A) ||
                        mia_host_millis() - saved_screen_ms >= 2000) {
-                snprintf(g.ssid, sizeof(g.ssid), "%s", saved_ssid);
-                snprintf(g.password, sizeof(g.password), "%s", saved_pass);
+                snprintf(g.ssid, sizeof(g.ssid), "%s", recent->ssid);
+                snprintf(g.password, sizeof(g.password), "%s", recent->password);
                 g.state = STATE_CONNECTING;
                 decided = true;
             }

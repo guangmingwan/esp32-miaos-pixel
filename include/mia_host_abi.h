@@ -16,6 +16,7 @@ void mia_host_fill_screen_rgb565(uint16_t color);
 void mia_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg,
                          uint8_t bg);
 int32_t mia_host_text_height(void);
+int32_t mia_host_text_width(const char *text);
 static inline int32_t mia_host_text_y_centered(int32_t area_y, int32_t area_height) {
   const int32_t offset = (area_height - mia_host_text_height()) / 2;
   return area_y + (offset > 0 ? offset : 0);

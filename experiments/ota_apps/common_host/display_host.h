@@ -16,6 +16,7 @@ void display_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t 
 void display_host_fill_screen_rgb565(uint16_t color);
 void display_host_draw_text(int32_t x, int32_t y, const char *text, uint8_t fg, uint8_t bg);
 int32_t display_host_text_height(void);
+int32_t display_host_text_width(const char *text);
 void display_host_present(void);
 int32_t display_host_present_rgb565(const uint16_t *pixels, uint32_t width,
                                     uint32_t height, uint32_t pitch_bytes);

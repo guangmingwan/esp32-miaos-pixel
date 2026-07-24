@@ -415,6 +415,23 @@ extern "C" int32_t display_host_text_height(void) {
   return 7;
 }
 
+extern "C" int32_t display_host_text_width(const char *text) {
+  if (text == nullptr) return 0;
+#if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
+  if (g_use_droid_gbk) {
+#ifdef MIA_DISPLAY_DROID_GBK_SHARED
+    const int32_t width = mia_text_runtime_draw_text(
+        g_pixels, SCREEN_W, SCREEN_H, SCREEN_W, SCREEN_H, text, 0, 0);
+    if (width >= 0) return width;
+#else
+    return droid_gbk_draw_text(g_pixels, SCREEN_W, SCREEN_H, SCREEN_W,
+                               SCREEN_H, text, 0, 0);
+#endif
+  }
+#endif
+  return (int32_t)strlen(text) * 6;
+}
+
 extern "C" void display_host_present(void) {
   if (!g_ready || g_pixels == nullptr) {
     return;
