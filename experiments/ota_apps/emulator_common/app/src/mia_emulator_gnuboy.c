@@ -269,6 +269,18 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     return mia_core_ok();
 }
 
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return gnuboy_save_state(path) == 0 ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "Gnuboy state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return gnuboy_load_state(path) == 0 ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "Gnuboy state load failed");
+}
+
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
 #ifdef MIA_EMULATOR_GNUBOY_DISPLAY_TASK
     if (!start_display_task()) {
@@ -300,7 +312,7 @@ MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
 #endif
             return status;
         }
-        if (mia_app_input_exit_requested(&runtime->input, mia_emulator_host_buttons(), mia_host_millis())) {
+        if (mia_app_input_menu_requested(&runtime->input, mia_emulator_host_buttons())) {
 #ifdef MIA_EMULATOR_DUAL_CORE_AUDIO
             stop_audio_task();
 #endif

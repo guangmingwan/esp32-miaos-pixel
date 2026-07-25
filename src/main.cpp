@@ -745,7 +745,7 @@ static void sampleBattery(uint32_t nowMs) {
   }
   const float rawAverage = static_cast<float>(rawTotal) / SAMPLE_COUNT;
   g_batteryMillivolts = static_cast<uint32_t>(
-      rawAverage * 3300.0f / 4095.0f * VBAT_DIVIDER);
+      rawAverage * 3300.0f / 4095.0f * VBAT_DIVIDER * VBAT_ADC_CALIBRATION);
   g_batterySampleValid = g_batteryMillivolts >= 2500 && g_batteryMillivolts <= 5000;
   g_lastBatterySampleMs = nowMs;
 }

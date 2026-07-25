@@ -104,7 +104,7 @@ Launcher 当前只扫描 `/MiaOS` 下的一级分类目录。分类名是动态�
 
 `mia_test` 和 `psram_test` 是开发测试项目，不进入默认发布包；需要时可单独构建并按相同目录规则安装。
 
-模拟器可通过应用内文件选择器打开 ROM。VCP 的 `launch` 命令还可传入文件路径，直接绕过选择器；该能力也适用于 `music`。
+模拟器可通过应用内文件选择器打开 ROM。游戏中按 `M` 可打开统一菜单，选择继续游戏、保存/读取即时状态、返回 ROM 列表或退出 Launcher；在保存/读取行按左/右选择槽位 `0-9`。状态文件保存在 `/saves/<target>/<rom>.state<slot>`，保存时使用临时文件和备份替换。返回 ROM 列表会先保存并清理当前游戏，再重启当前模拟器进入选择器。VCP 的 `launch` 命令还可传入文件路径，直接绕过选择器；该能力也适用于 `music`。
 
 ### MIA2 Manifest
 
@@ -260,7 +260,7 @@ python tools/build_sd.py
 
 ```sh
 python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin \
-    -o esp32-miaos-pixel_<revision>_esp32-s3-devkit.img \
+    -o dist/esp32-miaos-pixel_<revision>_esp32-s3-devkit.img \
     --flash_mode dio --flash_freq 80m --flash_size 16MB \
     0x0 .pio/build/esp32s3/bootloader.bin \
     0x8000 .pio/build/esp32s3/partitions.bin \
@@ -275,7 +275,7 @@ python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin
 ```sh
 python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 \
     --port /dev/ttyACM0 -b 921600 write_flash 0x0 \
-    esp32-miaos-pixel_<revision>_esp32-s3-devkit.img
+    dist/esp32-miaos-pixel_<revision>_esp32-s3-devkit.img
 ```
 
 不要在不了解设备当前分区表时单独把全 `0xFF` 的 `ota_data_initial.bin` 写到 `0x10000`；旧分区布局可能在该地址放置应用镜像。迁移旧设备时应一次写入匹配的 bootloader、分区表、otadata 和两个 OTA 槽。

@@ -2,9 +2,14 @@
 #include "mia_host_abi.h"
 #include "launch_context.h"
 
+#include <esp_system.h>
+
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #ifndef MIA_EMULATOR_TARGET
 #error "MIA_EMULATOR_TARGET is required"
@@ -70,7 +75,7 @@ static const char *const alternate_rom_roots[] = {
 MiaEmulatorRuntime mia_emulator_runtime;
 
 static bool allocate_runtime(MiaEmulatorRuntime *runtime) {
-    runtime->display = malloc(MIA_DISPLAY_PIXELS * sizeof(uint16_t));
+    runtime->display = calloc(MIA_DISPLAY_PIXELS, sizeof(uint16_t));
     runtime->audio_queue = malloc(4096u * sizeof(int16_t));
     runtime->audio_drain = malloc(1024u * sizeof(int16_t));
     return runtime->display != NULL && runtime->audio_queue != NULL && runtime->audio_drain != NULL;
@@ -101,6 +106,67 @@ static MiaStorageStatus direct_selection(const char *path, MiaAppPickerSelection
     return mia_storage_ok();
 }
 
+static bool state_paths(MiaEmulatorRuntime *runtime, char *path, char *temporary,
+                        char *backup, size_t path_size) {
+    const char *save_name = runtime->selection.save_name;
+    const char *dot = strrchr(save_name, '.');
+    const size_t stem_length = dot == NULL ? strlen(save_name) : (size_t)(dot - save_name);
+    char save_root[MIA_APP_PATH_MAX];
+    if (stem_length == 0 || snprintf(save_root, sizeof(save_root), "%s%s",
+                                    runtime->storage.storage_root,
+                                    runtime->storage_target.save_root) >= (int)sizeof(save_root) ||
+        snprintf(path, path_size, "%s/%.*s.state%u", save_root, (int)stem_length,
+                 save_name, runtime->state_slot) >= (int)path_size ||
+        snprintf(temporary, path_size, "%s.tmp", path) >= (int)path_size ||
+        snprintf(backup, path_size, "%s.bak", path) >= (int)path_size) {
+        return false;
+    }
+    (void)mkdir("/sd/saves", 0775);
+    (void)mkdir(save_root, 0775);
+    return true;
+}
+
+static MiaCoreStatus save_state_slot(MiaEmulatorRuntime *runtime) {
+    char path[MIA_APP_PATH_MAX];
+    char temporary[MIA_APP_PATH_MAX];
+    char backup[MIA_APP_PATH_MAX];
+    if (!state_paths(runtime, path, temporary, backup, sizeof(path))) {
+        return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "state path is too long");
+    }
+    (void)remove(temporary);
+    MiaCoreStatus status = mia_emulator_core_save_state(runtime, temporary);
+    if (status.code != MIA_CORE_OK) {
+        (void)remove(temporary);
+        return status;
+    }
+    (void)remove(backup);
+    const bool had_previous = rename(path, backup) == 0;
+    if (!had_previous && errno != ENOENT) {
+        (void)remove(temporary);
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "failed to stage previous state");
+    }
+    if (rename(temporary, path) != 0) {
+        if (had_previous) (void)rename(backup, path);
+        (void)remove(temporary);
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "failed to replace state");
+    }
+    if (had_previous) (void)remove(backup);
+    return mia_core_ok();
+}
+
+static MiaCoreStatus load_state_slot(MiaEmulatorRuntime *runtime) {
+    char path[MIA_APP_PATH_MAX];
+    char temporary[MIA_APP_PATH_MAX];
+    char backup[MIA_APP_PATH_MAX];
+    if (!state_paths(runtime, path, temporary, backup, sizeof(path))) {
+        return mia_core_error(MIA_CORE_ERR_INVALID_ARGUMENT, "state path is too long");
+    }
+    if (access(path, F_OK) != 0) {
+        return mia_core_error(MIA_CORE_ERR_CALLBACK, "state slot is empty");
+    }
+    return mia_emulator_core_load_state(runtime, path);
+}
+
 int mia_emulator_main_impl(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -116,7 +182,7 @@ int mia_emulator_main_impl(int argc, char *argv[]) {
         return 1;
     }
     runtime->video = (MiaAppVideoSink){runtime->display, MIA_DISPLAY_PIXELS, MIA_EMULATOR_SCALE_MODE};
-    mia_app_input_init(&runtime->input, 250);
+    mia_app_input_init(&runtime->input);
     (void)mia_app_audio_init(&runtime->audio, runtime->audio_queue, 2048);
     char direct_path[MIA_HOST_LAUNCH_ARG_SIZE];
     MiaStorageStatus pick;
@@ -135,8 +201,55 @@ int mia_emulator_main_impl(int argc, char *argv[]) {
     if (status.code == MIA_CORE_OK && !mia_host_audio_open(MIA_EMULATOR_SAMPLE_RATE, 2, 16)) status = mia_core_error(MIA_CORE_ERR_CALLBACK, "audio open failed");
     if (status.code == MIA_CORE_OK) status = mia_emulator_core_boot(runtime);
     if (status.code == MIA_CORE_OK) mia_emulator_wait_input_release(runtime);
-    if (status.code == MIA_CORE_OK) status = mia_emulator_core_run(runtime);
-    if (status.code == MIA_CORE_OK) status = mia_core_adapter_request_exit(&runtime->adapter);
+    while (status.code == MIA_CORE_OK) {
+        status = mia_emulator_core_run(runtime);
+        if (status.code != MIA_CORE_OK) break;
+        mia_host_audio_stop();
+        MiaEmulatorMenuNotice notice = MIA_EMULATOR_MENU_NOTICE_NONE;
+        bool resume = false;
+        for (;;) {
+            const MiaEmulatorMenuAction action = mia_emulator_menu_run(
+                MIA_EMULATOR_TARGET, runtime->display, notice, &runtime->state_slot,
+                &runtime->video.scale_mode);
+            notice = MIA_EMULATOR_MENU_NOTICE_NONE;
+            if (action == MIA_EMULATOR_MENU_RESUME) {
+                resume = true;
+                break;
+            }
+            if (action == MIA_EMULATOR_MENU_SAVE_STATE ||
+                action == MIA_EMULATOR_MENU_LOAD_STATE) {
+                MiaCoreStatus state_status = action == MIA_EMULATOR_MENU_SAVE_STATE
+                    ? save_state_slot(runtime) : load_state_slot(runtime);
+                if (state_status.code == MIA_CORE_OK) {
+                    if (action == MIA_EMULATOR_MENU_LOAD_STATE) {
+                        resume = true;
+                        break;
+                    }
+                    notice = MIA_EMULATOR_MENU_NOTICE_STATE_SAVED;
+                } else if (state_status.code == MIA_CORE_ERR_UNSUPPORTED) {
+                    notice = MIA_EMULATOR_MENU_NOTICE_STATE_UNSUPPORTED;
+                } else if (strcmp(state_status.message, "state slot is empty") == 0) {
+                    notice = MIA_EMULATOR_MENU_NOTICE_STATE_MISSING;
+                } else {
+                    notice = MIA_EMULATOR_MENU_NOTICE_STATE_ERROR;
+                }
+                mia_host_log(state_status.message);
+                continue;
+            }
+            status = mia_core_adapter_request_exit(&runtime->adapter);
+            if (status.code == MIA_CORE_OK && action == MIA_EMULATOR_MENU_ROM_PICKER) {
+                mia_host_log("returning to ROM picker");
+                esp_restart();
+            }
+            break;
+        }
+        if (resume) {
+            mia_host_fill_screen_rgb565(0);
+            mia_emulator_wait_input_release(runtime);
+            continue;
+        }
+        break;
+    }
     if (status.code != MIA_CORE_OK) mia_host_log(status.message);
     return status.code == MIA_CORE_OK ? 0 : 1;
 }

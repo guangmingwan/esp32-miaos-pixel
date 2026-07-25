@@ -13,6 +13,7 @@ typedef enum {
     MIA_CORE_OK = 0,
     MIA_CORE_ERR_INVALID_ARGUMENT,
     MIA_CORE_ERR_CALLBACK,
+    MIA_CORE_ERR_UNSUPPORTED,
 } MiaCoreStatusCode;
 
 typedef struct {

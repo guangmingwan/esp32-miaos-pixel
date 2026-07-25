@@ -141,10 +141,10 @@ static void test_audio_delivers_every_accepted_frame_in_bounded_chunks() {
     require_true(sink.queue.count_frames == 0, "audio delivery leaves no accepted frames stranded");
 }
 
-static void test_input_maps_host_buttons_and_debounces_exit() {
+static void test_input_maps_host_buttons_and_detects_menu_press() {
     MiaAppInputState state{};
-    mia_app_input_init(&state, 250);
-    const uint32_t buttons = (1u << MIA_HOST_KEY_A) | (1u << MIA_HOST_KEY_SELECT) | (1u << MIA_HOST_KEY_START);
+    mia_app_input_init(&state);
+    const uint32_t buttons = (1u << MIA_HOST_KEY_A) | (1u << MIA_HOST_KEY_M);
     require_true((mia_app_input_core_mask(hardware_target("gb"), buttons) & MIA_APP_CORE_INPUT_A) != 0, "host A maps to core A");
     require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_RIGHT | MIA_APP_CORE_INPUT_A | MIA_APP_CORE_INPUT_START) == 0x92u, "app buttons map to corrected gnuboy native bits");
     require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_LEFT) == 0x01u, "host left maps to corrected gnuboy horizontal bit");
@@ -156,9 +156,10 @@ static void test_input_maps_host_buttons_and_debounces_exit() {
     require_true(mia_app_input_gnuboy_mask(MIA_APP_CORE_INPUT_UP | MIA_APP_CORE_INPUT_DOWN) == 0,
                  "contradictory vertical input is neutral");
     require_true(mia_app_input_gw_mask(MIA_APP_CORE_INPUT_UP | MIA_APP_CORE_INPUT_B | MIA_APP_CORE_INPUT_SELECT) == 0x62u, "app buttons map to GW native bits");
-    require_true(!mia_app_input_exit_requested(&state, buttons, 1000), "exit combo is debounced initially");
-    require_true(mia_app_input_exit_requested(&state, buttons, 1250), "exit combo fires after threshold");
-    require_true(!mia_app_input_exit_requested(&state, buttons, 1500), "exit combo is one-shot while held");
+    require_true(mia_app_input_menu_requested(&state, buttons), "M press opens the menu immediately");
+    require_true(!mia_app_input_menu_requested(&state, buttons), "held M is one-shot");
+    require_true(!mia_app_input_menu_requested(&state, 0), "M release rearms the menu button");
+    require_true(mia_app_input_menu_requested(&state, buttons), "a new M press opens the menu again");
 }
 
 static void test_smsplus_maps_target_specific_controls() {
@@ -233,7 +234,7 @@ int main() {
     test_video_presents_all_scaled_and_letterboxed_pixels();
     test_audio_is_bounded_and_reports_overflow();
     test_audio_delivers_every_accepted_frame_in_bounded_chunks();
-    test_input_maps_host_buttons_and_debounces_exit();
+    test_input_maps_host_buttons_and_detects_menu_press();
     test_smsplus_maps_target_specific_controls();
     test_smsplus_converts_complete_palette_frame_to_rgb565();
     test_coleco_keypad_layout_matches_original();

@@ -9,6 +9,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "smsplus.h"
+#include "state.h"
 
 #undef input
 
@@ -306,6 +307,26 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     return status.code == MIA_STORAGE_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, status.message);
 }
 
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    FILE *file = fopen(path, "wb");
+    const bool saved = file != NULL && system_save_state(file) == 0 && fflush(file) == 0;
+    if (file != NULL) fclose(file);
+    return saved ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "SMS Plus state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "SMS Plus state load failed");
+    system_load_state(file);
+    const bool loaded = ferror(file) == 0;
+    fclose(file);
+    return loaded ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "SMS Plus state load failed");
+}
+
 static MiaCoreStatus submit_frame(MiaEmulatorRuntime *runtime) {
     uint16_t *rgb_frame = NULL;
     if (xQueueReceive(display_free_queue, &rgb_frame, 0) != pdTRUE) return mia_core_ok();
@@ -358,7 +379,7 @@ MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
         previous_host_buttons = host_buttons;
         const uint32_t buttons = mia_app_input_core_mask(&runtime->hardware_target, host_buttons);
         MiaCoreStatus status = mia_core_ok();
-        if (mia_app_input_exit_requested(&runtime->input, host_buttons, mia_host_millis())) {
+        if (mia_app_input_menu_requested(&runtime->input, host_buttons)) {
             stop_display_task();
             return mia_core_ok();
         }

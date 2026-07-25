@@ -101,6 +101,8 @@ struct Color {
 static spi_device_handle_t g_lcd = nullptr;
 static bool g_ready = false;
 static uint8_t *g_pixels = nullptr;
+static uint16_t *g_screen_snapshot = nullptr;
+static uint8_t g_scale_mode = 0;
 DMA_ATTR static uint16_t g_chunk[PRESENT_PIXELS];
 #ifdef MIA_DISPLAY_ASYNC_REGION
 DMA_ATTR static uint16_t g_async_chunk[PRESENT_PIXELS];
@@ -142,6 +144,17 @@ static const uint8_t FONT[][5] = {
 
 static uint16_t to_rgb565(const Color &c) {
   return (uint16_t)(((c.r & 0xF8) << 8) | ((c.g & 0xFC) << 3) | (c.b >> 3));
+}
+
+static uint16_t blend_rgb565(uint16_t background, uint16_t foreground, uint8_t opacity) {
+  const uint32_t inverse = 255u - opacity;
+  const uint32_t red = (((background >> 11) & 0x1fu) * inverse +
+                        ((foreground >> 11) & 0x1fu) * opacity + 127u) / 255u;
+  const uint32_t green = (((background >> 5) & 0x3fu) * inverse +
+                          ((foreground >> 5) & 0x3fu) * opacity + 127u) / 255u;
+  const uint32_t blue = ((background & 0x1fu) * inverse +
+                         (foreground & 0x1fu) * opacity + 127u) / 255u;
+  return (uint16_t)((red << 11) | (green << 5) | blue);
 }
 
 static void yield_once() {
@@ -345,7 +358,13 @@ extern "C" int display_host_init(void) {
   constexpr uint32_t pixel_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 #endif
   g_pixels = (uint8_t *)heap_caps_malloc(SCREEN_W * SCREEN_H, pixel_caps);
-  if (g_pixels == nullptr) {
+  g_screen_snapshot = (uint16_t *)heap_caps_calloc(
+      SCREEN_W * SCREEN_H, sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (g_pixels == nullptr || g_screen_snapshot == nullptr) {
+    heap_caps_free(g_pixels);
+    heap_caps_free(g_screen_snapshot);
+    g_pixels = nullptr;
+    g_screen_snapshot = nullptr;
     return 0;
   }
   memset(g_pixels, 0, SCREEN_W * SCREEN_H);
@@ -368,6 +387,10 @@ extern "C" void display_host_backlight_set(uint8_t enabled) {
 extern "C" void display_host_brightness_set(uint8_t brightness) {
   g_backlight_brightness = brightness < 10 ? 10 : (brightness > 100 ? 100 : brightness);
   apply_backlight();
+}
+
+extern "C" void display_host_scale_mode_set(uint8_t mode) {
+  g_scale_mode = mode >= 1u && mode <= 3u ? mode : 0u;
 }
 
 extern "C" void display_host_clear(uint8_t color) {
@@ -406,6 +429,9 @@ extern "C" void display_host_fill_rect(int32_t x, int32_t y, int32_t w, int32_t 
 }
 
 extern "C" void display_host_fill_screen_rgb565(uint16_t color) {
+  if (g_screen_snapshot != nullptr) {
+    for (int i = 0; i < SCREEN_W * SCREEN_H; ++i) g_screen_snapshot[i] = color;
+  }
   for (int i = 0; i < PRESENT_PIXELS; ++i) {
     g_chunk[i] = color;
   }
@@ -520,7 +546,7 @@ extern "C" void display_host_font_set(uint8_t font) {
 }
 
 extern "C" void display_host_present(void) {
-  if (!g_ready || g_pixels == nullptr) {
+  if (!g_ready || g_pixels == nullptr || g_screen_snapshot == nullptr) {
     return;
   }
   for (int y = 0; y < SCREEN_H; y += PRESENT_ROWS) {
@@ -530,7 +556,9 @@ extern "C" void display_host_present(void) {
       size_t src = (size_t)(y + row) * SCREEN_W;
       size_t dst = (size_t)row * SCREEN_W;
       for (int x = 0; x < SCREEN_W; ++x) {
-        g_chunk[dst + x] = to_rgb565(g_palette[g_pixels[src + x]]);
+        const uint16_t color = to_rgb565(g_palette[g_pixels[src + x]]);
+        g_chunk[dst + x] = color;
+        g_screen_snapshot[src + x] = color;
       }
     }
     ESP_ERROR_CHECK(lcd_set_window(0, (uint16_t)y, (uint16_t)(SCREEN_W - 1), (uint16_t)(y + rows - 1)));
@@ -540,10 +568,84 @@ extern "C" void display_host_present(void) {
 }
 
 extern "C" int32_t display_host_present_rgb565(const uint16_t *pixels, uint32_t width,
-                                                  uint32_t height, uint32_t pitch_bytes) {
-  return transport_rgb565(
+                                                    uint32_t height, uint32_t pitch_bytes) {
+  const int32_t result = transport_rgb565(
       pixels, width, height, pitch_bytes, g_ready && g_lcd != nullptr ? 1 : 0, g_chunk,
       PRESENT_ROWS, write_rgb565_chunk, nullptr);
+  if (result == MIA_HOST_RESULT_OK && g_screen_snapshot != nullptr) {
+    const uint8_t *source = reinterpret_cast<const uint8_t *>(pixels);
+    for (uint32_t y = 0; y < SCREEN_H; ++y) {
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+      const uint16_t *source_row = reinterpret_cast<const uint16_t *>(
+          source + (size_t)y * pitch_bytes);
+      uint16_t *snapshot_row = g_screen_snapshot + (size_t)y * SCREEN_W;
+      for (uint32_t x = 0; x < SCREEN_W; ++x) {
+        snapshot_row[x] = __builtin_bswap16(source_row[x]);
+      }
+#else
+      memcpy(g_screen_snapshot + (size_t)y * SCREEN_W,
+             source + (size_t)y * pitch_bytes, SCREEN_W * sizeof(uint16_t));
+#endif
+    }
+  }
+  return result;
+}
+
+extern "C" int32_t display_host_capture_rgb565(uint16_t *pixels, uint32_t width,
+                                                   uint32_t height, uint32_t pitch_bytes) {
+  if (!g_ready || g_screen_snapshot == nullptr) return MIA_HOST_RESULT_NOT_READY;
+  if (pixels == nullptr || (reinterpret_cast<uintptr_t>(pixels) & 1u) != 0u ||
+      width != SCREEN_W || height != SCREEN_H || (pitch_bytes & 1u) != 0u ||
+      pitch_bytes < SCREEN_W * sizeof(uint16_t)) {
+    return MIA_HOST_RESULT_INVALID_ARGUMENT;
+  }
+  uint8_t *destination = reinterpret_cast<uint8_t *>(pixels);
+  for (uint32_t y = 0; y < SCREEN_H; ++y) {
+    memcpy(destination + (size_t)y * pitch_bytes,
+           g_screen_snapshot + (size_t)y * SCREEN_W, SCREEN_W * sizeof(uint16_t));
+  }
+  return MIA_HOST_RESULT_OK;
+}
+
+extern "C" int32_t display_host_present_rgb565_overlay(
+    const uint16_t *background, uint32_t width, uint32_t height,
+    uint32_t pitch_bytes, uint8_t transparent_index, uint8_t opacity) {
+  if (!g_ready || g_lcd == nullptr) return MIA_HOST_RESULT_NOT_READY;
+  if (background == nullptr || (reinterpret_cast<uintptr_t>(background) & 1u) != 0u ||
+      width != SCREEN_W || height != SCREEN_H || (pitch_bytes & 1u) != 0u ||
+      pitch_bytes < SCREEN_W * sizeof(uint16_t)) {
+    return MIA_HOST_RESULT_INVALID_ARGUMENT;
+  }
+  const uint8_t *source = reinterpret_cast<const uint8_t *>(background);
+  for (uint32_t y = 0; y < SCREEN_H; y += PRESENT_ROWS) {
+    const uint32_t rows = (SCREEN_H - y) < PRESENT_ROWS ? SCREEN_H - y : PRESENT_ROWS;
+    for (uint32_t row = 0; row < rows; ++row) {
+      const uint16_t *source_row = reinterpret_cast<const uint16_t *>(
+          source + (y + row) * pitch_bytes);
+      const uint8_t *overlay_row = g_pixels + (size_t)(y + row) * SCREEN_W;
+      uint16_t *output_row = g_chunk + (size_t)row * SCREEN_W;
+      for (uint32_t x = 0; x < SCREEN_W; ++x) {
+        const uint16_t base = source_row[x];
+        const uint8_t index = overlay_row[x];
+        if (index == transparent_index) {
+          output_row[x] = __builtin_bswap16(base);
+          continue;
+        }
+        const uint16_t overlay = to_rgb565(g_palette[index]);
+        const bool opaque_text = index == MIA_HOST_BLACK || index == MIA_HOST_WHITE ||
+                                 index == MIA_HOST_CYAN ||
+                                 index == MIA_HOST_GRAY || index == MIA_HOST_YELLOW;
+        const uint16_t blended = blend_rgb565(base, overlay, opaque_text ? 255u : opacity);
+        output_row[x] = __builtin_bswap16(blended);
+      }
+    }
+    if (lcd_set_window(0, (uint16_t)y, SCREEN_W - 1, (uint16_t)(y + rows - 1)) != ESP_OK ||
+        tx_bytes(1, g_chunk, (size_t)rows * SCREEN_W * sizeof(uint16_t)) != ESP_OK) {
+      return MIA_HOST_RESULT_IO;
+    }
+    yield_once();
+  }
+  return MIA_HOST_RESULT_OK;
 }
 
 extern "C" int32_t display_host_present_rgb565_region(const uint16_t *pixels, int32_t x,
@@ -555,6 +657,10 @@ extern "C" int32_t display_host_present_rgb565_region(const uint16_t *pixels, in
       y < 0 || width == 0 || height == 0 || x + width > SCREEN_W || y + height > SCREEN_H ||
       (pitch_bytes & 1u) != 0u || pitch_bytes < width * sizeof(uint16_t)) {
     return MIA_HOST_RESULT_INVALID_ARGUMENT;
+  }
+  if (g_scale_mode != 0u) {
+    return display_host_present_rgb565_scaled_region(
+        pixels, width, height, pitch_bytes, x, y, width, height);
   }
   const uint8_t *source = reinterpret_cast<const uint8_t *>(pixels);
 #ifdef MIA_DISPLAY_ASYNC_REGION
@@ -635,6 +741,21 @@ extern "C" int32_t display_host_present_rgb565_region(const uint16_t *pixels, in
   gpio_set_level(LCD_CS_PIN, 1);
   taskYIELD();
 #endif
+  if (g_screen_snapshot != nullptr) {
+    for (uint32_t row = 0; row < height; ++row) {
+      const uint16_t *source_row = reinterpret_cast<const uint16_t *>(
+          source + (size_t)row * pitch_bytes);
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+      uint16_t *snapshot_row = g_screen_snapshot + (size_t)(y + row) * SCREEN_W + x;
+      for (uint32_t column = 0; column < width; ++column) {
+        snapshot_row[column] = __builtin_bswap16(source_row[column]);
+      }
+#else
+      memcpy(g_screen_snapshot + (size_t)(y + row) * SCREEN_W + x,
+             source_row, width * sizeof(uint16_t));
+#endif
+    }
+  }
   return MIA_HOST_RESULT_OK;
 }
 
@@ -729,6 +850,19 @@ extern "C" int32_t display_host_present_indexed8_region(
   gpio_set_level(LCD_CS_PIN, 1);
   taskYIELD();
 #endif
+  if (g_screen_snapshot != nullptr) {
+    for (uint32_t row = 0; row < height; ++row) {
+      const uint8_t *source_row = pixels + (size_t)row * pitch_bytes;
+      uint16_t *snapshot_row = g_screen_snapshot + (size_t)(y + row) * SCREEN_W + x;
+      for (uint32_t column = 0; column < width; ++column) {
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+        snapshot_row[column] = __builtin_bswap16(palette_rgb565[source_row[column]]);
+#else
+        snapshot_row[column] = palette_rgb565[source_row[column]];
+#endif
+      }
+    }
+  }
   return MIA_HOST_RESULT_OK;
 }
 
@@ -744,6 +878,43 @@ extern "C" int32_t display_host_present_rgb565_scaled_region(
       width == 0 || height == 0 || width > SCREEN_W || x + width > SCREEN_W ||
       y + height > SCREEN_H) {
     return MIA_HOST_RESULT_INVALID_ARGUMENT;
+  }
+
+  if (g_scale_mode != 0u) {
+    if (g_scale_mode == 1u) {
+      width = SCREEN_W;
+      height = (uint32_t)((uint64_t)source_height * SCREEN_W / source_width);
+      if (height > SCREEN_H) {
+        height = SCREEN_H;
+        width = (uint32_t)((uint64_t)source_width * SCREEN_H / source_height);
+      }
+      x = (SCREEN_W - (int32_t)width) / 2;
+      y = (SCREEN_H - (int32_t)height) / 2;
+    } else if (g_scale_mode == 2u) {
+      const uint64_t source_ratio = (uint64_t)source_width * SCREEN_H;
+      const uint64_t screen_ratio = (uint64_t)SCREEN_W * source_height;
+      if (source_ratio < screen_ratio) {
+        const uint32_t cropped_height = (uint32_t)((uint64_t)source_width * SCREEN_H / SCREEN_W);
+        const uint32_t offset_y = (source_height - cropped_height) / 2u;
+        pixels = reinterpret_cast<const uint16_t *>(
+            reinterpret_cast<const uint8_t *>(pixels) + (size_t)offset_y * source_pitch_bytes);
+        source_height = cropped_height;
+      } else if (source_ratio > screen_ratio) {
+        const uint32_t cropped_width = (uint32_t)((uint64_t)source_height * SCREEN_W / SCREEN_H);
+        const uint32_t offset_x = (source_width - cropped_width) / 2u;
+        pixels += offset_x;
+        source_width = cropped_width;
+      }
+      x = 0;
+      y = 0;
+      width = SCREEN_W;
+      height = SCREEN_H;
+    } else {
+      x = 0;
+      y = 0;
+      width = SCREEN_W;
+      height = SCREEN_H;
+    }
   }
 
   uint16_t source_x[SCREEN_W];
@@ -834,6 +1005,22 @@ extern "C" int32_t display_host_present_rgb565_scaled_region(
   gpio_set_level(LCD_CS_PIN, 1);
   taskYIELD();
 #endif
+  if (g_screen_snapshot != nullptr) {
+    for (uint32_t output_y = 0; output_y < height; ++output_y) {
+      const uint32_t source_y = (output_y * source_height) / height;
+      const uint16_t *source_row = reinterpret_cast<const uint16_t *>(
+          source + source_y * source_pitch_bytes);
+      uint16_t *snapshot_row =
+          g_screen_snapshot + (size_t)(y + output_y) * SCREEN_W + x;
+      for (uint32_t dx = 0; dx < width; ++dx) {
+#ifdef MIA_DISPLAY_RGB565_WIRE_ORDER
+        snapshot_row[dx] = __builtin_bswap16(source_row[source_x[dx]]);
+#else
+        snapshot_row[dx] = source_row[source_x[dx]];
+#endif
+      }
+    }
+  }
   return MIA_HOST_RESULT_OK;
 }
 #endif

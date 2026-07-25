@@ -86,12 +86,28 @@ extern "C" MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, Mi
     return status.code == MIA_STORAGE_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, status.message);
 }
 
+extern "C" MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    FILE *file = fopen(path, "wb");
+    const bool saved = file != nullptr && system_instance->ContextSave(file) && fflush(file) == 0;
+    if (file != nullptr) fclose(file);
+    return saved ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, "Lynx state save failed");
+}
+
+extern "C" MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    FILE *file = fopen(path, "rb");
+    const bool loaded = file != nullptr && system_instance->ContextLoad(file);
+    if (file != nullptr) fclose(file);
+    return loaded ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, "Lynx state load failed");
+}
+
 extern "C" MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
     for (;;) {
         uint32_t input = 0;
         MiaCoreStatus status = mia_core_adapter_poll_input(&runtime->adapter, &input);
         if (status.code != MIA_CORE_OK) return status;
-        if (mia_app_input_exit_requested(&runtime->input, mia_emulator_host_buttons(), mia_host_millis())) return mia_emulator_core_flush(runtime, MIA_STORAGE_FLUSH_CLEAN_EXIT, true);
+        if (mia_app_input_menu_requested(&runtime->input, mia_emulator_host_buttons())) return mia_emulator_core_flush(runtime, MIA_STORAGE_FLUSH_CLEAN_EXIT, true);
         system_instance->SetButtonData(map_input(input));
         system_instance->UpdateFrame(true);
         status = mia_core_adapter_submit_video(&runtime->adapter, framebuffer, 160u * 102u);

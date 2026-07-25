@@ -33,9 +33,9 @@ static uint32_t bit_for_action(MiaInputAction action) {
     return 0;
 }
 
-void mia_app_input_init(MiaAppInputState *state, uint32_t exit_threshold_ms) {
+void mia_app_input_init(MiaAppInputState *state) {
     if (state != NULL) {
-        mia_input_exit_debounce_init(&state->exit_debounce, exit_threshold_ms);
+        state->menu_down = false;
     }
 }
 
@@ -53,8 +53,12 @@ uint32_t mia_app_input_core_mask(const MiaHardwareTarget *target, uint32_t host_
     return mask;
 }
 
-bool mia_app_input_exit_requested(MiaAppInputState *state, uint32_t host_button_bits, uint32_t now_ms) {
-    return state != NULL && mia_input_exit_requested(&state->exit_debounce, host_bit(host_button_bits, MIA_HOST_KEY_SELECT), host_bit(host_button_bits, MIA_HOST_KEY_START), now_ms);
+bool mia_app_input_menu_requested(MiaAppInputState *state, uint32_t host_button_bits) {
+    if (state == NULL) return false;
+    const bool menu_down = host_bit(host_button_bits, MIA_HOST_KEY_M);
+    const bool requested = menu_down && !state->menu_down;
+    state->menu_down = menu_down;
+    return requested;
 }
 
 uint32_t mia_app_input_gnuboy_mask(uint32_t input) {

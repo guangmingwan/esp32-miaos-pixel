@@ -133,6 +133,27 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     return status.code == MIA_STORAGE_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, status.message);
 }
 
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    gw_state_t state;
+    if (!gw_state_save(&state)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GW state export failed");
+    FILE *file = fopen(path, "wb");
+    const bool saved = file != NULL && fwrite(&state, sizeof(state), 1, file) == 1 &&
+                       fflush(file) == 0;
+    if (file != NULL) fclose(file);
+    return saved ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, "GW state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    gw_state_t state;
+    FILE *file = fopen(path, "rb");
+    const bool loaded = file != NULL && fread(&state, sizeof(state), 1, file) == 1;
+    if (file != NULL) fclose(file);
+    return loaded && gw_state_load(&state) ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "GW state load failed");
+}
+
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
     static int16_t audio[GW_AUDIO_BUFFER_LENGTH * 2];
     if (!start_display_task(runtime)) {
@@ -147,7 +168,7 @@ MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
             stop_display_task();
             return status;
         }
-        if (mia_app_input_exit_requested(&runtime->input, mia_emulator_host_buttons(), mia_host_millis())) {
+        if (mia_app_input_menu_requested(&runtime->input, mia_emulator_host_buttons())) {
             stop_display_task();
             return mia_core_ok();
         }

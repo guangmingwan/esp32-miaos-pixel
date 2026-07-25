@@ -5,6 +5,7 @@
 #include "display_host.h"
 #include "nofrendo.h"
 #include "nes/rom.h"
+#include "nes/state.h"
 
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
@@ -163,12 +164,24 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     return status.code == MIA_STORAGE_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, status.message);
 }
 
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return state_save(path) == 0 ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "NES state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return state_load(path) == 0 ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "NES state load failed");
+}
+
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
     unsigned frames = 0;
     for (;;) {
         const uint32_t frame_started = mia_host_millis();
         const uint32_t host = mia_emulator_host_buttons();
-        if (mia_app_input_exit_requested(&runtime->input, host, mia_host_millis())) return mia_core_ok();
+        if (mia_app_input_menu_requested(&runtime->input, host)) return mia_core_ok();
         int pad = 0;
         if (host & (1u << MIA_HOST_BUTTON_A)) pad |= NES_PAD_A;
         if (host & (1u << MIA_HOST_BUTTON_B)) pad |= NES_PAD_B;

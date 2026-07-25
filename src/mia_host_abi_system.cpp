@@ -31,7 +31,7 @@ uint8_t mia_host_read_battery(MiaHostBatteryInfo *info) {
   }
 
   const int32_t raw = analogRead(VBAT_ADC_PIN);
-  const float volts = raw * 3.3f / 4095.0f * VBAT_DIVIDER;
+  const float volts = raw * 3.3f / 4095.0f * VBAT_DIVIDER * VBAT_ADC_CALIBRATION;
   info->raw = raw;
   info->millivolts = static_cast<uint32_t>(volts * 1000.0f);
   return 1;

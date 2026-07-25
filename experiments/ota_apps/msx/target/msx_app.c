@@ -4,6 +4,7 @@
 #include "mia_host_abi.h"
 #include "msxfix.h"
 
+#include <esp_system.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -35,5 +36,10 @@ int mia_msx_main(void) {
     if (mia_msx_media_is_disk(selection.rom_path)) argv[argc++] = "-diska";
     argv[argc++] = selection.rom_path;
     mia_msx_set_save_name(selection.save_name);
-    return fmsx_main(argc, argv);
+    const int result = fmsx_main(argc, argv);
+    if (mia_msx_return_to_picker_requested()) {
+        mia_host_log("returning to ROM picker");
+        esp_restart();
+    }
+    return result;
 }

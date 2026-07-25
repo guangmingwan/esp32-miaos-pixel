@@ -5,6 +5,7 @@
 
 #include <esp_heap_caps.h>
 #include "gwenesis.h"
+#include "gwenesis_savestate.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,11 +22,88 @@ int16_t gwenesis_ym2612_buffer[MAX_AUDIO_SAMPLES];
 int ym2612_index, ym2612_clock;
 static uint16_t *indexed_frame, *rgb_frame;
 static unsigned char *rom_data;
+static FILE *state_file;
+static bool state_io_ok;
 extern unsigned char gwenesis_vdp_regs[0x20];
 extern unsigned short gwenesis_vdp_status, CRAM565[256];
 extern unsigned int screen_width, screen_height;
 extern int hint_pending;
 extern void m68k_update_irq(unsigned int level);
+
+typedef struct {
+    char key[28];
+    uint32_t length;
+} GwenesisStateVariable;
+
+SaveState *saveGwenesisStateOpenForRead(const char *file_name) {
+    (void)file_name;
+    return state_file != NULL ? (SaveState *)1 : NULL;
+}
+
+SaveState *saveGwenesisStateOpenForWrite(const char *file_name) {
+    (void)file_name;
+    return state_file != NULL ? (SaveState *)1 : NULL;
+}
+
+void saveGwenesisStateGetBuffer(SaveState *state, const char *tag_name,
+                                void *buffer, int length) {
+    (void)state;
+    if (!state_io_ok || state_file == NULL || tag_name == NULL || buffer == NULL || length < 0) {
+        state_io_ok = false;
+        return;
+    }
+    const long initial_position = ftell(state_file);
+    bool wrapped = false;
+    GwenesisStateVariable variable;
+    while (!wrapped || ftell(state_file) < initial_position) {
+        if (fread(&variable, sizeof(variable), 1, state_file) != 1) {
+            if (!wrapped) {
+                clearerr(state_file);
+                rewind(state_file);
+                wrapped = true;
+                continue;
+            }
+            break;
+        }
+        if (strncmp(variable.key, tag_name, sizeof(variable.key)) == 0) {
+            if (variable.length != (uint32_t)length ||
+                fread(buffer, (size_t)length, 1, state_file) != 1) {
+                state_io_ok = false;
+            }
+            return;
+        }
+        if (fseek(state_file, (long)variable.length, SEEK_CUR) != 0) {
+            state_io_ok = false;
+            return;
+        }
+    }
+    state_io_ok = false;
+}
+
+void saveGwenesisStateSetBuffer(SaveState *state, const char *tag_name,
+                                void *buffer, int length) {
+    (void)state;
+    if (!state_io_ok || state_file == NULL || tag_name == NULL || buffer == NULL || length < 0) {
+        state_io_ok = false;
+        return;
+    }
+    GwenesisStateVariable variable = {{0}, (uint32_t)length};
+    strncpy(variable.key, tag_name, sizeof(variable.key) - 1u);
+    if (fwrite(&variable, sizeof(variable), 1, state_file) != 1 ||
+        fwrite(buffer, (size_t)length, 1, state_file) != 1) {
+        state_io_ok = false;
+    }
+}
+
+int saveGwenesisStateGet(SaveState *state, const char *tag_name) {
+    int value = 0;
+    saveGwenesisStateGetBuffer(state, tag_name, &value, sizeof(value));
+    return value;
+}
+
+void saveGwenesisStateSet(SaveState *state, const char *tag_name, int value) {
+    saveGwenesisStateSetBuffer(state, tag_name, &value, sizeof(value));
+}
 extern void m68k_set_irq(unsigned int level);
 
 void gwenesis_io_get_buttons(void) {
@@ -108,6 +186,33 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     return status.code == MIA_STORAGE_OK ? mia_core_ok() : failure(status.message);
 }
 
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    state_file = fopen(path, "wb");
+    if (state_file == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "Mega Drive state open failed");
+    state_io_ok = true;
+    gwenesis_save_state();
+    const bool saved = state_io_ok && fflush(state_file) == 0 && ferror(state_file) == 0;
+    fclose(state_file);
+    state_file = NULL;
+    return saved ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "Mega Drive state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    state_file = fopen(path, "rb");
+    if (state_file == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "Mega Drive state open failed");
+    state_io_ok = true;
+    gwenesis_load_state();
+    const bool loaded = state_io_ok && ferror(state_file) == 0;
+    fclose(state_file);
+    state_file = NULL;
+    if (!loaded) reset_emulation();
+    return loaded ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "Mega Drive state load failed");
+}
+
 static void run_scanlines(bool draw, MiaMegadriveTiming timing) {
     int hint_counter = gwenesis_vdp_regs[10];
     system_clock = zclk = ym2612_clock = sn76489_clock = 0;
@@ -152,7 +257,7 @@ MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
     uint8_t old_pad = 0xff; uint32_t frames = 0;
     for (;;) {
         const uint32_t host = mia_emulator_host_buttons();
-        if (mia_app_input_exit_requested(&runtime->input, host, mia_host_millis())) return mia_core_ok();
+        if (mia_app_input_menu_requested(&runtime->input, host)) return mia_core_ok();
         const uint8_t pad = mia_megadrive_pad_mask(input_to_policy(host));
         if (pad != old_pad) { update_pad(pad); old_pad = pad; }
         const bool pal = REG1_PAL != 0; const MiaMegadriveTiming timing = mia_megadrive_timing(pal);

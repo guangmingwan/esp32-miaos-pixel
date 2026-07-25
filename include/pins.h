@@ -31,6 +31,7 @@ constexpr int AMP_CTRL_PIN = 46;  // NS4168 EN, active-HIGH (R15 10k pulldown)
 // --- Battery voltage (200k/200k divider, ratio x2) ---
 constexpr int VBAT_ADC_PIN   = 1;
 constexpr float VBAT_DIVIDER = 2.0f;
+constexpr float VBAT_ADC_CALIBRATION = 1.032f;
 
 // --- I2C (PCF8563 RTC + expansion) ---
 constexpr int I2C_SCL_PIN = 4;

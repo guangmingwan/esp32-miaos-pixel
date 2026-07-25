@@ -18,12 +18,12 @@ extern "C" {
 #define MIA_APP_CORE_INPUT_SELECT 0x80u
 
 typedef struct {
-    MiaExitDebounce exit_debounce;
+    bool menu_down;
 } MiaAppInputState;
 
-void mia_app_input_init(MiaAppInputState *state, uint32_t exit_threshold_ms);
+void mia_app_input_init(MiaAppInputState *state);
 uint32_t mia_app_input_core_mask(const MiaHardwareTarget *target, uint32_t host_button_bits);
-bool mia_app_input_exit_requested(MiaAppInputState *state, uint32_t host_button_bits, uint32_t now_ms);
+bool mia_app_input_menu_requested(MiaAppInputState *state, uint32_t host_button_bits);
 uint32_t mia_app_input_gnuboy_mask(uint32_t app_mask);
 uint32_t mia_app_input_gw_mask(uint32_t app_mask);
 

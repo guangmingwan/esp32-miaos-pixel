@@ -1,13 +1,13 @@
-#include "mia_app_save.h"
+#include "mia_emulator_runtime.h"
 #include "mia_hardware_display.h"
 #include "mia_host_abi.h"
+#include "display_host.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef MIA_PICKER_COVERS
-#include "display_host.h"
 #include <esp32s3/rom/tjpgd.h>
 #endif
 
@@ -146,11 +146,213 @@ typedef struct {
     const char *no_roms;
 } PickerText;
 
-static const PickerText PICKER_EN = {"ROM Picker", "Scanning ROMs...", "Loading...", "UP/DN Select  LT/RT Page  A:Run", "A:Retry  B:Exit", "ROM root is missing", "No supported ROMs"};
-static const PickerText PICKER_ZH = {"ROM选择", "正在扫描ROM...", "正在加载...", "上/下选择 左/右翻页 A:运行 B:退出", "A:重试  B:退出", "ROM目录不存在", "没有支持的ROM"};
+static const PickerText PICKER_EN = {"ROM Picker", "Scanning ROMs...", "Loading...", "UP/DN Select LT/RT Page A:Run B:Exit M:Menu", "A:Retry B:Exit M:Menu", "ROM root is missing", "No supported ROMs"};
+static const PickerText PICKER_ZH = {"ROM选择", "正在扫描ROM...", "正在加载...", "上/下选择 左/右翻页 A:运行 B:退出 M:游戏时退出", "A:重试 B:退出 M:游戏时退出", "ROM目录不存在", "没有支持的ROM"};
 
 static const PickerText *picker_text(void) {
     return mia_host_language() == 1 ? &PICKER_ZH : &PICKER_EN;
+}
+
+typedef struct {
+    const char *title;
+    const char *resume;
+    const char *save_state_format;
+    const char *load_state_format;
+    const char *brightness_format;
+    const char *volume_format;
+    const char *scale_format;
+    const char *scale_fit;
+    const char *scale_crop;
+    const char *scale_stretch;
+    const char *rom_picker;
+    const char *exit_launcher;
+    const char *controls;
+    const char *state_saved_format;
+    const char *state_missing_format;
+    const char *state_error;
+    const char *state_unsupported;
+} EmulatorMenuText;
+
+static const EmulatorMenuText MENU_EN = {
+    "Game Menu", "Resume", "Save Slot %u", "Load Slot %u", "Brightness %u%%", "Volume %u%%",
+    "Scale %s", "Fit", "Crop", "Stretch", "ROM Picker", "Exit Launcher",
+    "A:Select B:Resume LT/RT:Slot", "Slot %u saved", "Slot %u is empty", "State operation failed",
+    "Save states unsupported"};
+static const EmulatorMenuText MENU_ZH = {
+    "游戏菜单", "继续游戏", "保存到槽位%u", "读取槽位%u", "亮度 %u%%", "音量 %u%%",
+    "缩放 %s", "适应", "裁切", "拉伸", "返回ROM列表", "退出到启动器",
+    "A:确认 B:返回 左/右:槽位", "槽位%u已保存", "槽位%u为空", "状态操作失败", "该模拟器暂不支持"};
+
+static const EmulatorMenuText *menu_text(void) {
+    return mia_host_language() == 1 ? &MENU_ZH : &MENU_EN;
+}
+
+static void draw_centered_text(int32_t y, const char *text, uint8_t fg, uint8_t bg) {
+    int32_t x = (mia_host_screen_width() - mia_host_text_width(text)) / 2;
+    if (x < 0) x = 0;
+    mia_host_draw_text(x, y, text, fg, bg);
+}
+
+static void draw_emulator_menu(const char *target_name, const uint16_t *screenshot,
+                               size_t selected, MiaEmulatorMenuNotice notice, uint8_t state_slot,
+                               uint8_t brightness, uint8_t volume,
+                               MiaDisplayScaleMode scale_mode) {
+    const EmulatorMenuText *text = menu_text();
+    char save_state[40];
+    char load_state[40];
+    char brightness_text[40];
+    char volume_text[40];
+    char scale_text[40];
+    snprintf(save_state, sizeof(save_state), text->save_state_format, state_slot);
+    snprintf(load_state, sizeof(load_state), text->load_state_format, state_slot);
+    snprintf(brightness_text, sizeof(brightness_text), text->brightness_format, brightness);
+    snprintf(volume_text, sizeof(volume_text), text->volume_format, volume);
+    const char *scale_name = scale_mode == MIA_DISPLAY_SCALE_CROP ? text->scale_crop :
+        (scale_mode == MIA_DISPLAY_SCALE_STRETCH ? text->scale_stretch : text->scale_fit);
+    snprintf(scale_text, sizeof(scale_text), text->scale_format, scale_name);
+    const char *items[] = {text->resume, save_state, load_state, brightness_text,
+                           volume_text, scale_text,
+                           text->rom_picker, text->exit_launcher};
+    const int32_t screen_width = mia_host_screen_width();
+    const int32_t screen_height = mia_host_screen_height();
+    const int32_t panel_width = screen_width * 60 / 100;
+    const int32_t panel_height = screen_height * 80 / 100;
+    const int32_t panel_x = (screen_width - panel_width) / 2;
+    const int32_t panel_y = (screen_height - panel_height) / 2;
+    const int32_t item_x = panel_x + 6;
+    const int32_t item_width = panel_width - 12;
+    char title[64];
+    snprintf(title, sizeof(title), "%s - %s", text->title,
+             target_name != NULL ? target_name : "");
+
+    mia_host_clear(255);
+    mia_host_fill_rect(panel_x, panel_y, panel_width, panel_height, MIA_HOST_DARK_BLUE);
+    draw_centered_text(panel_y + 8, title, MIA_HOST_WHITE, MIA_HOST_DARK_BLUE);
+    for (size_t index = 0; index < 8u; ++index) {
+        const int32_t y = panel_y + 27 + (int32_t)index * 19;
+        const bool is_selected = index == selected;
+        const uint8_t foreground = is_selected ? MIA_HOST_BLACK : MIA_HOST_WHITE;
+        const uint8_t background = is_selected ? MIA_HOST_WHITE : MIA_HOST_DARK_BLUE;
+        if (is_selected) mia_host_fill_rect(item_x, y, item_width, 17, MIA_HOST_WHITE);
+        draw_centered_text(mia_host_text_y_centered(y, 17), items[index],
+                           foreground, background);
+    }
+    const char *footer = NULL;
+    char state_notice[40];
+    uint8_t footer_color = MIA_HOST_GRAY;
+    if (notice == MIA_EMULATOR_MENU_NOTICE_STATE_SAVED) {
+        snprintf(state_notice, sizeof(state_notice), text->state_saved_format, state_slot);
+        footer = state_notice;
+        footer_color = MIA_HOST_GREEN;
+    } else if (notice == MIA_EMULATOR_MENU_NOTICE_STATE_MISSING) {
+        snprintf(state_notice, sizeof(state_notice), text->state_missing_format, state_slot);
+        footer = state_notice;
+        footer_color = MIA_HOST_YELLOW;
+    } else if (notice == MIA_EMULATOR_MENU_NOTICE_STATE_ERROR) {
+        footer = text->state_error;
+        footer_color = MIA_HOST_RED;
+    } else if (notice == MIA_EMULATOR_MENU_NOTICE_STATE_UNSUPPORTED) {
+        footer = text->state_unsupported;
+        footer_color = MIA_HOST_YELLOW;
+    }
+    if (footer != NULL) {
+        draw_centered_text(panel_y + panel_height - 14, footer, footer_color, MIA_HOST_DARK_BLUE);
+    }
+    if (screenshot != NULL) {
+        (void)display_host_present_rgb565_overlay(
+            screenshot, MIA_DISPLAY_WIDTH, MIA_DISPLAY_HEIGHT,
+            MIA_DISPLAY_WIDTH * sizeof(uint16_t), 255u, 230u);
+    } else {
+        mia_host_present();
+    }
+}
+
+static void wait_menu_input_release(void) {
+    for (unsigned guard = 0; guard < 500u; ++guard) {
+        mia_host_buttons_poll();
+        bool any_down = false;
+        for (uint8_t key = MIA_HOST_BUTTON_BOOT; key <= MIA_HOST_BUTTON_RIGHT; ++key) {
+            any_down = any_down || mia_host_button_down(key);
+        }
+        if (!any_down) return;
+        mia_host_delay_ms(10);
+    }
+}
+
+MiaEmulatorMenuAction mia_emulator_menu_run(const char *target_name,
+                                            uint16_t *screenshot,
+                                            MiaEmulatorMenuNotice notice,
+                                            uint8_t *state_slot,
+                                            MiaDisplayScaleMode *scale_mode) {
+    size_t selected = 0;
+    if (state_slot == NULL || scale_mode == NULL) return MIA_EMULATOR_MENU_RESUME;
+    *state_slot %= 10u;
+    uint8_t brightness = mia_host_brightness_get();
+    uint8_t volume = mia_host_volume_get();
+    wait_menu_input_release();
+    if (screenshot != NULL) {
+        (void)display_host_capture_rgb565(screenshot, MIA_DISPLAY_WIDTH, MIA_DISPLAY_HEIGHT,
+                                          MIA_DISPLAY_WIDTH * sizeof(uint16_t));
+    }
+    draw_emulator_menu(target_name, screenshot, selected, notice, *state_slot,
+                       brightness, volume, *scale_mode);
+    for (;;) {
+        mia_host_buttons_poll();
+        size_t next = selected;
+        if (mia_host_button_pressed(MIA_HOST_BUTTON_UP)) next = selected == 0u ? 7u : selected - 1u;
+        if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN)) next = (selected + 1u) % 8u;
+        const bool left = mia_host_button_pressed(MIA_HOST_BUTTON_LEFT);
+        const bool right = mia_host_button_pressed(MIA_HOST_BUTTON_RIGHT);
+        if ((selected == MIA_EMULATOR_MENU_SAVE_STATE ||
+             selected == MIA_EMULATOR_MENU_LOAD_STATE) &&
+            left) {
+            *state_slot = *state_slot == 0u ? 9u : *state_slot - 1u;
+        }
+        if ((selected == MIA_EMULATOR_MENU_SAVE_STATE ||
+             selected == MIA_EMULATOR_MENU_LOAD_STATE) &&
+            right) {
+            *state_slot = (*state_slot + 1u) % 10u;
+        }
+        if (selected == 3u && (left || right)) {
+            brightness = left ? (brightness <= 10u ? 10u : brightness - 10u) :
+                                (brightness >= 100u ? 100u : brightness + 10u);
+            (void)mia_host_brightness_set(brightness);
+        }
+        if (selected == 4u && (left || right)) {
+            volume = left ? (volume < 5u ? 0u : volume - 5u) :
+                            (volume >= 100u ? 100u : volume + 5u);
+            (void)mia_host_volume_set(volume);
+        }
+        if (selected == 5u && (left || right)) {
+            if (left) *scale_mode = *scale_mode == MIA_DISPLAY_SCALE_FIT ?
+                MIA_DISPLAY_SCALE_STRETCH : (MiaDisplayScaleMode)(*scale_mode - 1);
+            if (right) *scale_mode = *scale_mode == MIA_DISPLAY_SCALE_STRETCH ?
+                MIA_DISPLAY_SCALE_FIT : (MiaDisplayScaleMode)(*scale_mode + 1);
+            display_host_scale_mode_set((uint8_t)*scale_mode);
+        }
+        const bool redraw = next != selected || left || right;
+        if (next != selected) {
+            selected = next;
+        }
+        if (redraw) {
+            draw_emulator_menu(target_name, screenshot, selected, notice, *state_slot,
+                               brightness, volume, *scale_mode);
+        }
+        if (mia_host_button_pressed(MIA_HOST_BUTTON_B)) {
+            wait_menu_input_release();
+            return MIA_EMULATOR_MENU_RESUME;
+        }
+        if (mia_host_button_pressed(MIA_HOST_BUTTON_A)) {
+            if (selected >= 3u && selected <= 5u) continue;
+            wait_menu_input_release();
+            if (selected == 0u) return MIA_EMULATOR_MENU_RESUME;
+            if (selected == 1u) return MIA_EMULATOR_MENU_SAVE_STATE;
+            if (selected == 2u) return MIA_EMULATOR_MENU_LOAD_STATE;
+            if (selected == 6u) return MIA_EMULATOR_MENU_ROM_PICKER;
+            return MIA_EMULATOR_MENU_EXIT_LAUNCHER;
+        }
+        mia_host_delay_ms(20);
+    }
 }
 
 static uint8_t utf8_length(const char *text) {

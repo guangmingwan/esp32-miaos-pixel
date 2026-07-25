@@ -986,7 +986,7 @@ extern "C" uint8_t mia_host_read_battery(MiaHostBatteryInfo *info) {
 
   info->raw = raw;
   // VBAT = raw * 3.3V / 4095 * 2.0 (VBAT_DIVIDER)
-  float volts = (float)raw * 3.3f / 4095.0f * 2.0f;
+  float volts = (float)raw * 3.3f / 4095.0f * 2.0f * 1.032f;
   info->millivolts = (uint32_t)(volts * 1000.0f);
   return 1;
 }

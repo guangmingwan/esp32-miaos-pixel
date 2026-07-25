@@ -4,6 +4,7 @@
 #include "mia_host_abi.h"
 #include "display_host.h"
 #include "snes9x.h"
+#include "snapshot.h"
 
 #include <esp_heap_caps.h>
 #include <esp_rom_sys.h>
@@ -399,6 +400,18 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     return status.code == MIA_STORAGE_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, status.message);
 }
 
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return S9xSaveState(path) ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return S9xLoadState(path) ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "SNES state load failed");
+}
+
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
     if (!start_audio_task(runtime) || !start_video_task(runtime)) {
         stop_video_task();
@@ -422,7 +435,7 @@ MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
         const int64_t started = esp_timer_get_time();
         const uint32_t host = mia_emulator_host_buttons();
         current_host_buttons = host;
-        if (mia_app_input_exit_requested(&runtime->input, host, mia_host_millis())) {
+        if (mia_app_input_menu_requested(&runtime->input, host)) {
             stop_video_task();
             stop_audio_task();
             return mia_core_ok();

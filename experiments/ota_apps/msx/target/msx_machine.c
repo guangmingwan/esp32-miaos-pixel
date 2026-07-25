@@ -1,9 +1,13 @@
 #include "msx_machine.h"
 #include "msx_policy.h"
+#include "mia_emulator_runtime.h"
 #include "mia_host_abi.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define WIDTH 256
 #define HEIGHT 228
@@ -19,19 +23,39 @@ uint16_t *XBuf;
 
 static Image screen;
 static uint16_t *pixels;
+static uint16_t *screen_pixels;
 static int joy_state;
 static int last_key;
 static bool exit_requested;
 static bool key_held;
+static bool menu_button_down;
+static bool return_to_picker;
 static MiaMsxKeyboard keyboard;
 static char save_path[192];
+static char state_path[192];
+static char state_temporary[256];
+static char state_backup[256];
+static char state_name[160];
+static uint8_t state_slot;
+static MiaDisplayScaleMode scale_mode = MIA_DISPLAY_SCALE_FIT;
 
 const char *Title = "fMSX 6.0";
 const char *Disks[2][MAXDISKS + 1];
 
 void mia_msx_set_save_name(const char *name) {
+    const char *dot = strrchr(name, '.');
+    const size_t stem_length = dot == NULL ? strlen(name) : (size_t)(dot - name);
     snprintf(save_path, sizeof(save_path), "/saves/msx/%s.sta", name);
+    snprintf(state_name, sizeof(state_name), "%.*s", (int)stem_length, name);
+    snprintf(state_path, sizeof(state_path), "/sd/saves/msx/%s.state%u",
+             state_name, state_slot);
+    snprintf(state_temporary, sizeof(state_temporary), "%s.tmp", state_path);
+    snprintf(state_backup, sizeof(state_backup), "%s.bak", state_path);
+    (void)mkdir("/sd/saves", 0775);
+    (void)mkdir("/sd/saves/msx", 0775);
 }
+
+bool mia_msx_return_to_picker_requested(void) { return return_to_picker; }
 
 static uint32_t buttons(void) {
     mia_host_buttons_poll();
@@ -44,13 +68,79 @@ static uint32_t buttons(void) {
 
 static bool down(uint32_t bits, uint8_t key) { return (bits & (1u << key)) != 0; }
 
+static void select_state_slot(uint8_t slot) {
+    state_slot = slot % 10u;
+    snprintf(state_path, sizeof(state_path), "/sd/saves/msx/%s.state%u",
+             state_name, state_slot);
+    snprintf(state_temporary, sizeof(state_temporary), "%s.tmp", state_path);
+    snprintf(state_backup, sizeof(state_backup), "%s.bak", state_path);
+}
+
+static bool save_state_slot(void) {
+    (void)remove(state_temporary);
+    if (!SaveSTA(state_temporary)) {
+        (void)remove(state_temporary);
+        return false;
+    }
+    (void)remove(state_backup);
+    const bool had_previous = rename(state_path, state_backup) == 0;
+    if (!had_previous && errno != ENOENT) {
+        (void)remove(state_temporary);
+        return false;
+    }
+    if (rename(state_temporary, state_path) != 0) {
+        if (had_previous) (void)rename(state_backup, state_path);
+        (void)remove(state_temporary);
+        return false;
+    }
+    if (had_previous) (void)remove(state_backup);
+    return true;
+}
+
 static void update_input(void) {
     static uint32_t previous;
     const uint32_t current = buttons();
     const uint32_t pressed = current & ~previous;
-    if (down(current, MIA_HOST_BUTTON_SELECT) && down(current, MIA_HOST_BUTTON_START)) {
-        exit_requested = true;
-    } else if (down(pressed, MIA_HOST_BUTTON_SELECT)) {
+    const bool menu_down = down(current, MIA_HOST_BUTTON_M);
+    if (menu_down && !menu_button_down) {
+        menu_button_down = true;
+        mia_host_audio_stop();
+        MiaEmulatorMenuNotice notice = MIA_EMULATOR_MENU_NOTICE_NONE;
+        for (;;) {
+            const MiaEmulatorMenuAction action = mia_emulator_menu_run(
+                "msx", screen_pixels, notice, &state_slot, &scale_mode);
+            select_state_slot(state_slot);
+            notice = MIA_EMULATOR_MENU_NOTICE_NONE;
+            if (action == MIA_EMULATOR_MENU_SAVE_STATE) {
+                notice = save_state_slot() ? MIA_EMULATOR_MENU_NOTICE_STATE_SAVED :
+                                             MIA_EMULATOR_MENU_NOTICE_STATE_ERROR;
+                continue;
+            }
+            if (action == MIA_EMULATOR_MENU_LOAD_STATE) {
+                if (access(state_path, F_OK) != 0) {
+                    notice = MIA_EMULATOR_MENU_NOTICE_STATE_MISSING;
+                    continue;
+                }
+                if (!LoadSTA(state_path)) {
+                    notice = MIA_EMULATOR_MENU_NOTICE_STATE_ERROR;
+                    continue;
+                }
+                mia_host_fill_screen_rgb565(0);
+                break;
+            }
+            return_to_picker = action == MIA_EMULATOR_MENU_ROM_PICKER;
+            exit_requested = action != MIA_EMULATOR_MENU_RESUME;
+            if (action == MIA_EMULATOR_MENU_RESUME) mia_host_fill_screen_rgb565(0);
+            break;
+        }
+    } else if (!menu_down) {
+        menu_button_down = false;
+    }
+    if (menu_down) {
+        previous = current;
+        return;
+    }
+    if (down(pressed, MIA_HOST_BUTTON_SELECT)) {
         keyboard.visible = !keyboard.visible;
     } else if (keyboard.visible) {
         if (down(pressed, MIA_HOST_BUTTON_LEFT)) mia_msx_keyboard_move(&keyboard, -1, 0);
@@ -80,7 +170,14 @@ static void update_input(void) {
 
 int InitMachine(void) {
     pixels = malloc(WIDTH * HEIGHT * sizeof(*pixels));
-    if (pixels == NULL || !mia_host_audio_open(AUDIO_RATE, 2, 16)) return 0;
+    screen_pixels = calloc(MIA_DISPLAY_PIXELS, sizeof(*screen_pixels));
+    if (pixels == NULL || screen_pixels == NULL || !mia_host_audio_open(AUDIO_RATE, 2, 16)) {
+        free(pixels);
+        free(screen_pixels);
+        pixels = NULL;
+        screen_pixels = NULL;
+        return 0;
+    }
     screen = (Image){.Data = pixels, .W = WIDTH, .H = HEIGHT, .L = WIDTH, .D = 16};
     XBuf = pixels;
     SetScreenDepth(16);
@@ -95,6 +192,9 @@ void TrashMachine(void) {
     TrashSound();
     mia_host_audio_close();
     free(pixels);
+    free(screen_pixels);
+    pixels = NULL;
+    screen_pixels = NULL;
 }
 
 void SetColor(byte index, byte red, byte green, byte blue) {
@@ -105,7 +205,16 @@ void SetColor(byte index, byte red, byte green, byte blue) {
 
 void PutImage(void) {
     if (keyboard.visible) DrawKeyboard(&screen, mia_msx_keyboard_key(&keyboard));
-    mia_host_present_rgb565(pixels, WIDTH, HEIGHT, WIDTH * 2);
+    for (uint32_t y = 0; y < MIA_DISPLAY_HEIGHT; ++y) {
+        const uint32_t source_y = y * HEIGHT / MIA_DISPLAY_HEIGHT;
+        for (uint32_t x = 0; x < MIA_DISPLAY_WIDTH; ++x) {
+            const uint32_t source_x = x * WIDTH / MIA_DISPLAY_WIDTH;
+            screen_pixels[y * MIA_DISPLAY_WIDTH + x] =
+                __builtin_bswap16(pixels[source_y * WIDTH + source_x]);
+        }
+    }
+    mia_host_present_rgb565(screen_pixels, MIA_DISPLAY_WIDTH, MIA_DISPLAY_HEIGHT,
+                            MIA_DISPLAY_WIDTH * sizeof(uint16_t));
 }
 
 unsigned int Joystick(void) { update_input(); return (unsigned)joy_state; }

@@ -260,12 +260,37 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     return status.code == MIA_STORAGE_OK ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, status.message);
 }
 
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    uint8_t *state = heap_caps_calloc(1, GBA_STATE_MEM_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (state == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA state allocation failed");
+    gba_save_state(state);
+    FILE *file = fopen(path, "wb");
+    const bool saved = file != NULL && fwrite(state, GBA_STATE_MEM_SIZE, 1, file) == 1 &&
+                       fflush(file) == 0;
+    if (file != NULL) fclose(file);
+    free(state);
+    return saved ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    uint8_t *state = heap_caps_malloc(GBA_STATE_MEM_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (state == NULL) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA state allocation failed");
+    FILE *file = fopen(path, "rb");
+    const bool read_ok = file != NULL && fread(state, GBA_STATE_MEM_SIZE, 1, file) == 1;
+    if (file != NULL) fclose(file);
+    const bool loaded = read_ok && gba_load_state(state);
+    free(state);
+    return loaded ? mia_core_ok() : mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA state load failed");
+}
+
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
     int16_t audio[AUDIO_FRAMES * 2u];
     unsigned frames = 0;
     if (!start_audio_task(runtime)) return mia_core_error(MIA_CORE_ERR_CALLBACK, "GBA audio task allocation failed");
     for (;;) {
-        if (mia_app_input_exit_requested(&runtime->input, mia_emulator_host_buttons(), mia_host_millis())) {
+        if (mia_app_input_menu_requested(&runtime->input, mia_emulator_host_buttons())) {
             stop_audio_task();
             return mia_core_ok();
         }

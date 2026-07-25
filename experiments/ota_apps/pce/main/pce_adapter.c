@@ -73,7 +73,7 @@ void osd_input_read(uint8_t joypads[8]) {
     if (input & MIA_APP_CORE_INPUT_START) buttons |= JOY_RUN;
     if (input & MIA_APP_CORE_INPUT_SELECT) buttons |= JOY_SELECT;
     joypads[0] = buttons;
-    if (mia_app_input_exit_requested(&mia_emulator_runtime.input, mia_emulator_host_buttons(), mia_host_millis())) {
+    if (mia_app_input_menu_requested(&mia_emulator_runtime.input, mia_emulator_host_buttons())) {
         exit_requested = true;
         ShutdownPCE();
     }
@@ -239,6 +239,18 @@ MiaCoreStatus mia_emulator_core_flush(MiaEmulatorRuntime *runtime, MiaStorageFlu
     (void)force;
     if (SaveState(runtime->selection.save_name) != 0) return mia_core_error(MIA_CORE_ERR_CALLBACK, "PCE save failed");
     return reason == MIA_STORAGE_FLUSH_CLEAN_EXIT ? mia_core_ok() : mia_core_ok();
+}
+
+MiaCoreStatus mia_emulator_core_save_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return SaveState(path) == 0 ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "PCE state save failed");
+}
+
+MiaCoreStatus mia_emulator_core_load_state(MiaEmulatorRuntime *runtime, const char *path) {
+    (void)runtime;
+    return LoadState(path) == 0 ? mia_core_ok() :
+        mia_core_error(MIA_CORE_ERR_CALLBACK, "PCE state load failed");
 }
 
 MiaCoreStatus mia_emulator_core_run(MiaEmulatorRuntime *runtime) {
