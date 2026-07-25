@@ -19,6 +19,7 @@ typedef uint8_t MiaLanguage;
 
 MiaLanguage miaLanguage(void);
 const char* miaLanguageName(MiaLanguage lang);
+void miaSetLanguage(MiaLanguage lang);
 void miaCycleLanguage(void);
 const char* miaTr(const char* key);
 const char* miaAppDisplayName(const char* category, const char* name);

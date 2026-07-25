@@ -21,6 +21,7 @@ idf_component_register(
     "mia_i18n.cpp"
     "rtc_clock.cpp"
     "audio_host.cpp"
+    "system_settings.cpp"
     "ota_app_flash.cpp"
     "launcher_log.cpp"
     "launcher_return_context.cpp"

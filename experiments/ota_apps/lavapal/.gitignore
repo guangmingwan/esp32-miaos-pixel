@@ -18,6 +18,13 @@
 x64/
 x86/
 build/
+resource/*
+!resource/README.md
+!resource/M_GB2312.MSG
+!resource/WORD_GB2312.DAT
+!resource/DESC_GB2312.DAT
+!resource/FONT_GB2312.DAT
+!resource/FONT_GB2312_SMALL.DAT
 bld/
 [Bb]in/
 [Oo]bj/

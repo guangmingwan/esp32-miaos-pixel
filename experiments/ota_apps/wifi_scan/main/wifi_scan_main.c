@@ -19,6 +19,26 @@ static MiaHostWifiNetwork networks[MAX_NETWORKS];
 static int32_t network_count;
 static int32_t first_network;
 static int32_t selected_line;
+static uint8_t scan_failed;
+
+static int32_t signal_quality(int32_t rssi) {
+  if (rssi >= -50) return 100;
+  if (rssi <= -100) return 0;
+  return (rssi + 100) * 2;
+}
+
+static void draw_message(const char *message) {
+  const WifiScanText *text = wifi_scan_text();
+  int32_t x = (mia_host_screen_width() - mia_host_text_width(message)) / 2;
+  if (x < 4) x = 4;
+  mia_host_clear(MIA_HOST_BLACK);
+  mia_host_fill_rect(0, 0, mia_host_screen_width(), 20, MIA_HOST_YELLOW);
+  mia_host_draw_text(4, mia_host_text_y_centered(0, 20), text->title,
+                     MIA_HOST_BLACK, MIA_HOST_YELLOW);
+  mia_host_draw_text(x, mia_host_text_y_centered(78, 64), message,
+                     MIA_HOST_YELLOW, MIA_HOST_BLACK);
+  mia_host_present();
+}
 
 static void draw_wifi_scan(void) {
   const WifiScanText *text = wifi_scan_text();
@@ -30,7 +50,10 @@ static void draw_wifi_scan(void) {
                      MIA_HOST_YELLOW);
 
   if (network_count <= 0) {
-    mia_host_draw_text(116, 92, text->no_networks, MIA_HOST_YELLOW,
+    const char *message = scan_failed ? text->scan_failed : text->no_networks;
+    int32_t x = (mia_host_screen_width() - mia_host_text_width(message)) / 2;
+    if (x < 4) x = 4;
+    mia_host_draw_text(x, 92, message, scan_failed ? MIA_HOST_RED : MIA_HOST_YELLOW,
                        MIA_HOST_BLACK);
     mia_host_draw_text(80, HINT_Y, text->scan_exit, MIA_HOST_GRAY,
                        MIA_HOST_BLACK);
@@ -44,19 +67,20 @@ static void draw_wifi_scan(void) {
   }
   for (int32_t index = 0; index < visible; ++index) {
     MiaHostWifiNetwork *network = &networks[first_network + index];
-    snprintf(line, sizeof(line), "%4lddB %.24s", (long)network->rssi,
-             network->ssid);
-    uint8_t fg = (index == selected_line) ? MIA_HOST_BLACK : MIA_HOST_WHITE;
-    uint8_t bg = (index == selected_line) ? MIA_HOST_YELLOW : MIA_HOST_BLACK;
+    snprintf(line, sizeof(line), "%4lddBm %3ld%% %.18s", (long)network->rssi,
+             (long)signal_quality(network->rssi), network->ssid);
+    uint8_t selected = first_network + index == selected_line;
+    uint8_t fg = selected ? MIA_HOST_BLACK : MIA_HOST_WHITE;
+    uint8_t bg = selected ? MIA_HOST_YELLOW : MIA_HOST_BLACK;
     int32_t y = LIST_Y + index * LINE_HEIGHT;
-    if (index == selected_line) {
+    if (selected) {
       mia_host_fill_rect(4, y - 1, 312, LINE_HEIGHT, bg);
     }
     mia_host_draw_text(10, y + 2, line, fg, bg);
   }
 
-  snprintf(line, sizeof(line), "%ld found  %s", (long)network_count,
-           text->rescan);
+  snprintf(line, sizeof(line), text->found_fmt, (long)network_count,
+           (long)selected_line + 1, (long)network_count);
   mia_host_draw_text(8, STATUS_Y, line, MIA_HOST_GREEN, MIA_HOST_BLACK);
   mia_host_draw_text(8, HINT_Y, text->scroll_exit, MIA_HOST_GRAY,
                      MIA_HOST_BLACK);
@@ -64,7 +88,9 @@ static void draw_wifi_scan(void) {
 }
 
 static void run_scan(void) {
+  draw_message(wifi_scan_text()->scanning);
   network_count = mia_host_wifi_scan(networks, MAX_NETWORKS);
+  scan_failed = network_count < 0;
   if (network_count < 0) {
     network_count = 0;
   }
@@ -124,6 +150,20 @@ int wifi_scan_main_impl(int argc, char *argv[]) {
     } else if (mia_host_button_pressed(MIA_HOST_BUTTON_DOWN)) {
       if (selected_line + 1 < network_count) {
         ++selected_line;
+        clamp_selection();
+        changed = 1;
+      }
+    } else if (mia_host_button_pressed(MIA_HOST_BUTTON_LEFT)) {
+      if (selected_line > 0) {
+        selected_line -= VISIBLE_LINES;
+        if (selected_line < 0) selected_line = 0;
+        clamp_selection();
+        changed = 1;
+      }
+    } else if (mia_host_button_pressed(MIA_HOST_BUTTON_RIGHT)) {
+      if (selected_line + 1 < network_count) {
+        selected_line += VISIBLE_LINES;
+        if (selected_line >= network_count) selected_line = network_count - 1;
         clamp_selection();
         changed = 1;
       }

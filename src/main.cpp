@@ -38,6 +38,7 @@
 #include "rtc_clock.h"
 #include "sd_app_loader.h"
 #include "serial_file_service.h"
+#include "system_settings.h"
 
 SPIClass tftSpi(FSPI);
 
@@ -58,6 +59,9 @@ static uint8_t g_hc165State = 0xFF;
 static int64_t g_lastWatchdogYieldUs = 0;
 static bool g_launcherDrawing = false;
 static uint32_t g_lastLauncherRenderMs = 0;
+static uint32_t g_lastBatterySampleMs = 0;
+static uint32_t g_batteryMillivolts = 0;
+static bool g_batterySampleValid = false;
 static bool g_launcherNeedsInitialRender = true;
 static uint32_t g_launcherInitialRenderAtMs = 0;
 static constexpr uint8_t INITIAL_DRAW_ITEM_LIMIT = 1;
@@ -493,7 +497,7 @@ static void updateBeep() {
   for (size_t i = 0; i < ALL_BUTTON_COUNT; ++i) {
     anyPressed = anyPressed || g_allButtons[i].down;
   }
-  digitalWrite(BEEP_PIN, anyPressed ? HIGH : LOW);
+  digitalWrite(BEEP_PIN, miaSystemKeyBeep() && anyPressed ? HIGH : LOW);
 }
 
 static const char *sdScanStatusText() {
@@ -707,25 +711,101 @@ static void switchLauncherTab(int8_t delta) {
   clampLauncherSelection();
 }
 
-static void drawLauncherClock() {
+static uint8_t batteryPercent(uint32_t millivolts) {
+  struct BatteryPoint {
+    uint16_t millivolts;
+    uint8_t percent;
+  };
+  static constexpr BatteryPoint CURVE[] = {
+      {3400, 0}, {3600, 10}, {3700, 25}, {3800, 45},
+      {3900, 65}, {4000, 80}, {4100, 90}, {4200, 100},
+  };
+  if (millivolts <= CURVE[0].millivolts) return CURVE[0].percent;
+  for (size_t index = 1; index < sizeof(CURVE) / sizeof(CURVE[0]); ++index) {
+    if (millivolts <= CURVE[index].millivolts) {
+      const BatteryPoint &low = CURVE[index - 1];
+      const BatteryPoint &high = CURVE[index];
+      return low.percent + static_cast<uint8_t>(
+          (millivolts - low.millivolts) * (high.percent - low.percent) /
+          (high.millivolts - low.millivolts));
+    }
+  }
+  return 100;
+}
+
+static void sampleBattery(uint32_t nowMs) {
+  static constexpr uint32_t SAMPLE_INTERVAL_MS = 5000;
+  if (g_batteryMillivolts != 0 && nowMs - g_lastBatterySampleMs < SAMPLE_INTERVAL_MS) {
+    return;
+  }
+  uint32_t rawTotal = 0;
+  static constexpr uint8_t SAMPLE_COUNT = 8;
+  for (uint8_t sample = 0; sample < SAMPLE_COUNT; ++sample) {
+    rawTotal += static_cast<uint32_t>(analogRead(VBAT_ADC_PIN));
+  }
+  const float rawAverage = static_cast<float>(rawTotal) / SAMPLE_COUNT;
+  g_batteryMillivolts = static_cast<uint32_t>(
+      rawAverage * 3300.0f / 4095.0f * VBAT_DIVIDER);
+  g_batterySampleValid = g_batteryMillivolts >= 2500 && g_batteryMillivolts <= 5000;
+  g_lastBatterySampleMs = nowMs;
+}
+
+static void drawLauncherHeader() {
   RtcDateTime rtcNow = {2000, 1, 1, 0, 0, 0, 6};
-  char clockText[48];
-  if (rtcReadDateTime(rtcNow)) {
+  char fullClockText[48];
+  char shortClockText[16];
+  const bool rtcReady = rtcReadDateTime(rtcNow);
+  if (rtcReady) {
     const char *weekday = miaTr(rtcWeekdayShortName(rtcNow.weekday));
     if (miaLanguage() == MiaLanguage::Chinese) {
-      snprintf(clockText, sizeof(clockText), "%04u年%02u月%02u日 %s %02u:%02u:%02u",
+      snprintf(fullClockText, sizeof(fullClockText), "%04u年%02u月%02u日 %s %02u:%02u:%02u",
                rtcNow.year, rtcNow.month, rtcNow.day, weekday,
                rtcNow.hour, rtcNow.minute, rtcNow.second);
     } else {
-      snprintf(clockText, sizeof(clockText), "%s %04u-%02u-%02u %02u:%02u:%02u",
+      snprintf(fullClockText, sizeof(fullClockText), "%s %04u-%02u-%02u %02u:%02u:%02u",
                weekday, rtcNow.year, rtcNow.month, rtcNow.day,
                rtcNow.hour, rtcNow.minute, rtcNow.second);
     }
+    snprintf(shortClockText, sizeof(shortClockText), "%02u:%02u", rtcNow.hour,
+             rtcNow.minute);
   } else {
-    snprintf(clockText, sizeof(clockText), "%s", miaTr("RTC unavailable"));
+    snprintf(fullClockText, sizeof(fullClockText), "%s", miaTr("RTC unavailable"));
+    snprintf(shortClockText, sizeof(shortClockText), "--:--");
   }
-  const int16_t textX = LAVA_SCREEN_W - 6 - lavaTextWidth(clockText);
-  lavaDrawText(textX, lavaTextYCentered(0, 20), clockText, LAVA_BLACK, LAVA_YELLOW);
+
+  sampleBattery(millis());
+  char batteryText[12];
+  if (g_batterySampleValid) {
+    snprintf(batteryText, sizeof(batteryText), "%u%%", batteryPercent(g_batteryMillivolts));
+  } else {
+    snprintf(batteryText, sizeof(batteryText), "--%%");
+  }
+
+  const char *title = miaTr("MiaOS Launcher");
+  const int16_t batteryWidth = lavaTextWidth(batteryText);
+  const int16_t batteryX = LAVA_SCREEN_W - 6 - batteryWidth;
+  const int16_t titleWidth = lavaTextWidth(title);
+  const int16_t fullClockWidth = lavaTextWidth(fullClockText);
+  const int16_t shortClockWidth = lavaTextWidth(shortClockText);
+  const char *clockText = titleWidth + fullClockWidth + batteryWidth + 34 <= LAVA_SCREEN_W
+                              ? fullClockText
+                              : shortClockText;
+  const int16_t clockWidth = clockText == fullClockText ? fullClockWidth : shortClockWidth;
+  const int16_t clockX = batteryX - 10 - clockWidth;
+  if (titleWidth + 12 < clockX) {
+    lavaDrawText(6, lavaTextYCentered(0, 20), title, LAVA_BLACK, LAVA_YELLOW);
+  } else {
+    lavaDrawText(6, lavaTextYCentered(0, 20), "MiaOS", LAVA_BLACK, LAVA_YELLOW);
+  }
+  lavaDrawText(clockX, lavaTextYCentered(0, 20), clockText, LAVA_BLACK, LAVA_YELLOW);
+
+  const bool lowBattery = g_batterySampleValid && g_batteryMillivolts <= 3500;
+  if (lowBattery) {
+    lavaFillRect(batteryX - 3, 0, batteryWidth + 6, 20, LAVA_RED);
+  }
+  lavaDrawText(batteryX, lavaTextYCentered(0, 20), batteryText,
+               lowBattery ? LAVA_WHITE : LAVA_BLACK,
+               lowBattery ? LAVA_RED : LAVA_YELLOW);
 }
 
 extern "C" void esp32_task_wdt_reset(void) {
@@ -757,9 +837,7 @@ static void drawLauncher() {
 
   lavaClear(LAVA_BLACK);
   lavaFillRect(0, 0, LAVA_SCREEN_W, 20, LAVA_YELLOW);
-  lavaDrawText(6, lavaTextYCentered(0, 20), miaTr("MiaOS Launcher"), LAVA_BLACK,
-               LAVA_YELLOW);
-  drawLauncherClock();
+  drawLauncherHeader();
   launcherRenderYield();
   if (g_launcherNeedsInitialRender) {
     lavaPresent();
@@ -1317,7 +1395,8 @@ void setup() {
   launcherTrace("[setup] updateAllButtons");
   updateAllButtons();
 
-  if (g_allButtons[2].down) {
+  const bool safeMode = g_allButtons[2].down;
+  if (safeMode) {
     launcherTrace("[setup] KEY_M held: safe mode, skipping persisted settings");
     miaI18nSkipPersisted();
     lavaFontSkipPersisted();
@@ -1326,6 +1405,7 @@ void setup() {
   launcherTrace("[setup] printStartupInfo");
   printStartupInfo();
   initDisplay();
+  miaSystemSettingsInit(safeMode);
   launcherTrace("[setup] initDisplay done");
   const LavaFontFace persistedFont = lavaFontFace();
   (void)persistedFont;

@@ -6,12 +6,13 @@
 #include <driver/i2s.h>
 
 #include "pins.h"
+#include "system_settings.h"
 
 namespace {
 
 constexpr i2s_port_t kAudioPort = I2S_NUM_0;
 constexpr uint8_t kOutputChannels = 2;
-constexpr size_t kScratchFrames = 1024;
+constexpr size_t kScratchFrames = 2304;
 
 HostAudioStatus g_audioStatus = {
     .open = false,
@@ -82,18 +83,21 @@ bool installI2s(uint32_t sampleRate) {
 
 const int16_t *expandFrames(const int16_t *samples, uint32_t frameCount,
                             uint8_t channels, uint32_t *expandedFrames) {
-  if (channels == kOutputChannels) {
+  const uint8_t volume = miaSystemVolume();
+  if (channels == kOutputChannels && volume == 100) {
     *expandedFrames = frameCount;
     return samples;
   }
-  if (channels != 1 || frameCount > kScratchFrames) {
+  if ((channels != 1 && channels != 2) || frameCount > kScratchFrames) {
     *expandedFrames = 0;
     return nullptr;
   }
 
   for (uint32_t index = 0; index < frameCount; ++index) {
-    g_stereoScratch[index * 2] = samples[index];
-    g_stereoScratch[index * 2 + 1] = samples[index];
+    const int32_t left = channels == 1 ? samples[index] : samples[index * 2];
+    const int32_t right = channels == 1 ? samples[index] : samples[index * 2 + 1];
+    g_stereoScratch[index * 2] = static_cast<int16_t>(left * volume / 100);
+    g_stereoScratch[index * 2 + 1] = static_cast<int16_t>(right * volume / 100);
   }
   *expandedFrames = frameCount;
   return g_stereoScratch;

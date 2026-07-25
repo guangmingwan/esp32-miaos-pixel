@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
 #include <sdkconfig.h>
 
 #include "lava_native_display.h"
@@ -99,15 +100,17 @@ static void drawChipPage() {
   char line[40];
   esp_chip_info_t chipInfo;
   esp_chip_info(&chipInfo);
+  const esp_app_desc_t *appInfo = esp_ota_get_app_description();
   drawHeader(miaTr("Chip"));
-  lavaDrawText(8, 34, miaTr("MiaOS 0.1"), LAVA_CYAN, LAVA_BLACK);
+  snprintf(line, sizeof(line), "MiaOS %.24s", appInfo->version);
+  lavaDrawText(8, 34, line, LAVA_CYAN, LAVA_BLACK);
   snprintf(line, sizeof(line), "Model %s", ESP.getChipModel());
   lavaDrawText(8, 54, line, LAVA_WHITE, LAVA_BLACK);
   snprintf(line, sizeof(line), "Rev %u  Cores %u", ESP.getChipRevision(), ESP.getChipCores());
   lavaDrawText(8, 74, line, LAVA_WHITE, LAVA_BLACK);
   snprintf(line, sizeof(line), "CPU %luMHz", static_cast<unsigned long>(ESP.getCpuFreqMHz()));
   lavaDrawText(8, 94, line, LAVA_GREEN, LAVA_BLACK);
-  snprintf(line, sizeof(line), miaTr("WiFi b/g/n %s"),
+  snprintf(line, sizeof(line), miaTr("WiFi %s"),
            featureFlagName(chipInfo.features, CHIP_FEATURE_WIFI_BGN));
   lavaDrawText(8, 114, line, LAVA_YELLOW, LAVA_BLACK);
   snprintf(line, sizeof(line), miaTr("BT %s BLE %s"),
@@ -172,7 +175,7 @@ static void drawPsramPage() {
 
 static void drawFlashPage() {
   char line[40];
-  drawHeader(miaTr("NOR Flash"));
+  drawHeader(miaTr("Flash"));
   snprintf(line, sizeof(line), "Size %luMB",
            static_cast<unsigned long>(ESP.getFlashChipSize() / 1024 / 1024));
   lavaDrawText(8, 38, line, LAVA_YELLOW, LAVA_BLACK);
@@ -188,6 +191,7 @@ static void drawFlashPage() {
 
 static void drawBuildPage() {
   char line[40];
+  const esp_app_desc_t *appInfo = esp_ota_get_app_description();
   drawHeader(miaTr("System"));
   lavaDrawText(8, 34, miaTr("Author wanguangmign"), LAVA_WHITE, LAVA_BLACK);
   lavaDrawText(8, 54, miaTr("Contributor WaitForWind"), LAVA_WHITE, LAVA_BLACK);
@@ -196,13 +200,16 @@ static void drawBuildPage() {
   snprintf(line, sizeof(line), "MAC %04lX%08lX", static_cast<unsigned long>(ESP.getEfuseMac() >> 32),
            static_cast<unsigned long>(ESP.getEfuseMac()));
   lavaDrawText(8, 104, line, LAVA_CYAN, LAVA_BLACK);
-  lavaDrawText(8, 138, miaTr("ESP32-D0WD board"), LAVA_GRAY, LAVA_BLACK);
+  snprintf(line, sizeof(line), "Firmware %.24s", appInfo->version);
+  lavaDrawText(8, 128, line, LAVA_GRAY, LAVA_BLACK);
+  snprintf(line, sizeof(line), "SoC %s", ESP.getChipModel());
+  lavaDrawText(8, 148, line, LAVA_GRAY, LAVA_BLACK);
 }
 
 static void drawAudioPage() {
   char line[40];
   drawHeader(miaTr("Audio"));
-  lavaDrawText(8, 34, miaTr("NS4168 I2S amp"), LAVA_CYAN, LAVA_BLACK);
+  lavaDrawText(8, 34, miaTr("I2S amplifier"), LAVA_CYAN, LAVA_BLACK);
   snprintf(line, sizeof(line), "WS GPIO %d", I2S_WS_PIN);
   lavaDrawText(8, 54, line, LAVA_WHITE, LAVA_BLACK);
   snprintf(line, sizeof(line), "BCK GPIO %d", I2S_BCK_PIN);

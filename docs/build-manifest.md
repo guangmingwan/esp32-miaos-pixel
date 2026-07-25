@@ -89,7 +89,7 @@ idf.py -C experiments/ota_apps/<project> build
 | Emulators | `coleco`, `gb`, `gba`, `gbc`, `gg`, `gw`, `lynx`, `megadrive`, `msx`, `nes`, `pce`, `sms`, `snes` |
 | Games | `lavapal` -> `build/lava_pal.bin`, `minesweeper` |
 | Media | `music` |
-| Settings | `rtc_set` |
+| Settings | `settings` |
 | Utils | `calculator`, `diagnostic`, `flashlight`, `ftp_server`, `screen_test`, `sd_browser`, `timer`, `wifi_files`, `wifi_scan` |
 
 除 `lavapal` 外，输出均为 `experiments/ota_apps/<project>/build/<project>.bin`。
@@ -111,8 +111,9 @@ idf.py -C experiments/ota_apps/<project> build
 | 所有共享字库应用 | `/MiaOS/Library/libmia_text_v1.so` | IDF44 text shared library |
 | `lava_pal` 等 SDL 应用 | `/MiaOS/Library/libmia_sdl_v1.so` | IDF44 SDL shared library |
 | `lava_cch` | `/MiaOS/Games/lava_cch.app/LavaData/BOOK.DAT` | `experiments/ota_apps/lava_cch/LavaData/BOOK.DAT` |
+| `lava_pal` | `/MiaOS/Games/lava_pal.app/*` | `experiments/ota_apps/lavapal/resource/` 中的全部文件 |
 
-`lava_pal` 的 PAL 游戏资源受外部版权约束，不在仓库和发布 ZIP 中。使用者需自行放入 `/MiaOS/Games/lava_pal.app/`；至少需要 `PAT.MKF`、`DATA.MKF` 及其余标准 SDLPAL 资源文件。
+`lava_pal` 的 GB2312 转换数据和资源说明随仓库提供。PAL 原版游戏数据受版权保护，不进入仓库；使用者需从自己合法拥有的游戏介质提取到 `experiments/ota_apps/lavapal/resource/`。打包脚本会收录该目录的全部文件；缺少必需原版文件时显示警告、跳过缺失项并继续生成 ZIP。完整清单见该目录的 `README.md`。
 
 模拟器 ROM、音乐文件同样属于用户数据，不进入发布包。
 

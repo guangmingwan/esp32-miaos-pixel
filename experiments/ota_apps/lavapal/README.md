@@ -61,8 +61,10 @@ cp experiments/ota_apps/lavapal/build/lava_pal.bin /sd/Games/lava_pal.app/lava_p
 
 ## SD card game data
 
-The firmware does not ship PAL game data. Place the resource files in one of
-these directories (firmware `chdir`s into it before launching):
+The original PAL game data is not tracked by this repository. Put legally
+obtained files in `resource/`; `tools/build_sd.py` packages every file from that
+directory into `/MiaOS/Games/lava_pal.app/`. See `resource/README.md` for the
+complete list. The firmware also searches these SD directories when launching:
 
 ```text
 /sd/MiaOS/Games/lava_pal.app/
@@ -70,8 +72,8 @@ these directories (firmware `chdir`s into it before launching):
 /sd/lava_pal/
 ```
 
-Required files: `PAT.MKF`, `DATA.MKF`, plus the rest of the standard SDLPAL
-resource set (`FBP.MKF`, `MGO.MKF`, `MAP.MKF`, `RNG.MKF`, `GOP.MKF`, ...).
+Missing copyrighted files produce packaging warnings and are skipped instead
+of aborting the ZIP build.
 Saved games are read from / written to the same directory (`1.rpg`–`5.rpg`).
 
 ## Disabled subsystems

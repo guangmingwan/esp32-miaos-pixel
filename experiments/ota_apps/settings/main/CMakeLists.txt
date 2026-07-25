@@ -1,29 +1,18 @@
 idf_component_register(
     SRCS
         "app_main.c"
-        "usb_wifi_main.c"
-        "usb_wifi_i18n.c"
+        "settings_main.c"
+        "settings_i18n.c"
         "../../common_host/host_platform.cpp"
         "../../common_host/display_host.cpp"
+        "../../common_host/lava_font_renderer.cpp"
         "../../common_host/mia_text_runtime.cpp"
+        "../../../../src/fonts/basic8x8.c"
+        "../../../../src/fonts/dejavu_12.c"
+        "../../../../src/fonts/dejavu_15.c"
+        "../../../../src/fonts/vera_bold_11.c"
+        "../../../../src/fonts/vera_bold_14.c"
     PRIV_REQUIRES
-        app_update
-        driver
-        esp_driver_gpio
-        esp_driver_i2c
-        esp_driver_i2s
-        esp_driver_sdspi
-        esp_driver_spi
-        esp_event
-        esp_http_server
-        esp_netif
-        esp_partition
-        esp_rom
-        esp_timer
-        esp_wifi
-        fatfs
-        nvs_flash
-        sdmmc
         elf_loader
     INCLUDE_DIRS
         "."
@@ -33,5 +22,6 @@ idf_component_register(
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     MIA_DISPLAY_DROID_GBK_SHARED=1
+    MIA_DISPLAY_MULTI_FONT=1
     MIA_HC165_ACTIVE_HIGH=1
 )

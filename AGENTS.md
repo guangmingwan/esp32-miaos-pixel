@@ -26,8 +26,9 @@
   python tools/append_manifest.py --input experiments/ota_apps/hello/build/hello.bin --category Application --name hello
   cp experiments/ota_apps/hello/build/hello.bin /sd/Application/hello.app/hello.bin
   ```
+- When determining an OTA app's actual build environment or output path, inspect the app's existing `build*/CMakeCache.txt` first. Use cached values such as `esp-idf_SOURCE_DIR`, `PYTHON`, compiler paths, and the build directory to identify the IDF/Python/toolchain that produced it; do not guess from the current shell's default `idf.py`.
 - Before flashing any `experiments/ota_apps/<name>` binary to `ota_1` or copying it to SD, check its final 72-byte trailer and require a valid `MIA2` manifest with the expected category/name, image size/CRC, and trailer CRC. If the manifest is missing or invalid, run `tools/append_manifest.py` first; never flash a raw OTA app build output.
-- Build all OTA apps: `idf.py build -C experiments/ota_apps/<calculator|minesweeper|rtc_set|sd_browser|diagnostic|screen_test|flashlight|timer|wifi_scan|wifi_files|ftp_server|music>`; after each build, append manifest and copy the `.bin` to `/<category>/<name>.app/<name>.bin`.
+- Build all OTA apps: `idf.py build -C experiments/ota_apps/<calculator|minesweeper|settings|sd_browser|diagnostic|screen_test|flashlight|timer|wifi_scan|wifi_files|ftp_server|music>`; after each build, append manifest and copy the `.bin` to `/<category>/<name>.app/<name>.bin`.
 - There is no repo-specific lint, formatter, or unit-test command configured; use a focused `pio run -e ...` for verification.
 - Do not start background serial monitors or tmux serial listeners. When serial logs are needed, use a foreground, time-bounded capture command and report the captured output.
 

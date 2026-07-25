@@ -1,0 +1,65 @@
+#include "settings_i18n.h"
+
+#include "mia_host_abi.h"
+
+static const SettingsText EN = {
+    .title = "Settings",
+    .language = "Language",
+    .font = "Font",
+    .date_time = "Date & Time",
+    .brightness = "Brightness",
+    .volume = "Volume",
+    .key_beep = "Key Beep",
+    .enabled = "On",
+    .disabled = "Off",
+    .english = "English",
+    .chinese = "Chinese",
+    .saved = "Saved",
+    .save_failed = "Save failed",
+    .restart_hint = "Saved; applies after restart",
+    .rtc_read_failed = "RTC unavailable",
+    .main_controls = "UP/DN:Select  LT/RT/A:Change",
+    .main_exit = "SEL+ST:Exit",
+    .date_title = "Date & Time",
+    .year = "Year",
+    .month = "Month",
+    .day = "Day",
+    .hour = "Hour",
+    .minute = "Minute",
+    .second = "Second",
+    .date_controls = "UP/DN:Field  LT/RT:Value",
+    .date_save = "A:Save  B:Back",
+};
+
+static const SettingsText ZH = {
+    .title = "系统设置",
+    .language = "语言",
+    .font = "字体",
+    .date_time = "日期和时间",
+    .brightness = "亮度",
+    .volume = "音量",
+    .key_beep = "按键音",
+    .enabled = "开",
+    .disabled = "关",
+    .english = "English",
+    .chinese = "Chinese",
+    .saved = "已保存",
+    .save_failed = "保存失败",
+    .restart_hint = "已保存，重启后应用",
+    .rtc_read_failed = "RTC 不可用",
+    .main_controls = "上/下:选择 左/右/A:修改",
+    .main_exit = "SEL+ST:退出",
+    .date_title = "日期和时间",
+    .year = "年",
+    .month = "月",
+    .day = "日",
+    .hour = "时",
+    .minute = "分",
+    .second = "秒",
+    .date_controls = "上/下:字段 左/右:调整",
+    .date_save = "A:保存 B:返回",
+};
+
+const SettingsText *settings_text(uint8_t language) {
+    return language == 1 ? &ZH : &EN;
+}

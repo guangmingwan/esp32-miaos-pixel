@@ -64,6 +64,7 @@ constexpr gpio_num_t I2S_WS_PIN = GPIO_NUM_42;
 constexpr gpio_num_t I2S_BCK_PIN = GPIO_NUM_41;
 constexpr gpio_num_t I2S_DATA_PIN = GPIO_NUM_40;
 constexpr gpio_num_t AMP_CTRL_PIN = GPIO_NUM_46;
+constexpr gpio_num_t BEEP_PIN = GPIO_NUM_14;
 
 constexpr gpio_num_t KEY_BOOT_PIN = GPIO_NUM_0;
 constexpr gpio_num_t KEY_M_PIN = GPIO_NUM_8;
@@ -131,6 +132,9 @@ static bool g_sd_ready = false;
 static sdmmc_card_t *g_card = nullptr;
 static AudioStatus g_audio = {};
 static int16_t g_stereo_scratch[2304 * 2] = {};
+static uint8_t g_brightness = 80;
+static uint8_t g_volume = 70;
+static bool g_key_beep = true;
 
 static void delay_us(uint32_t us) { esp_rom_delay_us(us); }
 
@@ -161,6 +165,7 @@ static void scan_hc165() {
 
 static void update_buttons() {
   scan_hc165();
+  bool any_down = false;
   for (size_t i = 0; i < 14; ++i) {
     bool down;
     if (BUTTONS[i].direct) {
@@ -176,7 +181,9 @@ static void update_buttons() {
     g_buttons[i].pressed = down && !g_last_buttons[i];
     g_buttons[i].released = !down && g_last_buttons[i];
     g_last_buttons[i] = down;
+    any_down = any_down || down;
   }
+  gpio_set_level(BEEP_PIN, g_key_beep && any_down ? 1 : 0);
 }
 
 static esp_err_t mount_sd_card() {
@@ -271,21 +278,41 @@ static bool audio_install(uint32_t sample_rate, uint8_t channels, uint8_t bits_p
 }
 
 static const int16_t *expand_frames(const int16_t *samples, uint32_t frame_count,
-                                    uint8_t channels, uint32_t *expanded_frames) {
-  if (channels == 2) {
+                                     uint8_t channels, uint32_t *expanded_frames) {
+  if (channels == 2 && g_volume == 100) {
     *expanded_frames = frame_count;
     return samples;
   }
-  if (channels != 1 || frame_count > 2304) {
+  if ((channels != 1 && channels != 2) || frame_count > 2304) {
     *expanded_frames = 0;
     return nullptr;
   }
   for (uint32_t i = 0; i < frame_count; ++i) {
-    g_stereo_scratch[i * 2] = samples[i];
-    g_stereo_scratch[i * 2 + 1] = samples[i];
+    const int32_t left = channels == 1 ? samples[i] : samples[i * 2];
+    const int32_t right = channels == 1 ? samples[i] : samples[i * 2 + 1];
+    g_stereo_scratch[i * 2] = (int16_t)(left * g_volume / 100);
+    g_stereo_scratch[i * 2 + 1] = (int16_t)(right * g_volume / 100);
   }
   *expanded_frames = frame_count;
   return g_stereo_scratch;
+}
+
+static uint8_t load_system_value(const char *key, uint8_t fallback, uint8_t maximum) {
+  nvs_handle_t store;
+  if (nvs_open("mia-system", NVS_READONLY, &store) != ESP_OK) return fallback;
+  uint8_t value = fallback;
+  const esp_err_t err = nvs_get_u8(store, key, &value);
+  nvs_close(store);
+  return err == ESP_OK && value <= maximum ? value : fallback;
+}
+
+static bool save_system_value(const char *key, uint8_t value) {
+  nvs_handle_t store;
+  if (nvs_open("mia-system", NVS_READWRITE, &store) != ESP_OK) return false;
+  esp_err_t err = nvs_set_u8(store, key, value);
+  if (err == ESP_OK) err = nvs_commit(store);
+  nvs_close(store);
+  return err == ESP_OK;
 }
 
 }
@@ -375,12 +402,15 @@ static void wifi_get_ip(char *buf, size_t len, bool ap) {
 }
 
 static bool load_wifi_config(char *ssid, size_t ssid_sz, char *password,
-                             size_t pass_sz, char *ap_ssid, size_t ap_ssid_sz) {
+                             size_t pass_sz, char *ap_ssid, size_t ap_ssid_sz,
+                             char *ap_password, size_t ap_pass_sz) {
   FILE *f = fopen("/sd/wifi.txt", "r");
   if (f == nullptr) {
     return false;
   }
   char line[128];
+  bool station_seen = false;
+  bool active_station_pair = false;
   while (fgets(line, sizeof(line), f)) {
     char *eq = strchr(line, '=');
     if (eq == nullptr) {
@@ -395,11 +425,16 @@ static bool load_wifi_config(char *ssid, size_t ssid_sz, char *password,
       --vlen;
     }
 
-    if (strcmp(key, "ssid") == 0 && vlen > 0) {
-      size_t copy = vlen < ssid_sz - 1 ? vlen : ssid_sz - 1;
-      memcpy(ssid, val, copy);
-      ssid[copy] = '\0';
-    } else if (strcmp(key, "password") == 0 && vlen > 0) {
+    if (strcmp(key, "ssid") == 0) {
+      active_station_pair = !station_seen;
+      if (active_station_pair) {
+        size_t copy = vlen < ssid_sz - 1 ? vlen : ssid_sz - 1;
+        memcpy(ssid, val, copy);
+        ssid[copy] = '\0';
+        password[0] = '\0';
+        station_seen = true;
+      }
+    } else if (strcmp(key, "password") == 0 && active_station_pair) {
       size_t copy = vlen < pass_sz - 1 ? vlen : pass_sz - 1;
       memcpy(password, val, copy);
       password[copy] = '\0';
@@ -407,6 +442,10 @@ static bool load_wifi_config(char *ssid, size_t ssid_sz, char *password,
       size_t copy = vlen < ap_ssid_sz - 1 ? vlen : ap_ssid_sz - 1;
       memcpy(ap_ssid, val, copy);
       ap_ssid[copy] = '\0';
+    } else if (strcmp(key, "ap_password") == 0) {
+      size_t copy = vlen < ap_pass_sz - 1 ? vlen : ap_pass_sz - 1;
+      memcpy(ap_password, val, copy);
+      ap_password[copy] = '\0';
     }
   }
   fclose(f);
@@ -459,10 +498,17 @@ extern "C" esp_err_t host_platform_init(void) {
   if (nvs_err != ESP_OK && nvs_err != ESP_ERR_NVS_NOT_INITIALIZED) {
     ESP_LOGE(TAG, "nvs_flash_init failed: %d", nvs_err);
   }
+  g_brightness = load_system_value("bright", 80, 100);
+  if (g_brightness < 10) g_brightness = 80;
+  g_volume = load_system_value("volume", 70, 100);
+  g_key_beep = load_system_value("keybeep", 1, 1) != 0;
 
   gpio_reset_pin(AMP_CTRL_PIN);
   gpio_set_direction(AMP_CTRL_PIN, GPIO_MODE_OUTPUT);
   gpio_set_level(AMP_CTRL_PIN, 0);
+  gpio_reset_pin(BEEP_PIN);
+  gpio_set_direction(BEEP_PIN, GPIO_MODE_OUTPUT);
+  gpio_set_level(BEEP_PIN, 0);
 
   gpio_reset_pin(HC165_PL_PIN);
   gpio_set_direction(HC165_PL_PIN, GPIO_MODE_OUTPUT);
@@ -513,6 +559,7 @@ extern "C" esp_err_t host_platform_init(void) {
   if (!display_host_init()) {
     return ESP_FAIL;
   }
+  display_host_brightness_set(g_brightness);
 #ifndef MIA_DISPLAY_DROID_GBK_SHARED
   ESP_ERROR_CHECK(mount_sd_card());
 #endif
@@ -572,7 +619,73 @@ extern "C" uint8_t mia_host_language(void) {
   return language == 1 ? 1 : 0;
 }
 
+extern "C" uint8_t mia_host_language_set(uint8_t language) {
+  if (language > 1) return 0;
+  nvs_handle_t store;
+  if (nvs_open("mia-i18n", NVS_READWRITE, &store) != ESP_OK) return 0;
+  esp_err_t err = nvs_set_u8(store, "lang", language);
+  if (err == ESP_OK) err = nvs_commit(store);
+  nvs_close(store);
+  return err == ESP_OK ? 1 : 0;
+}
+
+extern "C" uint8_t mia_host_font_get(void) {
+  nvs_handle_t store;
+  if (nvs_open("lava-text", NVS_READONLY, &store) != ESP_OK) return 1;
+  uint8_t font = 1;
+  if (nvs_get_u8(store, "font", &font) != ESP_OK || font >= 9) font = 1;
+  nvs_close(store);
+  return font;
+}
+
+extern "C" uint8_t mia_host_font_set(uint8_t font) {
+  if (font >= 9) return 0;
+  nvs_handle_t store;
+  if (nvs_open("lava-text", NVS_READWRITE, &store) != ESP_OK) return 0;
+  esp_err_t err = nvs_set_u8(store, "font", font);
+  if (err == ESP_OK) err = nvs_commit(store);
+  nvs_close(store);
+  if (err == ESP_OK) display_host_font_set(font);
+  return err == ESP_OK ? 1 : 0;
+}
+
+extern "C" uint8_t mia_host_font_count(void) { return 9; }
+
+extern "C" const char *mia_host_font_name(uint8_t font) {
+  static const char *const names[] = {
+      "5x7 ASCII", "Basic 8", "Basic 12", "Basic 16", "DejaVu 12",
+      "DejaVu 15", "Vera Bold 11", "Vera Bold 14", "Droid GBK 12",
+  };
+  return font < sizeof(names) / sizeof(names[0]) ? names[font] : "?";
+}
+
 extern "C" void mia_host_backlight_set(uint8_t enabled) { display_host_backlight_set(enabled); }
+
+extern "C" uint8_t mia_host_brightness_get(void) { return g_brightness; }
+
+extern "C" uint8_t mia_host_brightness_set(uint8_t brightness) {
+  if (brightness < 10 || brightness > 100 || !save_system_value("bright", brightness)) return 0;
+  g_brightness = brightness;
+  display_host_brightness_set(brightness);
+  return 1;
+}
+
+extern "C" uint8_t mia_host_volume_get(void) { return g_volume; }
+
+extern "C" uint8_t mia_host_volume_set(uint8_t volume) {
+  if (volume > 100 || !save_system_value("volume", volume)) return 0;
+  g_volume = volume;
+  return 1;
+}
+
+extern "C" uint8_t mia_host_key_beep_get(void) { return g_key_beep ? 1 : 0; }
+
+extern "C" uint8_t mia_host_key_beep_set(uint8_t enabled) {
+  if (!save_system_value("keybeep", enabled ? 1 : 0)) return 0;
+  g_key_beep = enabled != 0;
+  if (!g_key_beep) gpio_set_level(BEEP_PIN, 0);
+  return 1;
+}
 
 extern "C" int32_t mia_host_sd_list_dir(const char *path, MiaHostDirEntry *entries, uint32_t capacity) {
   char vfs_path[1024];
@@ -1283,8 +1396,10 @@ extern "C" uint8_t mia_host_wifi_files_start(void) {
   char station_ssid[64] = {};
   char station_pass[64] = {};
   char ap_ssid[32] = {};
+  char ap_password[64] = {};
   load_wifi_config(station_ssid, sizeof(station_ssid), station_pass,
-                   sizeof(station_pass), ap_ssid, sizeof(ap_ssid));
+                   sizeof(station_pass), ap_ssid, sizeof(ap_ssid), ap_password,
+                   sizeof(ap_password));
 
   if (ap_ssid[0] == '\0') {
     strcpy(ap_ssid, "MiaOS");
@@ -1322,7 +1437,7 @@ extern "C" uint8_t mia_host_wifi_files_start(void) {
     s_wf_ap_mode = true;
     strcpy(s_wf_ssid, ap_ssid);
     ESP_LOGI(WF_TAG, "starting AP %s", ap_ssid);
-    if (wifi_start_ap(ap_ssid, nullptr) != ESP_OK) {
+    if (wifi_start_ap(ap_ssid, ap_password) != ESP_OK) {
       strcpy(s_wf_status, "WiFi fail");
       return 0;
     }

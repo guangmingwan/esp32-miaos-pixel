@@ -7,8 +7,9 @@ static const DiagnosticText DG_EN = {
     .tft_ok = "TFT OK",
     .sd_ok = "SD OK",
     .ota_ok = "OTA OK",
+    .rtc_ok = "RTC OK",
     .btn = "BTN",
-    .exit_hint = "Hold SEL+ST to exit",
+    .exit_hint = "Yellow:down Green:seen  SEL+ST:Exit",
     .boot_note = "BOOT and ST mirror GPIO0",
 };
 
@@ -17,8 +18,9 @@ static const DiagnosticText DG_ZH = {
     .tft_ok = "屏正常",
     .sd_ok = "SD正常",
     .ota_ok = "OTA正常",
+    .rtc_ok = "RTC正常",
     .btn = "按键",
-    .exit_hint = "按住 SEL+ST 退出",
+    .exit_hint = "黄色:按下 绿色:已检测 SEL+ST:退出",
     .boot_note = "BOOT 和 ST 映射 GPIO0",
 };
 

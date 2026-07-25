@@ -14,4 +14,7 @@ idf_component_register(
         "../../../../include"
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE MIA_DISPLAY_DROID_GBK_SHARED=1)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    MIA_DISPLAY_DROID_GBK_SHARED=1
+    MIA_HC165_ACTIVE_HIGH=1
+)

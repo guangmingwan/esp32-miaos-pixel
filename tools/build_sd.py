@@ -30,6 +30,8 @@ class App:
     category: str
     source: str | None = None
     data_files: tuple[tuple[str, str], ...] = ()
+    resource_dir: str | None = None
+    copyrighted_resource_groups: tuple[tuple[str, ...], ...] = ()
 
     @property
     def project_dir(self) -> Path:
@@ -50,6 +52,13 @@ class App:
         return f"MiaOS/{self.category}/{self.name}.app"
 
 
+LAVAPAL_COPYRIGHTED_RESOURCES = tuple((name,) for name in (
+    "ABC.MKF", "BALL.MKF", "DATA.MKF", "F.MKF", "FBP.MKF", "FIRE.MKF",
+    "GOP.MKF", "MAP.MKF", "MGO.MKF", "PAT.MKF", "RGM.MKF", "RNG.MKF",
+    "SSS.MKF", "MUS.MKF",
+)) + (("VOC.MKF", "SOUNDS.MKF"),)
+
+
 APPS = (
     App("hello", "Application"),
     App("coleco", "Emulators"),
@@ -67,11 +76,13 @@ APPS = (
     App("snes", "Emulators"),
     App("lava_cch", "Games", data_files=((
         "experiments/ota_apps/lava_cch/LavaData/BOOK.DAT", "LavaData/BOOK.DAT"),)),
-    App("lava_pal", "Games", "experiments/ota_apps/lavapal/build/lava_pal.bin"),
+    App("lava_pal", "Games", "experiments/ota_apps/lavapal/build/lava_pal.bin",
+        resource_dir="experiments/ota_apps/lavapal/resource",
+        copyrighted_resource_groups=LAVAPAL_COPYRIGHTED_RESOURCES),
     App("minesweeper", "Games"),
     App("gmu", "Media"),
     App("music", "Media"),
-    App("rtc_set", "Settings"),
+    App("settings", "Settings"),
     App("usb disk", "System", ".pio/build/esp32s3-usbmsc/firmware.bin"),
     App("usb_wifi", "System"),
     App("calculator", "Utils"),
@@ -168,6 +179,24 @@ def create_archive(output: Path, build_epoch: int) -> tuple[int, int]:
                     archive.writestr(zip_info(archive_path, build_epoch), file_data)
                     print(f"Packed {archive_path} ({len(file_data)} bytes)")
                     packed += 1
+                if app.resource_dir:
+                    resource_dir = ROOT / app.resource_dir
+                    for alternatives in app.copyrighted_resource_groups:
+                        if not any((resource_dir / name).is_file() for name in alternatives):
+                            names = " or ".join(alternatives)
+                            print(f"Warning: missing copyrighted resource for {app.name}: "
+                                  f"{names}; skipped")
+                            skipped += 1
+                    if resource_dir.is_dir():
+                        for source_path in sorted(resource_dir.rglob("*")):
+                            if not source_path.is_file():
+                                continue
+                            relative_path = source_path.relative_to(resource_dir).as_posix()
+                            archive_path = f"{app.archive_dir}/{relative_path}"
+                            file_data = source_path.read_bytes()
+                            archive.writestr(zip_info(archive_path, build_epoch), file_data)
+                            print(f"Packed {archive_path} ({len(file_data)} bytes)")
+                            packed += 1
         temporary.replace(output)
     except Exception:
         temporary.unlink(missing_ok=True)

@@ -43,7 +43,7 @@ idf_component_register(
         "../../common_host"
         "../../../../include"
         "../third_party"
-    REQUIRES app_update esp_partition driver fatfs sdmmc nvs_flash esp_timer
+    REQUIRES app_update esp_partition spi_flash driver fatfs sdmmc nvs_flash esp_timer
         esp_event esp_netif esp_wifi esp_http_server esp_adc esp_driver_spi
         esp_driver_i2s esp_driver_i2c elf_loader
 )

@@ -37,7 +37,18 @@ uint8_t mia_host_button_released(uint8_t button);
 void mia_host_delay_ms(uint32_t ms);
 uint32_t mia_host_millis(void);
 uint8_t mia_host_language(void);
+uint8_t mia_host_language_set(uint8_t language);
+uint8_t mia_host_font_get(void);
+uint8_t mia_host_font_set(uint8_t font);
+uint8_t mia_host_font_count(void);
+const char *mia_host_font_name(uint8_t font);
 void mia_host_backlight_set(uint8_t enabled);
+uint8_t mia_host_brightness_get(void);
+uint8_t mia_host_brightness_set(uint8_t brightness);
+uint8_t mia_host_volume_get(void);
+uint8_t mia_host_volume_set(uint8_t volume);
+uint8_t mia_host_key_beep_get(void);
+uint8_t mia_host_key_beep_set(uint8_t enabled);
 
 typedef struct MiaHostDateTime {
   uint16_t year;

@@ -11,6 +11,7 @@
 #include "lava_text.h"
 #include "mia_i18n.h"
 #include "pins.h"
+#include "system_settings.h"
 #include "rtc_clock.h"
 
 extern ButtonState g_allButtons[];
@@ -121,10 +122,57 @@ uint8_t mia_host_language(void) {
   return miaLanguage() == MiaLanguage::Chinese ? 1 : 0;
 }
 
-void mia_host_backlight_set(uint8_t enabled) {
-  if (TFT_BL_PIN >= 0) {
-    digitalWrite(TFT_BL_PIN, enabled ? LOW : HIGH);
+uint8_t mia_host_language_set(uint8_t language) {
+  if (language > static_cast<uint8_t>(MiaLanguage::Chinese)) {
+    return 0;
   }
+  miaSetLanguage(static_cast<MiaLanguage>(language));
+  return 1;
+}
+
+uint8_t mia_host_font_get(void) {
+  return static_cast<uint8_t>(lavaFontFace());
+}
+
+uint8_t mia_host_font_set(uint8_t font) {
+  if (font > static_cast<uint8_t>(LavaFontFace::DroidGbk12)) {
+    return 0;
+  }
+  lavaSetFontFace(static_cast<LavaFontFace>(font));
+  return 1;
+}
+
+uint8_t mia_host_font_count(void) {
+  return static_cast<uint8_t>(LavaFontFace::DroidGbk12) + 1;
+}
+
+const char *mia_host_font_name(uint8_t font) {
+  if (font >= mia_host_font_count()) {
+    return "?";
+  }
+  return lavaFontName(static_cast<LavaFontFace>(font));
+}
+
+void mia_host_backlight_set(uint8_t enabled) {
+  miaSystemSetBacklightEnabled(enabled != 0);
+}
+
+uint8_t mia_host_brightness_get(void) { return miaSystemBrightness(); }
+
+uint8_t mia_host_brightness_set(uint8_t brightness) {
+  return miaSystemSetBrightness(brightness) ? 1 : 0;
+}
+
+uint8_t mia_host_volume_get(void) { return miaSystemVolume(); }
+
+uint8_t mia_host_volume_set(uint8_t volume) {
+  return miaSystemSetVolume(volume) ? 1 : 0;
+}
+
+uint8_t mia_host_key_beep_get(void) { return miaSystemKeyBeep() ? 1 : 0; }
+
+uint8_t mia_host_key_beep_set(uint8_t enabled) {
+  return miaSystemSetKeyBeep(enabled != 0) ? 1 : 0;
 }
 
 static void copyRtcToHost(const RtcDateTime &src, MiaHostDateTime *dest) {

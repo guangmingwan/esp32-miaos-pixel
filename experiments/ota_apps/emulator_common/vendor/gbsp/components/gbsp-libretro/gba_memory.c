@@ -2274,7 +2274,7 @@ void init_memory(void)
   memset(io_registers, 0, sizeof(io_registers));
   memset(oam_ram, 0, sizeof(oam_ram));
   memset(palette_ram, 0, sizeof(palette_ram));
-  memset(iwram, 0, sizeof(iwram));
+  memset(iwram, 0, GBSP_IWRAM_SIZE);
   memset(ewram, 0, sizeof(ewram));
   memset(vram, 0, sizeof(vram));
 

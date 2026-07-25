@@ -7,6 +7,7 @@
 #ifndef MIA_DISPLAY_HOST_NATIVE_TEST
 
 #include <driver/gpio.h>
+#include <driver/ledc.h>
 #include <driver/spi_master.h>
 #include <esp_attr.h>
 #include <esp_heap_caps.h>
@@ -20,6 +21,9 @@
 #include "droid_gbk_renderer.h"
 #elif defined(MIA_DISPLAY_DROID_GBK_SHARED)
 #include "mia_text_runtime.h"
+#endif
+#ifdef MIA_DISPLAY_MULTI_FONT
+#include "lava_font_renderer.h"
 #endif
 #endif
 
@@ -71,6 +75,10 @@ namespace {
 
 constexpr int SCREEN_W = 320;
 constexpr int SCREEN_H = 240;
+constexpr ledc_mode_t BACKLIGHT_SPEED_MODE = LEDC_LOW_SPEED_MODE;
+constexpr ledc_channel_t BACKLIGHT_CHANNEL = LEDC_CHANNEL_7;
+constexpr ledc_timer_t BACKLIGHT_TIMER = LEDC_TIMER_0;
+constexpr uint32_t BACKLIGHT_MAX_DUTY = 255;
 #ifndef MIA_DISPLAY_PRESENT_ROWS
 #define MIA_DISPLAY_PRESENT_ROWS 8
 #endif
@@ -100,6 +108,9 @@ DMA_ATTR static uint16_t g_async_chunk[PRESENT_PIXELS];
 static Color g_palette[256];
 #if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
 static bool g_use_droid_gbk = false;
+#endif
+#ifdef MIA_DISPLAY_MULTI_FONT
+static uint8_t g_font_face = 0;
 #endif
 
 static const uint8_t FONT[][5] = {
@@ -201,6 +212,37 @@ static int32_t write_rgb565_chunk(uint32_t y, uint32_t rows, const uint16_t *wir
   return MIA_HOST_RESULT_OK;
 }
 
+static bool g_backlight_pwm_ready = false;
+static bool g_backlight_enabled = true;
+static uint8_t g_backlight_brightness = 100;
+
+static void apply_backlight(void) {
+  if (!g_backlight_pwm_ready) {
+    ledc_timer_config_t timer = {};
+    timer.speed_mode = BACKLIGHT_SPEED_MODE;
+    timer.duty_resolution = LEDC_TIMER_8_BIT;
+    timer.timer_num = BACKLIGHT_TIMER;
+    timer.freq_hz = 5000;
+    timer.clk_cfg = LEDC_AUTO_CLK;
+    if (ledc_timer_config(&timer) != ESP_OK) return;
+
+    ledc_channel_config_t channel = {};
+    channel.gpio_num = LCD_BL_PIN;
+    channel.speed_mode = BACKLIGHT_SPEED_MODE;
+    channel.channel = BACKLIGHT_CHANNEL;
+    channel.intr_type = LEDC_INTR_DISABLE;
+    channel.timer_sel = BACKLIGHT_TIMER;
+    channel.duty = 0;
+    channel.hpoint = 0;
+    if (ledc_channel_config(&channel) != ESP_OK) return;
+    g_backlight_pwm_ready = true;
+  }
+  const uint32_t level = g_backlight_enabled ? g_backlight_brightness : 0;
+  const uint32_t duty = BACKLIGHT_MAX_DUTY - level * BACKLIGHT_MAX_DUTY / 100;
+  ledc_set_duty(BACKLIGHT_SPEED_MODE, BACKLIGHT_CHANNEL, duty);
+  ledc_update_duty(BACKLIGHT_SPEED_MODE, BACKLIGHT_CHANNEL);
+}
+
 }
 
 extern "C" int display_host_init(void) {
@@ -225,6 +267,10 @@ extern "C" int display_host_init(void) {
     return 1;
   }
 #if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
+#ifdef MIA_DISPLAY_MULTI_FONT
+  g_font_face = mia_host_font_get();
+  g_use_droid_gbk = g_font_face == 8;
+#else
   g_use_droid_gbk = mia_host_language() == 1;
   nvs_handle_t font_store;
   if (nvs_open("lava-text", NVS_READONLY, &font_store) == ESP_OK) {
@@ -232,6 +278,7 @@ extern "C" int display_host_init(void) {
     if (nvs_get_u8(font_store, "font", &font) == ESP_OK && font == 8) g_use_droid_gbk = true;
     nvs_close(font_store);
   }
+#endif
 #ifdef MIA_DISPLAY_DROID_GBK_SHARED
   if (g_use_droid_gbk && !mia_text_runtime_init()) g_use_droid_gbk = false;
 #endif
@@ -313,7 +360,15 @@ extern "C" int display_host_init(void) {
 extern "C" int display_host_ready(void) { return g_ready ? 1 : 0; }
 extern "C" int32_t display_host_width(void) { return SCREEN_W; }
 extern "C" int32_t display_host_height(void) { return SCREEN_H; }
-extern "C" void display_host_backlight_set(uint8_t enabled) { gpio_set_level(LCD_BL_PIN, enabled ? 0 : 1); }
+extern "C" void display_host_backlight_set(uint8_t enabled) {
+  g_backlight_enabled = enabled != 0;
+  apply_backlight();
+}
+
+extern "C" void display_host_brightness_set(uint8_t brightness) {
+  g_backlight_brightness = brightness < 10 ? 10 : (brightness > 100 ? 100 : brightness);
+  apply_backlight();
+}
 
 extern "C" void display_host_clear(uint8_t color) {
   if (g_pixels != nullptr) {
@@ -388,6 +443,13 @@ extern "C" void display_host_draw_text(int32_t x, int32_t y, const char *text, u
   if (text == nullptr) {
     return;
   }
+#ifdef MIA_DISPLAY_MULTI_FONT
+  if (g_font_face >= 1 && g_font_face <= 7 &&
+      lava_font_renderer_draw_text(g_pixels, SCREEN_W, SCREEN_H, x, y, text,
+                                   fg, bg, g_font_face) >= 0) {
+    return;
+  }
+#endif
 #if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
   if (g_use_droid_gbk) {
 #ifdef MIA_DISPLAY_DROID_GBK_SHARED
@@ -409,6 +471,11 @@ extern "C" void display_host_draw_text(int32_t x, int32_t y, const char *text, u
 }
 
 extern "C" int32_t display_host_text_height(void) {
+#ifdef MIA_DISPLAY_MULTI_FONT
+  if (g_font_face >= 1 && g_font_face <= 7) {
+    return lava_font_renderer_text_height(g_font_face);
+  }
+#endif
 #if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
   if (g_use_droid_gbk) return 16;
 #endif
@@ -417,6 +484,12 @@ extern "C" int32_t display_host_text_height(void) {
 
 extern "C" int32_t display_host_text_width(const char *text) {
   if (text == nullptr) return 0;
+#ifdef MIA_DISPLAY_MULTI_FONT
+  if (g_font_face >= 1 && g_font_face <= 7) {
+    return lava_font_renderer_draw_text(g_pixels, SCREEN_W, SCREEN_H, SCREEN_W,
+                                        SCREEN_H, text, 0, 0, g_font_face);
+  }
+#endif
 #if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
   if (g_use_droid_gbk) {
 #ifdef MIA_DISPLAY_DROID_GBK_SHARED
@@ -430,6 +503,20 @@ extern "C" int32_t display_host_text_width(const char *text) {
   }
 #endif
   return (int32_t)strlen(text) * 6;
+}
+
+extern "C" void display_host_font_set(uint8_t font) {
+#ifdef MIA_DISPLAY_MULTI_FONT
+  g_font_face = font;
+#endif
+#if defined(MIA_DISPLAY_DROID_GBK) || defined(MIA_DISPLAY_DROID_GBK_SHARED)
+  g_use_droid_gbk = font == 8;
+#ifdef MIA_DISPLAY_DROID_GBK_SHARED
+  if (g_use_droid_gbk && !mia_text_runtime_init()) g_use_droid_gbk = false;
+#endif
+#else
+  (void)font;
+#endif
 }
 
 extern "C" void display_host_present(void) {

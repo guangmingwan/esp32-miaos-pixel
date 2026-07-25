@@ -86,6 +86,10 @@ typedef struct {
     /* Saved credentials */
     SavedCred saved[MAX_SAVED];
     int32_t saved_count;
+    char ap_ssid[33];
+    char ap_password[PASS_MAXLEN + 1];
+    bool has_ap_ssid;
+    bool has_ap_password;
     /* Bridge runtime */
     bool usb_ready;
     bool wifi_started;
@@ -261,6 +265,12 @@ static void load_all_credentials(void) {
             snprintf(pending.ssid, sizeof(pending.ssid), "%s", val);
         } else if (strcmp(key, "password") == 0 && pending.ssid[0] != '\0') {
             snprintf(pending.password, sizeof(pending.password), "%s", val);
+        } else if (strcmp(key, "ap_ssid") == 0) {
+            snprintf(g.ap_ssid, sizeof(g.ap_ssid), "%s", val);
+            g.has_ap_ssid = true;
+        } else if (strcmp(key, "ap_password") == 0) {
+            snprintf(g.ap_password, sizeof(g.ap_password), "%s", val);
+            g.has_ap_password = true;
         }
     }
     if (pending.ssid[0] != '\0' && g.saved_count < MAX_SAVED) {
@@ -279,6 +289,8 @@ static void save_all_credentials(void) {
         fprintf(f, "ssid=%s\n", g.saved[i].ssid);
         fprintf(f, "password=%s\n", g.saved[i].password);
     }
+    if (g.has_ap_ssid) fprintf(f, "ap_ssid=%s\n", g.ap_ssid);
+    if (g.has_ap_password) fprintf(f, "ap_password=%s\n", g.ap_password);
     fclose(f);
     ESP_LOGI(TAG, "Saved %ld credentials", (long)g.saved_count);
 }

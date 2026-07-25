@@ -98,7 +98,7 @@ Launcher 当前只扫描 `/MiaOS` 下的一级分类目录。分类名是动态�
 | `Emulators` | `coleco`, `gb`, `gba`, `gbc`, `gg`, `gw`, `lynx`, `megadrive`, `msx`, `nes`, `pce`, `sms`, `snes` |
 | `Games` | `lava_cch`, `lava_pal`, `minesweeper` |
 | `Media` | `gmu`（MP3 / MP2）, `music`（MP3 / WAV / FLAC / OGG） |
-| `Settings` | `rtc_set` |
+| `Settings` | `settings`（语言、字体、亮度、音量、按键音、日期时间） |
 | `System` | `usb disk`, `usb_wifi` |
 | `Utils` | `calculator`, `flashlight`, `wifi_scan`, `diagnostic`, `ftp_server`, `screen_test`, `sd_browser`, `timer`, `wifi_files` |
 
