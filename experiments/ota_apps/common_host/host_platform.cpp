@@ -134,7 +134,56 @@ static AudioStatus g_audio = {};
 static int16_t g_stereo_scratch[2304 * 2] = {};
 static uint8_t g_brightness = 80;
 static uint8_t g_volume = 70;
+static uint8_t g_idle_timeout_minutes = 0;
 static bool g_key_beep = true;
+static bool g_idle_dimmed = false;
+static bool g_idle_off = false;
+static uint32_t g_last_activity_ms = 0;
+
+static uint32_t host_millis_now() {
+  return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
+static bool valid_idle_timeout(uint8_t minutes) {
+  return minutes == 0 || minutes == 1 || minutes == 5 || minutes == 10 || minutes == 30;
+}
+
+static void apply_idle_backlight() {
+  uint8_t brightness = g_brightness;
+  if (g_idle_dimmed) {
+    brightness = g_brightness / 4;
+    if (brightness < 10) brightness = 10;
+  }
+  display_host_brightness_set(brightness);
+  display_host_backlight_set(g_idle_off ? 0 : 1);
+}
+
+static void update_idle_backlight(bool activity) {
+  const uint32_t now = host_millis_now();
+  if (activity) {
+    g_last_activity_ms = now;
+    if (g_idle_dimmed || g_idle_off) {
+      g_idle_dimmed = false;
+      g_idle_off = false;
+      apply_idle_backlight();
+    }
+    return;
+  }
+  if (g_idle_timeout_minutes == 0) return;
+
+  const uint32_t dim_after = (uint32_t)g_idle_timeout_minutes * 60UL * 1000UL;
+  const uint32_t idle = now - g_last_activity_ms;
+  if (idle >= dim_after * 2U) {
+    if (!g_idle_off) {
+      g_idle_dimmed = true;
+      g_idle_off = true;
+      apply_idle_backlight();
+    }
+  } else if (idle >= dim_after && !g_idle_dimmed) {
+    g_idle_dimmed = true;
+    apply_idle_backlight();
+  }
+}
 
 static void delay_us(uint32_t us) { esp_rom_delay_us(us); }
 
@@ -184,6 +233,11 @@ static void update_buttons() {
     any_down = any_down || down;
   }
   gpio_set_level(BEEP_PIN, g_key_beep && any_down ? 1 : 0);
+  bool activity = false;
+  for (size_t i = 0; i < 14; ++i) {
+    activity = activity || g_buttons[i].pressed || g_buttons[i].released;
+  }
+  update_idle_backlight(activity);
 }
 
 static esp_err_t mount_sd_card() {
@@ -318,8 +372,6 @@ static bool save_system_value(const char *key, uint8_t value) {
 }
 
 namespace {
-
-const char *WIFI_TAG = "host_wifi";
 
 static bool s_wifi_init_done = false;
 static bool s_wifi_started = false;
@@ -501,6 +553,8 @@ extern "C" esp_err_t host_platform_init(void) {
   g_brightness = load_system_value("bright", 80, 100);
   if (g_brightness < 10) g_brightness = 80;
   g_volume = load_system_value("volume", 70, 100);
+  g_idle_timeout_minutes = load_system_value("idle", 0, 30);
+  if (!valid_idle_timeout(g_idle_timeout_minutes)) g_idle_timeout_minutes = 0;
   g_key_beep = load_system_value("keybeep", 1, 1) != 0;
 
   gpio_reset_pin(AMP_CTRL_PIN);
@@ -560,6 +614,7 @@ extern "C" esp_err_t host_platform_init(void) {
     return ESP_FAIL;
   }
   display_host_brightness_set(g_brightness);
+  g_last_activity_ms = host_millis_now();
 #ifndef MIA_DISPLAY_DROID_GBK_SHARED
   ESP_ERROR_CHECK(mount_sd_card());
 #endif
@@ -666,7 +721,22 @@ extern "C" uint8_t mia_host_brightness_get(void) { return g_brightness; }
 extern "C" uint8_t mia_host_brightness_set(uint8_t brightness) {
   if (brightness < 10 || brightness > 100 || !save_system_value("bright", brightness)) return 0;
   g_brightness = brightness;
+  g_idle_dimmed = false;
+  g_idle_off = false;
+  g_last_activity_ms = host_millis_now();
   display_host_brightness_set(brightness);
+  return 1;
+}
+
+extern "C" uint8_t mia_host_idle_timeout_get(void) { return g_idle_timeout_minutes; }
+
+extern "C" uint8_t mia_host_idle_timeout_set(uint8_t minutes) {
+  if (!valid_idle_timeout(minutes) || !save_system_value("idle", minutes)) return 0;
+  g_idle_timeout_minutes = minutes;
+  g_idle_dimmed = false;
+  g_idle_off = false;
+  g_last_activity_ms = host_millis_now();
+  apply_idle_backlight();
   return 1;
 }
 
@@ -977,7 +1047,7 @@ extern "C" uint8_t mia_host_read_battery(MiaHostBatteryInfo *info) {
   static bool adc_initialized = false;
   if (!adc_initialized) {
     adc1_config_width(ADC_WIDTH_BIT_12);
-    adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_DB_11);
+    adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_DB_12);
     adc_initialized = true;
   }
 
@@ -1514,7 +1584,6 @@ static bool s_ftp_running = false;
 static char s_ftp_status[32] = "Stopped";
 static char s_ftp_ip[16] = {};
 static int s_ftp_ctrl_sock = -1;
-static int s_ftp_data_sock = -1;
 static int s_ftp_client_sock = -1;
 static int s_ftp_data_listen_sock = -1;
 

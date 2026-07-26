@@ -500,6 +500,13 @@ static void updateBeep() {
   digitalWrite(BEEP_PIN, miaSystemKeyBeep() && anyPressed ? HIGH : LOW);
 }
 
+static bool anyButtonActivity() {
+  for (size_t i = 0; i < ALL_BUTTON_COUNT; ++i) {
+    if (g_allButtons[i].pressed || g_allButtons[i].released) return true;
+  }
+  return false;
+}
+
 static const char *sdScanStatusText() {
   switch (g_sdScan.status) {
     case SdAppLoaderStatus::Ok:
@@ -1425,6 +1432,7 @@ void loop() {
 
   updateAllButtons();
   updateBeep();
+  miaSystemIdleTick(now, anyButtonActivity() || g_activeApp == &serialTransferApp());
 
   if (g_activeApp != nullptr) {
     if (systemExitPressed()) {

@@ -43,7 +43,6 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=address
     -Wno-error=array-bounds
-    -Wno-error=array-parameter
     -Wno-error=format
     -Wno-error=format-overflow
     -Wno-error=incompatible-pointer-types
@@ -53,3 +52,6 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=maybe-uninitialized
     -Wno-error=missing-braces
 )
+if (CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL "9")
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=array-parameter)
+endif()

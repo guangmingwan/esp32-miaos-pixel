@@ -1,2 +1,3 @@
 experiments/ota_apps/lavapal/resource/*.DAT binary
 experiments/ota_apps/lavapal/resource/*.MSG binary
+experiments/ota_apps/image_viewer/main/libwebp/** linguist-vendored whitespace=-blank-at-eof,-trailing-space

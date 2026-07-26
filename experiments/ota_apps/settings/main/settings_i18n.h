@@ -7,6 +7,7 @@ typedef struct {
     const char *language;
     const char *font;
     const char *date_time;
+    const char *idle_timeout;
     const char *brightness;
     const char *volume;
     const char *key_beep;
@@ -14,6 +15,8 @@ typedef struct {
     const char *disabled;
     const char *english;
     const char *chinese;
+    const char *never;
+    const char *minutes_suffix;
     const char *saved;
     const char *save_failed;
     const char *restart_hint;

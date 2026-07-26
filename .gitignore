@@ -55,3 +55,6 @@ __pycache__/
 # Project internals
 .omo/
 .codegraph
+
+# Device-local image viewer library
+experiments/ota_apps/image_viewer/images/

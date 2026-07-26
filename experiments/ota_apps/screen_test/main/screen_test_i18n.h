@@ -7,6 +7,9 @@ typedef struct {
   const char *pattern_blue;
   const char *pattern_white;
   const char *pattern_black;
+  const char *pattern_checker;
+  const char *pattern_gray_gradient;
+  const char *pattern_color_gradient;
   const char *exit_hint;
 } ScreenTestText;
 

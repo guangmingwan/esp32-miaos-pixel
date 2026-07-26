@@ -21,6 +21,7 @@ void display_host_font_set(uint8_t font);
 void display_host_present(void);
 int32_t display_host_present_rgb565(const uint16_t *pixels, uint32_t width,
                                     uint32_t height, uint32_t pitch_bytes);
+// A null background reuses the current screen snapshot.
 int32_t display_host_present_rgb565_overlay(const uint16_t *background,
                                              uint32_t width, uint32_t height,
                                              uint32_t pitch_bytes,

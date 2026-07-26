@@ -163,6 +163,12 @@ uint8_t mia_host_brightness_set(uint8_t brightness) {
   return miaSystemSetBrightness(brightness) ? 1 : 0;
 }
 
+uint8_t mia_host_idle_timeout_get(void) { return miaSystemIdleTimeoutMinutes(); }
+
+uint8_t mia_host_idle_timeout_set(uint8_t minutes) {
+  return miaSystemSetIdleTimeoutMinutes(minutes) ? 1 : 0;
+}
+
 uint8_t mia_host_volume_get(void) { return miaSystemVolume(); }
 
 uint8_t mia_host_volume_set(uint8_t volume) {

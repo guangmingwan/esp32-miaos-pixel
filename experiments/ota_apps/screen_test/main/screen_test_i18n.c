@@ -9,6 +9,9 @@ static const ScreenTestText ST_EN = {
     .pattern_blue = "BLUE",
     .pattern_white = "WHITE",
     .pattern_black = "BLACK",
+    .pattern_checker = "CHECKER",
+    .pattern_gray_gradient = "GRAY GRAD",
+    .pattern_color_gradient = "COLOR GRAD",
     .exit_hint = "A/B:Switch  SEL+ST:Exit",
 };
 
@@ -19,6 +22,9 @@ static const ScreenTestText ST_ZH = {
     .pattern_blue = "蓝",
     .pattern_white = "白",
     .pattern_black = "黑",
+    .pattern_checker = "棋盘",
+    .pattern_gray_gradient = "灰度渐变",
+    .pattern_color_gradient = "彩色渐变",
     .exit_hint = "A/B:切换  SEL+ST:退出",
 };
 

@@ -45,6 +45,8 @@ const char *mia_host_font_name(uint8_t font);
 void mia_host_backlight_set(uint8_t enabled);
 uint8_t mia_host_brightness_get(void);
 uint8_t mia_host_brightness_set(uint8_t brightness);
+uint8_t mia_host_idle_timeout_get(void);
+uint8_t mia_host_idle_timeout_set(uint8_t minutes);
 uint8_t mia_host_volume_get(void);
 uint8_t mia_host_volume_set(uint8_t volume);
 uint8_t mia_host_key_beep_get(void);

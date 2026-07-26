@@ -4327,7 +4327,7 @@ static int stbi__paeth(int a, int b, int c)
 static const stbi_uc stbi__depth_scale_table[9] = { 0, 0xff, 0x55, 0, 0x11, 0,0,0, 0x01 };
 
 // create the png data from post-deflated data
-static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 raw_len, int out_n, stbi__uint32 x, stbi__uint32 y, int depth, int color)
+static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 raw_len, int out_n, stbi__uint32 x, stbi__uint32 y, int depth, int color, int allow_inplace)
 {
    int bytes = (depth == 16? 2 : 1);
    stbi__context *s = a->s;
@@ -4341,7 +4341,14 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
    int width = x;
 
    STBI_ASSERT(out_n == s->img_n || out_n == s->img_n+1);
-   a->out = (stbi_uc *) stbi__malloc_mad3(x, y, output_bytes, 0); // extra bytes to write off the end into
+   #ifdef STBI_PNG_INPLACE_DECODE
+   if (allow_inplace && depth == 8 && color != 3 && out_n == img_n && raw == a->expanded)
+      a->out = raw;
+   else
+   #else
+   STBI_NOTUSED(allow_inplace);
+   #endif
+      a->out = (stbi_uc *) stbi__malloc_mad3(x, y, output_bytes, 0); // extra bytes to write off the end into
    if (!a->out) return stbi__err("outofmem", "Out of memory");
 
    if (!stbi__mad3sizes_valid(img_n, x, depth, 7)) return stbi__err("too large", "Corrupt PNG");
@@ -4546,7 +4553,7 @@ static int stbi__create_png_image(stbi__png *a, stbi_uc *image_data, stbi__uint3
    stbi_uc *final;
    int p;
    if (!interlaced)
-      return stbi__create_png_image_raw(a, image_data, image_data_len, out_n, a->s->img_x, a->s->img_y, depth, color);
+      return stbi__create_png_image_raw(a, image_data, image_data_len, out_n, a->s->img_x, a->s->img_y, depth, color, 1);
 
    // de-interlacing
    final = (stbi_uc *) stbi__malloc_mad3(a->s->img_x, a->s->img_y, out_bytes, 0);
@@ -4561,7 +4568,7 @@ static int stbi__create_png_image(stbi__png *a, stbi_uc *image_data, stbi__uint3
       y = (a->s->img_y - yorig[p] + yspc[p]-1) / yspc[p];
       if (x && y) {
          stbi__uint32 img_len = ((((a->s->img_n * x * depth) + 7) >> 3) + 1) * y;
-         if (!stbi__create_png_image_raw(a, image_data, image_data_len, out_n, x, y, depth, color)) {
+         if (!stbi__create_png_image_raw(a, image_data, image_data_len, out_n, x, y, depth, color, 0)) {
             STBI_FREE(final);
             return 0;
          }
@@ -4854,6 +4861,9 @@ static int stbi__parse_png_file(stbi__png *z, int scan, int req_comp)
             else
                s->img_out_n = s->img_n;
             if (!stbi__create_png_image(z, z->expanded, raw_len, s->img_out_n, z->depth, color, interlace)) return 0;
+            #ifdef STBI_PNG_INPLACE_DECODE
+            if (z->out == z->expanded) z->expanded = NULL;
+            #endif
             if (has_trans) {
                if (z->depth == 16) {
                   if (!stbi__compute_transparency16(z, tc16, s->img_out_n)) return 0;

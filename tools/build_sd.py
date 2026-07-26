@@ -82,6 +82,7 @@ APPS = (
     App("minesweeper", "Games"),
     App("gmu", "Media"),
     App("music", "Media"),
+    App("image_viewer", "Media"),
     App("settings", "Settings"),
     App("usb disk", "System", ".pio/build/esp32s3-usbmsc/firmware.bin"),
     App("usb_wifi", "System"),

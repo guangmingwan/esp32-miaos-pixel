@@ -4,7 +4,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define MAIN_ROWS 6
+#define MAIN_ROWS 7
+#define MAIN_ROW_HEIGHT 22
+#define MAIN_ROW_START 23
 #define RTC_FIELDS 6
 
 typedef enum {
@@ -29,6 +31,7 @@ static uint8_t language;
 static uint8_t font;
 static uint8_t brightness;
 static uint8_t volume;
+static uint8_t idle_timeout;
 static uint8_t key_beep;
 static MiaHostDateTime rtc_value = {2000, 1, 1, 0, 0, 0, 6};
 
@@ -58,10 +61,10 @@ static void draw_main_row(uint8_t row, int32_t y, const char *label,
     uint8_t selected = row == selected_row;
     uint8_t bg = selected ? MIA_HOST_BLUE : MIA_HOST_BLACK;
     uint8_t fg = selected ? MIA_HOST_YELLOW : MIA_HOST_WHITE;
-    mia_host_fill_rect(6, y, 308, 24, bg);
-    if (selected) mia_host_fill_rect(6, y, 3, 24, MIA_HOST_YELLOW);
-    mia_host_draw_text(14, mia_host_text_y_centered(y, 24), label, fg, bg);
-    mia_host_draw_text(150, mia_host_text_y_centered(y, 24), value, fg, bg);
+    mia_host_fill_rect(6, y, 308, MAIN_ROW_HEIGHT - 1, bg);
+    if (selected) mia_host_fill_rect(6, y, 3, MAIN_ROW_HEIGHT - 1, MIA_HOST_YELLOW);
+    mia_host_draw_text(14, mia_host_text_y_centered(y, MAIN_ROW_HEIGHT), label, fg, bg);
+    mia_host_draw_text(150, mia_host_text_y_centered(y, MAIN_ROW_HEIGHT), value, fg, bg);
 }
 
 static void draw_main(void) {
@@ -69,6 +72,7 @@ static void draw_main(void) {
     char date[32];
     char brightness_text[8];
     char volume_text[8];
+    char idle_text[12];
     snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u",
              rtc_value.year, rtc_value.month, rtc_value.day, rtc_value.hour,
              rtc_value.minute);
@@ -76,13 +80,20 @@ static void draw_main(void) {
     draw_header(text->title);
     snprintf(brightness_text, sizeof(brightness_text), "%u%%", brightness);
     snprintf(volume_text, sizeof(volume_text), "%u%%", volume);
-    draw_main_row(0, 25, text->language,
+    if (idle_timeout == 0) {
+        snprintf(idle_text, sizeof(idle_text), "%s", text->never);
+    } else {
+        snprintf(idle_text, sizeof(idle_text), "%u%s", idle_timeout, text->minutes_suffix);
+    }
+    draw_main_row(0, MAIN_ROW_START, text->language,
                   language == 1 ? text->chinese : text->english);
-    draw_main_row(1, 52, text->font, mia_host_font_name(font));
-    draw_main_row(2, 79, text->brightness, brightness_text);
-    draw_main_row(3, 106, text->volume, volume_text);
-    draw_main_row(4, 133, text->key_beep, key_beep ? text->enabled : text->disabled);
-    draw_main_row(5, 160, text->date_time, date);
+    draw_main_row(1, MAIN_ROW_START + 1 * MAIN_ROW_HEIGHT, text->font, mia_host_font_name(font));
+    draw_main_row(2, MAIN_ROW_START + 2 * MAIN_ROW_HEIGHT, text->brightness, brightness_text);
+    draw_main_row(3, MAIN_ROW_START + 3 * MAIN_ROW_HEIGHT, text->volume, volume_text);
+    draw_main_row(4, MAIN_ROW_START + 4 * MAIN_ROW_HEIGHT, text->key_beep,
+                  key_beep ? text->enabled : text->disabled);
+    draw_main_row(5, MAIN_ROW_START + 5 * MAIN_ROW_HEIGHT, text->idle_timeout, idle_text);
+    draw_main_row(6, MAIN_ROW_START + 6 * MAIN_ROW_HEIGHT, text->date_time, date);
     mia_host_draw_text(8, 186, status_text(text),
                        status_kind == STATUS_FAILED || status_kind == STATUS_RTC_FAILED
                            ? MIA_HOST_RED : MIA_HOST_GREEN,
@@ -228,6 +239,17 @@ static void change_main_value(int8_t delta) {
     } else if (selected_row == 4) {
         key_beep = key_beep == 0 ? 1 : 0;
         status_kind = mia_host_key_beep_set(key_beep) ? STATUS_SAVED : STATUS_FAILED;
+    } else if (selected_row == 5) {
+        static const uint8_t values[] = {0, 1, 5, 10, 30};
+        int index = 0;
+        for (int i = 0; i < (int)(sizeof(values) / sizeof(values[0])); ++i) {
+            if (values[i] == idle_timeout) index = i;
+        }
+        index += delta;
+        if (index < 0) index = (int)(sizeof(values) / sizeof(values[0])) - 1;
+        if (index >= (int)(sizeof(values) / sizeof(values[0]))) index = 0;
+        idle_timeout = values[index];
+        status_kind = mia_host_idle_timeout_set(idle_timeout) ? STATUS_SAVED : STATUS_FAILED;
     } else {
         screen = SCREEN_DATE_TIME;
         selected_field = 0;
@@ -248,6 +270,7 @@ int settings_main_impl(int argc, char *argv[]) {
     font = mia_host_font_get();
     brightness = mia_host_brightness_get();
     volume = mia_host_volume_get();
+    idle_timeout = mia_host_idle_timeout_get();
     key_beep = mia_host_key_beep_get();
     status_kind = mia_host_rtc_read(&rtc_value) ? STATUS_NONE : STATUS_RTC_FAILED;
     draw_main();
