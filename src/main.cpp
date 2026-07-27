@@ -781,15 +781,19 @@ static void drawLauncherHeader() {
   }
 
   sampleBattery(millis());
+  const uint8_t percent = g_batterySampleValid ? batteryPercent(g_batteryMillivolts) : 0;
   char batteryText[12];
   if (g_batterySampleValid) {
-    snprintf(batteryText, sizeof(batteryText), "%u%%", batteryPercent(g_batteryMillivolts));
+    snprintf(batteryText, sizeof(batteryText), "%u%%", percent);
   } else {
     snprintf(batteryText, sizeof(batteryText), "--%%");
   }
 
+  static constexpr int16_t BATTERY_ICON_W = 18;
+  static constexpr int16_t BATTERY_TEXT_GAP = 3;
   const char *title = miaTr("MiaOS Launcher");
-  const int16_t batteryWidth = lavaTextWidth(batteryText);
+  const int16_t batteryTextWidth = lavaTextWidth(batteryText);
+  const int16_t batteryWidth = BATTERY_ICON_W + BATTERY_TEXT_GAP + batteryTextWidth;
   const int16_t batteryX = LAVA_SCREEN_W - 6 - batteryWidth;
   const int16_t titleWidth = lavaTextWidth(title);
   const int16_t fullClockWidth = lavaTextWidth(fullClockText);
@@ -806,13 +810,27 @@ static void drawLauncherHeader() {
   }
   lavaDrawText(clockX, lavaTextYCentered(0, 20), clockText, LAVA_BLACK, LAVA_YELLOW);
 
-  const bool lowBattery = g_batterySampleValid && g_batteryMillivolts <= 3500;
-  if (lowBattery) {
-    lavaFillRect(batteryX - 3, 0, batteryWidth + 6, 20, LAVA_RED);
+  const bool lowBattery = g_batterySampleValid && percent <= 20;
+  const bool batteryWarning = lowBattery || !g_batterySampleValid;
+  const uint8_t batteryColor = batteryWarning ? LAVA_RED : LAVA_GREEN;
+  const uint8_t batteryBackground = batteryWarning ? LAVA_BLACK : LAVA_YELLOW;
+  static constexpr int16_t BATTERY_BODY_W = 16;
+  static constexpr int16_t BATTERY_BODY_H = 10;
+  static constexpr int16_t BATTERY_BODY_Y = 5;
+  static constexpr int16_t BATTERY_FILL_W = BATTERY_BODY_W - 4;
+  if (batteryWarning) {
+    lavaFillRect(batteryX - 3, 1, batteryWidth + 6, 18, batteryBackground);
   }
-  lavaDrawText(batteryX, lavaTextYCentered(0, 20), batteryText,
-               lowBattery ? LAVA_WHITE : LAVA_BLACK,
-               lowBattery ? LAVA_RED : LAVA_YELLOW);
+  lavaDrawRect(batteryX, BATTERY_BODY_Y, BATTERY_BODY_W, BATTERY_BODY_H, batteryColor);
+  lavaFillRect(batteryX + BATTERY_BODY_W, BATTERY_BODY_Y + 3, 2, 4, batteryColor);
+  if (percent > 0) {
+    const int16_t fillWidth =
+        static_cast<int16_t>((BATTERY_FILL_W * percent + 99) / 100);
+    lavaFillRect(batteryX + 2, BATTERY_BODY_Y + 2, fillWidth, BATTERY_BODY_H - 4,
+                 batteryColor);
+  }
+  lavaDrawText(batteryX + BATTERY_ICON_W + BATTERY_TEXT_GAP,
+               lavaTextYCentered(0, 20), batteryText, batteryColor, batteryBackground);
 }
 
 extern "C" void esp32_task_wdt_reset(void) {

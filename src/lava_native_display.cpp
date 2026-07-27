@@ -34,7 +34,9 @@ static inline void lavaRenderYield() {
 }
 
 static uint16_t toRgb565(const LavaColor &color) {
-  return ((color.r & 0xF8) << 8) | ((color.g & 0xFC) << 3) | (color.b >> 3);
+  const uint16_t rgb565 =
+      ((color.r & 0xF8) << 8) | ((color.g & 0xFC) << 3) | (color.b >> 3);
+  return __builtin_bswap16(rgb565);
 }
 
 void lavaDisplayInit() {
